@@ -1,0 +1,206 @@
+dimension,source_group,category,company_count,source_group_total,percent_of_source_group
+industry,YC,Other,308,477,64.57
+industry,YC,Unknown,63,477,13.21
+industry,YC,SaaS / Software,32,477,6.71
+industry,YC,Healthcare,30,477,6.29
+industry,YC,Education,24,477,5.03
+industry,YC,Consumer Services,9,477,1.89
+industry,YC,Finance,5,477,1.05
+industry,YC,E-commerce,5,477,1.05
+industry,YC,Food / Restaurant,1,477,0.21
+geography_exact_location,YC,San Francisco,291,477,61.01
+geography_exact_location,YC,"New York City, NY",59,477,12.37
+geography_exact_location,YC,"London, United Kingdom",11,477,2.31
+geography_exact_location,YC,"Los Angeles, CA",8,477,1.68
+geography_exact_location,YC,"Paris, France",8,477,1.68
+geography_exact_location,YC,Boston,8,477,1.68
+geography_exact_location,YC,Unknown,6,477,1.26
+geography_exact_location,YC,"Singapore, Singapore",4,477,0.84
+geography_exact_location,YC,"Bengaluru, India",4,477,0.84
+geography_exact_location,YC,"Seattle, WA",3,477,0.63
+geography_exact_location,YC,"Toronto, Canada",3,477,0.63
+geography_exact_location,YC,"Washington, DC",3,477,0.63
+geography_exact_location,YC,"Gurugram, India",3,477,0.63
+geography_exact_location,YC,Germany,2,477,0.42
+geography_exact_location,YC,"Copenhagen, Denmark",2,477,0.42
+geography_exact_location,YC,"Salt Lake City, UT",2,477,0.42
+geography_exact_location,YC,"Austin, TX",2,477,0.42
+geography_exact_location,YC,"Brisbane, Australia",2,477,0.42
+geography_exact_location,YC,"Miami, FL",2,477,0.42
+geography_exact_location,YC,"Kuala Lumpur, Malaysia",2,477,0.42
+geography_exact_location,YC,"Hyderabad, India",2,477,0.42
+geography_exact_location,YC,"New Delhi, India",2,477,0.42
+geography_exact_location,YC,"Santiago, Chile",2,477,0.42
+geography_exact_location,YC,"Mexico City, Mexico",2,477,0.42
+geography_exact_location,YC,"Lehi, UT",2,477,0.42
+geography_exact_location,YC,"Victoria, Canada",2,477,0.42
+geography_exact_location,YC,"Myrtle Beach, SC",1,477,0.21
+geography_exact_location,YC,"Jaco, Costa Rica",1,477,0.21
+geography_exact_location,YC,"Seoul, South Korea",1,477,0.21
+geography_exact_location,YC,"Santa Barbara, CA",1,477,0.21
+geography_exact_location,YC,"Providence, RI",1,477,0.21
+geography_exact_location,YC,"San Diego, CA",1,477,0.21
+geography_exact_location,YC,"White Rock, Canada",1,477,0.21
+geography_exact_location,YC,"Milan, Italy",1,477,0.21
+geography_exact_location,YC,"Chicago, IL",1,477,0.21
+geography_exact_location,YC,"Sydney, Australia",1,477,0.21
+geography_exact_location,YC,"Oslo, Norway",1,477,0.21
+geography_exact_location,YC,"Cologne, Germany",1,477,0.21
+geography_exact_location,YC,"Lund, Sweden",1,477,0.21
+geography_exact_location,YC,"Oxford, United Kingdom",1,477,0.21
+geography_exact_location,YC,"Durham, NC",1,477,0.21
+geography_exact_location,YC,"Hong Kong, Hong Kong",1,477,0.21
+geography_exact_location,YC,"Zürich, Switzerland",1,477,0.21
+geography_exact_location,YC,"Amman, Jordan",1,477,0.21
+geography_exact_location,YC,"Córdoba, Argentina",1,477,0.21
+geography_exact_location,YC,"Nairobi, Kenya",1,477,0.21
+geography_exact_location,YC,"Buenos Aires, Argentina",1,477,0.21
+geography_exact_location,YC,"Vilnius, Lithuania",1,477,0.21
+geography_exact_location,YC,Brazil,1,477,0.21
+geography_exact_location,YC,"Jakarta, Indonesia",1,477,0.21
+geography_exact_location,YC,"São Paulo, Brazil",1,477,0.21
+geography_exact_location,YC,"Barcelona, Spain",1,477,0.21
+geography_exact_location,YC,"Tel Aviv-Yafo, Israel",1,477,0.21
+geography_exact_location,YC,"Karachi, Pakistan",1,477,0.21
+geography_exact_location,YC,"Lagos, Nigeria",1,477,0.21
+geography_exact_location,YC,"Dubai, United Arab Emirates",1,477,0.21
+geography_exact_location,YC,"Heidelberg, Germany",1,477,0.21
+geography_exact_location,YC,"Ankara, Turkey",1,477,0.21
+geography_exact_location,YC,"Denver, CO",1,477,0.21
+geography_exact_location,YC,"Waterloo, Canada",1,477,0.21
+geography_exact_location,YC,"Toulouse, France",1,477,0.21
+geography_exact_location,YC,"Munich, Germany",1,477,0.21
+geography_exact_location,YC,"Vancouver, Canada",1,477,0.21
+geography_exact_location,YC,"Manchester, United Kingdom",1,477,0.21
+geography_exact_location,YC,"Ljubljana, Slovenia",1,477,0.21
+geography_exact_location,YC,Vietnam,1,477,0.21
+employee_size_evidence,YC,HAS_DIRECTORY_EMPLOYEE_COUNT,451,477,94.55
+employee_size_evidence,YC,MISSING,26,477,5.45
+high_priority_concentration,YC,HIGH,246,477,51.57
+research_priority,YC,HIGH,246,477,51.57
+research_priority,YC,NEEDS_REVIEW,101,477,21.17
+research_priority,YC,LOW,43,477,9.01
+research_priority,YC,MEDIUM,87,477,18.24
+industry,Greater Dalton Chamber,Other,22,60,36.67
+industry,Greater Dalton Chamber,Consumer Services,9,60,15.00
+industry,Greater Dalton Chamber,Finance,8,60,13.33
+industry,Greater Dalton Chamber,Healthcare,6,60,10.00
+industry,Greater Dalton Chamber,Unknown,5,60,8.33
+industry,Greater Dalton Chamber,Food / Restaurant,4,60,6.67
+industry,Greater Dalton Chamber,Education,2,60,3.33
+industry,Greater Dalton Chamber,Real Estate,1,60,1.67
+industry,Greater Dalton Chamber,Professional Services,1,60,1.67
+industry,Greater Dalton Chamber,Retail,1,60,1.67
+industry,Greater Dalton Chamber,Travel / Hospitality,1,60,1.67
+geography_exact_location,Greater Dalton Chamber,"Dalton, GA",46,60,76.67
+geography_exact_location,Greater Dalton Chamber,"Chattanooga, TN",5,60,8.33
+geography_exact_location,Greater Dalton Chamber,"Calhoun, GA",2,60,3.33
+geography_exact_location,Greater Dalton Chamber,"Rome, GA",2,60,3.33
+geography_exact_location,Greater Dalton Chamber,"Kingston, TN",1,60,1.67
+geography_exact_location,Greater Dalton Chamber,"Cleveland, TN",1,60,1.67
+geography_exact_location,Greater Dalton Chamber,"centre, AL",1,60,1.67
+geography_exact_location,Greater Dalton Chamber,"Woodstock, GA",1,60,1.67
+geography_exact_location,Greater Dalton Chamber,"Ringgold, GA",1,60,1.67
+employee_size_evidence,Greater Dalton Chamber,MISSING,60,60,100.00
+high_priority_concentration,Greater Dalton Chamber,HIGH,24,60,40.00
+research_priority,Greater Dalton Chamber,NEEDS_REVIEW,30,60,50.00
+research_priority,Greater Dalton Chamber,HIGH,24,60,40.00
+research_priority,Greater Dalton Chamber,MEDIUM,4,60,6.67
+research_priority,Greater Dalton Chamber,LOW,2,60,3.33
+industry,All,Other,330,537,61.45
+industry,All,Unknown,68,537,12.66
+industry,All,Healthcare,36,537,6.70
+industry,All,SaaS / Software,32,537,5.96
+industry,All,Education,26,537,4.84
+industry,All,Consumer Services,18,537,3.35
+industry,All,Finance,13,537,2.42
+industry,All,Food / Restaurant,5,537,0.93
+industry,All,E-commerce,5,537,0.93
+industry,All,Real Estate,1,537,0.19
+industry,All,Professional Services,1,537,0.19
+industry,All,Retail,1,537,0.19
+industry,All,Travel / Hospitality,1,537,0.19
+geography_exact_location,All,San Francisco,291,537,54.19
+geography_exact_location,All,"New York City, NY",59,537,10.99
+geography_exact_location,All,"Dalton, GA",46,537,8.57
+geography_exact_location,All,"London, United Kingdom",11,537,2.05
+geography_exact_location,All,"Los Angeles, CA",8,537,1.49
+geography_exact_location,All,"Paris, France",8,537,1.49
+geography_exact_location,All,Boston,8,537,1.49
+geography_exact_location,All,Unknown,6,537,1.12
+geography_exact_location,All,"Chattanooga, TN",5,537,0.93
+geography_exact_location,All,"Singapore, Singapore",4,537,0.74
+geography_exact_location,All,"Bengaluru, India",4,537,0.74
+geography_exact_location,All,"Seattle, WA",3,537,0.56
+geography_exact_location,All,"Toronto, Canada",3,537,0.56
+geography_exact_location,All,"Washington, DC",3,537,0.56
+geography_exact_location,All,"Gurugram, India",3,537,0.56
+geography_exact_location,All,"Calhoun, GA",2,537,0.37
+geography_exact_location,All,"Rome, GA",2,537,0.37
+geography_exact_location,All,Germany,2,537,0.37
+geography_exact_location,All,"Copenhagen, Denmark",2,537,0.37
+geography_exact_location,All,"Salt Lake City, UT",2,537,0.37
+geography_exact_location,All,"Austin, TX",2,537,0.37
+geography_exact_location,All,"Brisbane, Australia",2,537,0.37
+geography_exact_location,All,"Miami, FL",2,537,0.37
+geography_exact_location,All,"Kuala Lumpur, Malaysia",2,537,0.37
+geography_exact_location,All,"Hyderabad, India",2,537,0.37
+geography_exact_location,All,"New Delhi, India",2,537,0.37
+geography_exact_location,All,"Santiago, Chile",2,537,0.37
+geography_exact_location,All,"Mexico City, Mexico",2,537,0.37
+geography_exact_location,All,"Lehi, UT",2,537,0.37
+geography_exact_location,All,"Victoria, Canada",2,537,0.37
+geography_exact_location,All,"Myrtle Beach, SC",1,537,0.19
+geography_exact_location,All,"Jaco, Costa Rica",1,537,0.19
+geography_exact_location,All,"Kingston, TN",1,537,0.19
+geography_exact_location,All,"Cleveland, TN",1,537,0.19
+geography_exact_location,All,"centre, AL",1,537,0.19
+geography_exact_location,All,"Woodstock, GA",1,537,0.19
+geography_exact_location,All,"Seoul, South Korea",1,537,0.19
+geography_exact_location,All,"Ringgold, GA",1,537,0.19
+geography_exact_location,All,"Santa Barbara, CA",1,537,0.19
+geography_exact_location,All,"Providence, RI",1,537,0.19
+geography_exact_location,All,"San Diego, CA",1,537,0.19
+geography_exact_location,All,"White Rock, Canada",1,537,0.19
+geography_exact_location,All,"Milan, Italy",1,537,0.19
+geography_exact_location,All,"Chicago, IL",1,537,0.19
+geography_exact_location,All,"Sydney, Australia",1,537,0.19
+geography_exact_location,All,"Oslo, Norway",1,537,0.19
+geography_exact_location,All,"Cologne, Germany",1,537,0.19
+geography_exact_location,All,"Lund, Sweden",1,537,0.19
+geography_exact_location,All,"Oxford, United Kingdom",1,537,0.19
+geography_exact_location,All,"Durham, NC",1,537,0.19
+geography_exact_location,All,"Hong Kong, Hong Kong",1,537,0.19
+geography_exact_location,All,"Zürich, Switzerland",1,537,0.19
+geography_exact_location,All,"Amman, Jordan",1,537,0.19
+geography_exact_location,All,"Córdoba, Argentina",1,537,0.19
+geography_exact_location,All,"Nairobi, Kenya",1,537,0.19
+geography_exact_location,All,"Buenos Aires, Argentina",1,537,0.19
+geography_exact_location,All,"Vilnius, Lithuania",1,537,0.19
+geography_exact_location,All,Brazil,1,537,0.19
+geography_exact_location,All,"Jakarta, Indonesia",1,537,0.19
+geography_exact_location,All,"São Paulo, Brazil",1,537,0.19
+geography_exact_location,All,"Barcelona, Spain",1,537,0.19
+geography_exact_location,All,"Tel Aviv-Yafo, Israel",1,537,0.19
+geography_exact_location,All,"Karachi, Pakistan",1,537,0.19
+geography_exact_location,All,"Lagos, Nigeria",1,537,0.19
+geography_exact_location,All,"Dubai, United Arab Emirates",1,537,0.19
+geography_exact_location,All,"Heidelberg, Germany",1,537,0.19
+geography_exact_location,All,"Ankara, Turkey",1,537,0.19
+geography_exact_location,All,"Denver, CO",1,537,0.19
+geography_exact_location,All,"Waterloo, Canada",1,537,0.19
+geography_exact_location,All,"Toulouse, France",1,537,0.19
+geography_exact_location,All,"Munich, Germany",1,537,0.19
+geography_exact_location,All,"Vancouver, Canada",1,537,0.19
+geography_exact_location,All,"Manchester, United Kingdom",1,537,0.19
+geography_exact_location,All,"Ljubljana, Slovenia",1,537,0.19
+geography_exact_location,All,Vietnam,1,537,0.19
+employee_size_evidence,All,HAS_DIRECTORY_EMPLOYEE_COUNT,451,537,83.99
+employee_size_evidence,All,MISSING,86,537,16.01
+high_priority_concentration,All,HIGH,270,537,50.28
+research_priority,All,HIGH,270,537,50.28
+research_priority,All,NEEDS_REVIEW,131,537,24.39
+research_priority,All,LOW,45,537,8.38
+research_priority,All,MEDIUM,91,537,16.95
+source_membership_union,All,Greater Dalton Chamber,60,537,11.17
+source_membership_union,All,YC,477,537,88.83

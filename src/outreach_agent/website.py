@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -39,6 +39,12 @@ class CollectionSummary:
     cached: int = 0
     failed: int = 0
     blocked: int = 0
+    website_requests_attempted: int = 0
+    website_requests_succeeded: int = 0
+    website_requests_failed: int = 0
+    retry_attempts: int = 0
+    company_runtime_seconds: dict[int, float] = field(default_factory=dict)
+    total_batch_runtime_seconds: float = 0.0
 
 
 def _utc(value: datetime) -> datetime:
@@ -124,6 +130,10 @@ class WebsiteCollector:
                 "Accept-Encoding": "identity",
             },
         )
+        self.website_requests_attempted = 0
+        self.website_requests_succeeded = 0
+        self.website_requests_failed = 0
+        self.retry_attempts = 0
 
     def close(self) -> None:
         if self._owns_client:
@@ -132,8 +142,19 @@ class WebsiteCollector:
     def _request(self, url: str) -> httpx.Response:
         last_error: Exception | None = None
         for attempt in range(self.settings.retry_count + 1):
+            self.website_requests_attempted += 1
+            if attempt:
+                self.retry_attempts += 1
             try:
                 with self.client.stream("GET", url) as response:
+                    # httpx follows redirects inside one stream call; account for
+                    # each intermediate response as its own outbound request.
+                    self.website_requests_attempted += len(response.history)
+                    for redirected_response in response.history:
+                        if redirected_response.status_code < 400:
+                            self.website_requests_succeeded += 1
+                        else:
+                            self.website_requests_failed += 1
                     body = bytearray()
                     chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
                     for chunk in chunks:
@@ -155,6 +176,10 @@ class WebsiteCollector:
                     headers = dict(response.headers)
                     headers.pop("content-encoding", None)
                     headers.pop("content-length", None)
+                    if response.status_code < 400:
+                        self.website_requests_succeeded += 1
+                    else:
+                        self.website_requests_failed += 1
                     return httpx.Response(
                         response.status_code,
                         headers=headers,
@@ -163,6 +188,7 @@ class WebsiteCollector:
                         extensions=response.extensions,
                     )
             except (httpx.RequestError, ValueError) as exc:
+                self.website_requests_failed += 1
                 last_error = exc
                 if attempt < self.settings.retry_count:
                     self.sleep(self.settings.delay_between_requests_seconds)
@@ -303,7 +329,12 @@ def collect_websites(
     collector: WebsiteCollector | None = None,
     company_ids: list[int] | None = None,
 ) -> CollectionSummary:
+    batch_started = time.perf_counter()
     summary = CollectionSummary()
+    def request_counts(worker: Any) -> tuple[int, int, int, int]:
+        return tuple(int(getattr(worker, name, 0)) for name in (
+            "website_requests_attempted", "website_requests_succeeded", "website_requests_failed", "retry_attempts",
+        ))
     query = select(Company).order_by(Company.id)
     if company_ids is not None:
         if not company_ids:
@@ -315,6 +346,8 @@ def collect_websites(
     worker = collector or WebsiteCollector(settings)
     try:
         for company in companies:
+            company_started = time.perf_counter()
+            request_counts_before = request_counts(worker)
             summary.processed += 1
             latest = session.scalar(
                 select(WebsiteSnapshot).where(WebsiteSnapshot.company_id == company.id).order_by(WebsiteSnapshot.fetched_at.desc())
@@ -325,6 +358,7 @@ def collect_websites(
                 summary.cached += 1
                 logger.info("stage=website decision=cached company_id=%s snapshot_id=%s", company.id, latest.id)
                 session.commit()
+                summary.company_runtime_seconds[company.id] = round(time.perf_counter() - company_started, 6)
                 continue
             try:
                 snapshot = worker.inspect(company)
@@ -345,7 +379,14 @@ def collect_websites(
                 summary.fetched += 1
             logger.info("stage=website decision=%s company_id=%s snapshot_id=%s", snapshot.fetch_status, company.id, snapshot.id)
             session.commit()
+            summary.company_runtime_seconds[company.id] = round(time.perf_counter() - company_started, 6)
+            request_counts_after = request_counts(worker)
+            summary.website_requests_attempted += request_counts_after[0] - request_counts_before[0]
+            summary.website_requests_succeeded += request_counts_after[1] - request_counts_before[1]
+            summary.website_requests_failed += request_counts_after[2] - request_counts_before[2]
+            summary.retry_attempts += request_counts_after[3] - request_counts_before[3]
     finally:
         if collector is None:
             worker.close()
+    summary.total_batch_runtime_seconds = round(time.perf_counter() - batch_started, 6)
     return summary

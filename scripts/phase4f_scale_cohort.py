@@ -197,6 +197,8 @@ def process(batch_size: int, contact_limit: int, no_contacts: bool) -> dict:
     base = baseline_domains()
     settings = load_settings().website.model_copy(update={"max_pages_per_company": 2, "max_companies_per_run": batch_size})
     crawl = Counter()
+    company_runtime_seconds: dict[int, float] = {}
+    website_batch_runtime_seconds = 0.0
     try:
         with session_factory(engine)() as session:
             added = session.scalars(select(Company).where(~Company.normalized_domain.in_(base)).order_by(Company.id)).all()
@@ -208,7 +210,9 @@ def process(batch_size: int, contact_limit: int, no_contacts: bool) -> dict:
                     summary = collect_websites(session, settings, collector=collector, company_ids=batch)
                 finally:
                     collector.close()
-                crawl.update(summary.__dict__)
+                crawl.update({key: value for key, value in summary.__dict__.items() if isinstance(value, (int, float))})
+                company_runtime_seconds.update(summary.company_runtime_seconds)
+                website_batch_runtime_seconds += summary.total_batch_runtime_seconds
                 print(json.dumps({"batch": batch_number, "companies": len(batch), "crawl": summary.__dict__}, sort_keys=True), flush=True)
 
             verified_ids = []
@@ -316,6 +320,8 @@ def process(batch_size: int, contact_limit: int, no_contacts: bool) -> dict:
             metrics = {
                 "total_companies": len(all_companies), "new_additions": len(added), "verified_new": len(verified_ids),
                 "qualification": dict(qualified), "crawl": dict(crawl),
+                "company_runtime_seconds": {str(key): value for key, value in sorted(company_runtime_seconds.items())},
+                "website_processing_runtime_seconds": round(website_batch_runtime_seconds, 6),
                 "contact_company_ids": contact_ids, "contact_summary": contacts.__dict__ if contacts else None,
                 "runtime_seconds": round(time.monotonic() - started, 2),
             }

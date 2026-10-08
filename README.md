@@ -199,6 +199,18 @@ OUTREACH_DATABASE_URL=sqlite:///data/phase4f_experimental.db PYTHONPATH=src uv r
 
 The category checkpoint is `data/phase4f_discovery_checkpoint.json`; website snapshots are cached in the isolated database. Add `--no-contacts` to the `process` command to skip the bounded contact sample.
 
+## Phase 4G human review and scale readiness
+
+Phase 4G builds a read-only, deterministically ordered review queue from the 537-company Phase 4F database. It preserves the existing company/contact review fields and separates identity, eligibility, GEO, contact-channel, and outreach-approval states. Machine findings are not marked human-approved; outreach remains explicitly unapproved. The master queue has one row per stable company ID. Companion filtered views cover high-priority company review, unresolved known website identities, missing qualification evidence, and contact-channel review. The 77 legacy baseline companies are listed separately as identity-not-rechecked rather than being labeled ambiguous. See [`docs/phase4g_review_and_scale_readiness.md`](docs/phase4g_review_and_scale_readiness.md) for measured counts, source-diversity findings, and projection assumptions.
+
+Generate or reproduce the exports offline (no crawl, discovery, or database writes):
+
+```sh
+PYTHONPATH=src uv run python scripts/phase4g_review_readiness.py
+```
+
+The script writes `data/phase4g_review_queue.csv`, filtered review views (`phase4g_high_priority_company_review.csv`, `phase4g_ambiguous_identity_review.csv`, `phase4g_missing_qualification_evidence.csv`, `phase4g_contact_channel_review.csv`, and `phase4g_legacy_identity_unassessed.csv`), plus source diversity and scale projections. Request counters, retry counts, cache hits, per-company elapsed time, and batch elapsed time are emitted by future bounded website runs; collecting them does not require changing or recrawling this saved cohort. Current scale estimates use the Phase 4F measured first-pass and cached-replay runtimes and explicitly label the historical request count as a lower bound.
+
 The integrated Phase 3B rerun is documented in [`docs/phase3b_live_validation.md`](docs/phase3b_live_validation.md). It recovered 11 manually verified named contacts while retaining all 12 public mailbox records, and invoked the fallback for only 8 of 28 companies.
 
 ## Qualification and review

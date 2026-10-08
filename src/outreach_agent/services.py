@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from outreach_agent.discovery import DiscoverySource
+from outreach_agent.classification import normalize_industry, size_category
 from outreach_agent.models import Company, CompanyStatus, DiscoveryRecord
 from outreach_agent.normalization import normalize_company_name, normalize_domain, normalize_url
 
@@ -36,8 +37,13 @@ def ingest(session: Session, source: DiscoverySource) -> DiscoverySummary:
                 website=normalize_url(candidate.website),
                 normalized_domain=domain,
                 industry=candidate.industry,
+                industry_raw=candidate.industry_raw or candidate.industry,
+                industry_normalized=normalize_industry(candidate.industry_raw or candidate.industry),
                 location=candidate.location,
                 company_size=candidate.company_size,
+                company_size_category=size_category(candidate.company_size_value),
+                company_size_value=candidate.company_size_value,
+                company_size_source=candidate.company_size_source,
                 geo_opportunity=candidate.geo_opportunity,
                 pipeline_status=CompanyStatus.DISCOVERED,
             )
@@ -47,6 +53,17 @@ def ingest(session: Session, source: DiscoverySource) -> DiscoverySummary:
             logger.info("stage=discovery decision=created company_id=%s domain=%s", company.id, domain)
         else:
             summary.duplicates += 1
+            raw_industry = candidate.industry_raw or candidate.industry
+            if raw_industry:
+                company.industry = candidate.industry or company.industry
+                company.industry_raw = raw_industry
+                company.industry_normalized = normalize_industry(raw_industry)
+            if candidate.location:
+                company.location = candidate.location
+            if candidate.company_size_value is not None:
+                company.company_size_value = candidate.company_size_value
+                company.company_size_category = size_category(candidate.company_size_value)
+                company.company_size_source = candidate.company_size_source
             logger.info("stage=discovery decision=duplicate company_id=%s domain=%s", company.id, domain)
 
         identifier = candidate.source_identifier or candidate.source_url or str(source.path.resolve())

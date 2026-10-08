@@ -32,6 +32,26 @@ class OutreachStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+class ReviewStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    MAYBE = "MAYBE"
+
+
+class ContactType(str, enum.Enum):
+    PERSON = "PERSON"
+    GENERIC_BUSINESS_CONTACT = "GENERIC_BUSINESS_CONTACT"
+
+
+class ContactDiscoveryStatus(str, enum.Enum):
+    NOT_RUN = "NOT_RUN"
+    CONTACT_FOUND = "CONTACT_FOUND"
+    CONTACT_NOT_FOUND = "CONTACT_NOT_FOUND"
+    BLOCKED = "BLOCKED"
+    FAILED = "FAILED"
+
+
 ALLOWED_COMPANY_TRANSITIONS: dict[CompanyStatus, set[CompanyStatus]] = {
     CompanyStatus.DISCOVERED: {CompanyStatus.QUALIFIED, CompanyStatus.NEEDS_REVIEW, CompanyStatus.REJECTED},
     CompanyStatus.NEEDS_REVIEW: {CompanyStatus.QUALIFIED, CompanyStatus.REJECTED},
@@ -60,11 +80,30 @@ class Company(Base):
     website: Mapped[str] = mapped_column(String(2048))
     normalized_domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     industry: Mapped[str | None] = mapped_column(String(255))
+    industry_raw: Mapped[str | None] = mapped_column(String(255))
+    industry_normalized: Mapped[str | None] = mapped_column(String(100))
     location: Mapped[str | None] = mapped_column(String(255))
     company_size: Mapped[str | None] = mapped_column(String(100))
+    company_size_category: Mapped[str] = mapped_column(String(50), default="UNKNOWN")
+    company_size_value: Mapped[int | None] = mapped_column(Integer)
+    company_size_source: Mapped[str] = mapped_column(String(50), default="unknown")
     qualification_score: Mapped[float | None] = mapped_column(Float)
     qualification_reason: Mapped[str | None] = mapped_column(Text)
     geo_opportunity: Mapped[str | None] = mapped_column(String(100))
+    eligibility: Mapped[str | None] = mapped_column(String(50))
+    geo_opportunity_reason: Mapped[str | None] = mapped_column(Text)
+    priority_score: Mapped[float | None] = mapped_column(Float)
+    priority_tier: Mapped[str | None] = mapped_column(String(50), index=True)
+    evidence_confidence: Mapped[str | None] = mapped_column(String(50))
+    qualification_evidence: Mapped[str | None] = mapped_column(Text)
+    review_status: Mapped[ReviewStatus] = mapped_column(Enum(ReviewStatus), default=ReviewStatus.PENDING, index=True)
+    review_notes: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    contact_status: Mapped[ContactDiscoveryStatus] = mapped_column(
+        Enum(ContactDiscoveryStatus), default=ContactDiscoveryStatus.NOT_RUN, index=True
+    )
+    contacts_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pipeline_status: Mapped[CompanyStatus] = mapped_column(Enum(CompanyStatus), default=CompanyStatus.DISCOVERED)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -128,6 +167,7 @@ class WebsitePage(Base):
     meta_description: Mapped[str | None] = mapped_column(Text)
     canonical_url: Mapped[str | None] = mapped_column(String(2048))
     visible_text: Mapped[str | None] = mapped_column(Text)
+    contact_evidence: Mapped[str] = mapped_column(Text, default="[]")
     visible_text_length: Mapped[int] = mapped_column(Integer, default=0)
     content_hash: Mapped[str | None] = mapped_column(String(64))
     structured_data_types: Mapped[str] = mapped_column(Text, default="[]")
@@ -143,12 +183,23 @@ class Contact(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     name: Mapped[str | None] = mapped_column(String(255))
+    normalized_name: Mapped[str | None] = mapped_column(String(255), index=True)
     title: Mapped[str | None] = mapped_column(String(255))
+    normalized_role: Mapped[str] = mapped_column(String(50), default="UNKNOWN", index=True)
     email: Mapped[str | None] = mapped_column(String(320))
     normalized_email: Mapped[str | None] = mapped_column(String(320), unique=True)
+    contact_type: Mapped[ContactType] = mapped_column(Enum(ContactType), default=ContactType.GENERIC_BUSINESS_CONTACT)
     source_type: Mapped[str | None] = mapped_column(String(50))
     source_url: Mapped[str | None] = mapped_column(String(2048))
     validation_status: Mapped[str] = mapped_column(String(50), default="UNKNOWN")
+    confidence: Mapped[str] = mapped_column(String(50), default="LOW")
+    ranking_score: Mapped[float] = mapped_column(Float, default=0)
+    ranking_reason: Mapped[str | None] = mapped_column(Text)
+    review_status: Mapped[ReviewStatus] = mapped_column(Enum(ReviewStatus), default=ReviewStatus.PENDING, index=True)
+    review_notes: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     company: Mapped[Company] = relationship(back_populates="contacts")

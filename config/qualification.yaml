@@ -31,3 +31,16 @@ website_weights:
 website_penalties:
   fetch_failed: -40
   blocked: -10
+
+priority:
+  eligible: 30
+  analyzable_website: 15
+  smb_or_startup: 15
+  online_discovery_relevance: 15
+  geo_opportunity_high: 15
+  geo_opportunity_medium: 8
+  confidence_high: 10
+  confidence_medium: 5
+  thresholds:
+    high: 75
+    medium: 50

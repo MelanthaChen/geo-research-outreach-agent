@@ -57,3 +57,15 @@ def test_qualification_is_resumable(session, tmp_path):
     second = qualify_companies(session, rules_path)
     assert first["processed"] == 1
     assert second["processed"] == 0
+
+
+def test_cross_source_duplicate_keeps_two_provenance_records(session, tmp_path):
+    csv_path = tmp_path / "one.csv"
+    write_csv(csv_path, [{"company_name": "Shared Co", "website": "https://shared.example", "source_url": "csv:list"}])
+    json_path = tmp_path / "two.json"
+    json_path.write_text('[{"company_name":"Shared Company","website":"https://www.shared.example/about","source_url":"json:list"}]', encoding="utf-8")
+    ingest(session, CSVDiscoverySource(csv_path))
+    ingest(session, JSONDiscoverySource(json_path))
+    assert session.scalar(select(func.count(Company.id))) == 1
+    assert session.scalar(select(func.count(DiscoveryRecord.id))) == 2
+    assert {row.source_type for row in session.scalars(select(DiscoveryRecord)).all()} == {"csv", "json"}

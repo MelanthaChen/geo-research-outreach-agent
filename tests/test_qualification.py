@@ -47,6 +47,39 @@ def test_website_evidence_contributes_explainable_score():
     assert "+15 website:reachable" in result.reasons
 
 
+def test_priority_separates_eligibility_opportunity_and_confidence():
+    rules = dict(RULES)
+    rules["priority"] = {
+        "eligible": 30, "analyzable_website": 15, "smb_or_startup": 15,
+        "online_discovery_relevance": 15, "geo_opportunity_high": 15,
+        "geo_opportunity_medium": 8, "confidence_high": 10, "confidence_medium": 5,
+        "thresholds": {"high": 75, "medium": 50},
+    }
+    result = evaluate({
+        "company_size_category": "SMALL", "fetch_status": "SUCCESS", "visible_text_length": 2500,
+        "website_evidence": {
+            "reachable": True, "meaningful_text": True, "substantial_public_information": True,
+            "online_discovery_relevance": True, "faq_page": False, "structured_data": False,
+            "pages_inspected": 3,
+        },
+    }, rules)
+    assert result.eligibility == "ELIGIBLE"
+    assert result.geo_opportunity == "HIGH"
+    assert result.priority_tier == "HIGH"
+    assert result.confidence == "HIGH"
+    assert result.evidence["priority_math"]
+
+
+def test_missing_evidence_is_unknown_not_low_opportunity():
+    rules = dict(RULES)
+    rules["priority"] = {"thresholds": {"high": 75, "medium": 50}}
+    result = evaluate({"fetch_status": "BLOCKED", "website_evidence": {"blocked": True}}, rules)
+    assert result.eligibility == "UNKNOWN"
+    assert result.geo_opportunity == "UNKNOWN"
+    assert result.priority_tier == "NEEDS_REVIEW"
+    assert result.confidence == "LOW"
+
+
 def test_company_status_transitions_are_guarded():
     company = Company(
         company_name="Example",

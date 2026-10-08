@@ -26,6 +26,9 @@ class CompanyCandidate(BaseModel):
     industry: str | None = None
     location: str | None = None
     company_size: str | None = None
+    company_size_value: int | None = None
+    company_size_source: str = "unknown"
+    industry_raw: str | None = None
     source_url: str | None = None
     source_name: str | None = None
     source_identifier: str | None = None
@@ -147,8 +150,11 @@ class YCPublicDirectorySource(DiscoverySource):
             company_name=company["name"],
             website=company["website"],
             industry=(company.get("tags") or [None])[0],
+            industry_raw=(company.get("tags") or [None])[0],
             location=company.get("location"),
             company_size=size,
+            company_size_value=int(team_size) if team_size is not None else None,
+            company_size_source="directory_reported" if team_size is not None else "unknown",
             source_name="Y Combinator Consumer Startup Directory",
             source_url=detail_url,
             source_identifier=str(company.get("id") or company.get("slug")),
@@ -158,6 +164,85 @@ class YCPublicDirectorySource(DiscoverySource):
             search_dependent=False,
             geo_opportunity="unknown",
         )
+
+
+class GrowthZoneDirectorySource(DiscoverySource):
+    """Bounded adapter for public GrowthZone chamber listing cards."""
+
+    source_type = "growthzone_public"
+
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        directory_url: str = "https://business.daltonchamber.org/list/",
+        source_name: str = "Greater Dalton Chamber Member Directory",
+        limit: int = 40,
+        delay_seconds: float = 1.0,
+        timeout_seconds: float = 15,
+        user_agent: str = "GEOResearchOutreachAgent/0.3 (academic research; no outreach)",
+        client: httpx.Client | None = None,
+    ):
+        self.path = Path("growthzone-public")
+        self.directory_url = directory_url.rstrip("/") + "/"
+        self.source_name = source_name
+        self.limit = max(1, min(limit, 60))
+        self.delay_seconds = delay_seconds
+        self._owns_client = client is None
+        self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=True, headers={"User-Agent": user_agent})
+
+    def discover(self) -> Iterator[CompanyCandidate]:
+        try:
+            robots_url = urljoin(self.directory_url, "/robots.txt")
+            robots_response = self.client.get(robots_url)
+            if robots_response.status_code == 200:
+                robots = RobotFileParser(robots_url)
+                robots.parse(robots_response.text.splitlines())
+            else:
+                robots = None
+            yielded = 0
+            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                page_url = urljoin(self.directory_url, f"FindStartsWith?term={letter}")
+                if robots and not robots.can_fetch(self.client.headers.get("User-Agent", "*"), page_url):
+                    raise ValueError(f"robots.txt disallows discovery URL: {page_url}")
+                if yielded or letter != "A":
+                    time.sleep(self.delay_seconds)
+                response = self.client.get(page_url)
+                response.raise_for_status()
+                for candidate in self._parse_list(response.text, page_url):
+                    yield candidate
+                    yielded += 1
+                    if yielded >= self.limit:
+                        return
+        finally:
+            if self._owns_client:
+                self.client.close()
+
+    def _parse_list(self, markup: str, page_url: str) -> Iterator[CompanyCandidate]:
+        soup = BeautifulSoup(markup, "html.parser")
+        for card in soup.select(".gz-list-card, [itemscope][itemtype*='Organization'], [itemscope][itemtype*='LocalBusiness']"):
+            name_node = card.select_one("[itemprop='name']")
+            website_node = card.select_one("a[href] [itemprop='sameAs']")
+            if not name_node or not website_node or not website_node.parent:
+                continue
+            website = str(website_node.parent.get("href", ""))
+            if not website.startswith(("http://", "https://")):
+                continue
+            detail_node = card.select_one(".gz-card-title a[href], a[itemprop='url']")
+            detail_url = urljoin(page_url, str(detail_node.get("href"))) if detail_node else page_url
+            identifier = detail_url.rstrip("/").rsplit("-", 1)[-1]
+            locality = card.select_one("[itemprop='addressLocality']")
+            region = card.select_one("[itemprop='addressRegion']")
+            location = ", ".join(part.get_text(" ", strip=True) for part in (locality, region) if part)
+            category_node = card.select_one(".gz-card-cat, .gz-card-category, [itemprop='category']")
+            category = category_node.get_text(" ", strip=True) if category_node else None
+            yield CompanyCandidate(
+                company_name=name_node.get_text(" ", strip=True), website=website,
+                industry=category, industry_raw=category, location=location or None,
+                company_size="unknown", company_size_source="unknown",
+                source_name=self.source_name, source_url=detail_url, source_identifier=identifier,
+                active=True, geo_opportunity="unknown",
+            )
 
 
 class CSVDiscoverySource(DiscoverySource):

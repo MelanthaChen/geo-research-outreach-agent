@@ -9,3 +9,7 @@ sources:
     type: yc_public
     source_name: Y Combinator Consumer Startup Directory
     url: https://www.ycombinator.com/companies/industry/consumer
+  greater_dalton_chamber:
+    type: growthzone_public
+    source_name: Greater Dalton Chamber Member Directory
+    url: https://business.daltonchamber.org/list/

@@ -18,11 +18,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from outreach_agent.config import WebsiteSettings
+from outreach_agent.contacts import extract_contact_evidence
 from outreach_agent.models import Company, WebsitePage, WebsiteSnapshot
 from outreach_agent.normalization import normalize_domain
 
 logger = logging.getLogger(__name__)
-HIGH_VALUE_TERMS = ("about", "product", "service", "solution", "pricing", "blog", "resource", "faq", "contact")
+HIGH_VALUE_TERMS = (
+    "about", "product", "service", "solution", "pricing", "blog", "resource", "faq", "contact",
+    "team", "leadership", "staff", "management",
+)
 
 
 @dataclass
@@ -83,6 +87,7 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
         meta_description=str(description_node.get("content"))[:4000] if description_node and description_node.get("content") else None,
         canonical_url=urljoin(final_url, str(canonical_node.get("href"))) if canonical_node and canonical_node.get("href") else None,
         visible_text=text,
+        contact_evidence=json.dumps(extract_contact_evidence(markup, final_url), sort_keys=True),
         visible_text_length=len(text),
         content_hash=hashlib.sha256(markup.encode("utf-8", errors="replace")).hexdigest(),
         structured_data_types=json.dumps(sorted(schema_types)),

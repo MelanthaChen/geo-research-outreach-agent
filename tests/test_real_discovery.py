@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from outreach_agent.discovery import YCPublicDirectorySource
+from outreach_agent.discovery import GrowthZoneDirectorySource, YCPublicDirectorySource
 
 
 def test_yc_detail_parser_preserves_public_provenance():
@@ -63,3 +63,23 @@ def test_yc_source_stops_when_robots_disallows_directory():
     source = YCPublicDirectorySource(limit=1, delay_seconds=0, client=client)
     with pytest.raises(ValueError, match="robots.txt disallows"):
         list(source.discover())
+
+
+def test_growthzone_parser_extracts_public_business_without_contact_data():
+    markup = """
+    <div class="gz-list-card">
+      <h5 class="gz-card-title"><a itemprop="url" href="/list/Details/acme-123"><span itemprop="name">Acme Plumbing</span></a></h5>
+      <span itemprop="addressLocality">Dalton</span><span itemprop="addressRegion">GA</span>
+      <a href="https://acme.example"><span itemprop="sameAs">Visit Website</span></a>
+      <div class="gz-card-cat"><span>Plumbing Services</span></div>
+      <a href="mailto:owner@example.test">Send Email</a>
+    </div>
+    """
+    source = GrowthZoneDirectorySource(limit=1, client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+    rows = list(source._parse_list(markup, "https://business.example/list/FindStartsWith?term=A"))
+    assert len(rows) == 1
+    assert rows[0].company_name == "Acme Plumbing"
+    assert rows[0].website == "https://acme.example"
+    assert rows[0].location == "Dalton, GA"
+    assert rows[0].source_identifier == "123"
+    assert rows[0].industry_raw == "Plumbing Services"

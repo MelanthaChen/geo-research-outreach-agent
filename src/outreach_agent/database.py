@@ -37,6 +37,7 @@ def init_database(engine: Engine) -> None:
             "evidence_confidence": "VARCHAR(50)", "qualification_evidence": "TEXT",
             "review_status": "VARCHAR(20) DEFAULT 'PENDING'", "review_notes": "TEXT",
             "reviewed_at": "DATETIME", "reviewed_by": "VARCHAR(255)",
+            "channel_override_contact_id": "INTEGER", "channel_override_reason": "TEXT",
             "contact_status": "VARCHAR(30) DEFAULT 'NOT_RUN'", "contacts_enriched_at": "DATETIME",
         }
         with engine.begin() as connection:
@@ -48,6 +49,9 @@ def init_database(engine: Engine) -> None:
         if "contact_evidence" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE website_pages ADD COLUMN contact_evidence TEXT DEFAULT '[]'"))
+        if "extracted_channels" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE website_pages ADD COLUMN extracted_channels TEXT DEFAULT '[]'"))
     if "contacts" in inspect(engine).get_table_names():
         columns = {column["name"] for column in inspect(engine).get_columns("contacts")}
         additions = {
@@ -57,11 +61,20 @@ def init_database(engine: Engine) -> None:
             "ranking_reason": "TEXT", "review_status": "VARCHAR(20) DEFAULT 'PENDING'",
             "review_notes": "TEXT", "reviewed_at": "DATETIME", "reviewed_by": "VARCHAR(255)",
             "discovered_at": "DATETIME",
+            "extraction_method": "VARCHAR(50) DEFAULT 'LIGHTWEIGHT_HTML'", "evidence_text": "TEXT",
+            "channel_type": "VARCHAR(40)", "channel_url": "VARCHAR(2048)", "purpose": "TEXT", "recommended": "BOOLEAN DEFAULT 0",
         }
         with engine.begin() as connection:
             for name, sql_type in additions.items():
                 if name not in columns:
                     connection.execute(text(f"ALTER TABLE contacts ADD COLUMN {name} {sql_type}"))
+    if "companies" in inspect(engine).get_table_names():
+        columns = {column["name"] for column in inspect(engine).get_columns("companies")}
+        with engine.begin() as connection:
+            if "contactability_status" not in columns:
+                connection.execute(text("ALTER TABLE companies ADD COLUMN contactability_status VARCHAR(40) DEFAULT 'NO_SUITABLE_CHANNEL'"))
+            if "primary_channel_id" not in columns:
+                connection.execute(text("ALTER TABLE companies ADD COLUMN primary_channel_id INTEGER REFERENCES contacts(id)"))
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:

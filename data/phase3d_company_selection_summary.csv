@@ -1,0 +1,31 @@
+metric,count,details
+eligibility_eligible,53,
+eligibility_ineligible,0,
+eligibility_needs_review,24,
+priority_high,35,
+priority_medium,11,
+priority_low,7,
+priority_needs_review,24,
+evidence_confidence_high,45,
+evidence_confidence_medium,13,
+evidence_confidence_low,19,
+geo_opportunity_high,35,
+geo_opportunity_medium,11,
+geo_opportunity_low,7,
+geo_opportunity_unknown,24,
+outreach_channel_available,15,
+outreach_needs_channel_review,12,
+outreach_no_suitable_channel,31,
+outreach_fetch_failed,19,
+companies_with_channel_available,15,
+companies_needing_channel_review,12,
+missing_company_size,67,Employee/company-size evidence not available
+zero_employee_count_needs_verification,1,"Directory reported zero; treated as unverified, not a size exclusion"
+missing_industry,10,
+missing_geography,3,
+companies_with_suitable_channels,25,
+high_priority_with_suitable_channels,19,"Vexo; Cyclon; Shire Intelligence; antimattr; ACME Block & Brick; Actikare Responsive in-home care; Adcock Financial Group; AIRL, Inc.; All Ways Caring HomeCare; Alliant Health Plans; Atlantic Bay Mortgage Group; Allchem, Inc.; Bandy Heritage Center; Barge Design Solutions, Inc. (7979); Best Buy Metals; Blood Assurance; Bradley Wellness Center; Bearden Industrial Supply; Light Anchor"
+high_priority_without_suitable_channels,16,"Honeylove; Melty; Quippy; Egoist Machines; American Carpet Wholesalers of GA, Inc.; America's Home Place (11872); Animal Hospital of Whitfield County, Inc.; Bank OZK; Bench Builders; Big Brothers Big Sisters of Northwest Georgia Mountains; Bank of America (566); Capital Waste Services; Carpet Capital Association of REALTORS®; Result; HeyClicky; RentAHuman"
+companies_ready_for_human_review,24,ELIGIBLE with a suitable route identified; pending company/channel approvals remain independent
+companies_blocked_by_missing_evidence,24,"Scentbird; Bellabeat; The Subvocal Company; PokerClubHub; American Auctioneers; American Red Cross of Northwest Georgia; Anna Shaw Children's Institute; AIS Advanced Insurance Strategies; Alrol of America, Inc.; Barrett's Flower Shop; Boy Scouts of America/NWGA Co.; Boyett & Foshee Insurance; Boys and Girls Clubs of Chattooga, Gordon, Murray & Whitfield Counties; Bradley Whiteside Rehabilitation; Builtwell Bank; Builtwell Bank-Cleveland Highway Branch; Burgess Auto Service; BDL Advisors; Best Western Plus; Cafe Ostro; Carpet & Rug Backing & Supplies, Inc.; Carpet America Recovery Effort (CARE); General Context Labs; ANORIA"
+total_companies,77,

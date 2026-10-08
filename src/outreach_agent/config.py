@@ -19,11 +19,24 @@ class WebsiteSettings(BaseModel):
     max_response_bytes: int = 2_000_000
 
 
+class Crawl4AIFallbackSettings(BaseModel):
+    enabled: bool = False
+    max_pages_per_company: int = 2
+    timeout_seconds: float = 20
+    max_companies_per_run: int = 20
+    cache_ttl_hours: int = 168
+
+
+class ContactExtractionSettings(BaseModel):
+    crawl4ai_fallback: Crawl4AIFallbackSettings = Crawl4AIFallbackSettings()
+
+
 class Settings(BaseModel):
     database_url: str = "sqlite:///data/outreach.db"
     log_level: str = "INFO"
     send_mode: str = "dry_run"
     website: WebsiteSettings = WebsiteSettings()
+    contact_extraction: ContactExtractionSettings = ContactExtractionSettings()
 
 
 def load_yaml(path: Path) -> dict[str, Any]:

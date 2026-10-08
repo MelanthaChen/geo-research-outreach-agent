@@ -1,46 +1,16 @@
-# Initial research heuristics only. Tune these with the research team.
-thresholds:
-  qualified: 55
-  needs_review: 30
-
-weights:
-  has_website: 25
-  customer_facing: 20
-  search_dependent: 20
-  content_rich: 15
-  smb_or_startup: 20
-  active: 10
-  geo_opportunity: 15
-
-penalties:
-  dead_website: -60
-  unsuitable: -50
-  large_enterprise: -25
-
-# Phase 2 evidence. Missing evidence adds no points and causes no penalty.
-website_weights:
-  reachable: 15
-  meaningful_text: 15
-  product_or_service_page: 10
-  informational_content: 10
-  faq_page: 5
-  structured_data: 5
-  online_discovery_relevance: 10
-  thin_content_opportunity: 10
-
-website_penalties:
-  fetch_failed: -40
-  blocked: -10
+# No geography, industry, or employee-count exclusions are active by default.
+# A study may add explicit source-backed boolean signals here when preregistered.
+eligibility:
+  explicit_exclusions: []
 
 priority:
-  eligible: 30
+  eligible: 20
   analyzable_website: 15
-  smb_or_startup: 15
   online_discovery_relevance: 15
-  geo_opportunity_high: 15
-  geo_opportunity_medium: 8
+  geo_opportunity_high: 20
+  geo_opportunity_medium: 10
   confidence_high: 10
   confidence_medium: 5
   thresholds:
     high: 75
-    medium: 50
+    medium: 55

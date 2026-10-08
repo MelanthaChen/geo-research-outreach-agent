@@ -4,6 +4,7 @@ import hashlib
 import gzip
 import json
 import logging
+import re
 import time
 import zlib
 from dataclasses import dataclass
@@ -18,15 +19,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from outreach_agent.config import WebsiteSettings
-from outreach_agent.contacts import extract_contact_evidence
+from outreach_agent.contacts import _channel_evidence, extract_contact_evidence
 from outreach_agent.models import Company, WebsitePage, WebsiteSnapshot
 from outreach_agent.normalization import normalize_domain
 
 logger = logging.getLogger(__name__)
 HIGH_VALUE_TERMS = (
     "about", "product", "service", "solution", "pricing", "blog", "resource", "faq", "contact",
-    "team", "leadership", "staff", "management",
+    "team", "leadership", "staff", "management", "partner", "partnership", "collaboration", "business-inquiry",
+    "business-inquiries", "get-in-touch",
 )
+CHANNEL_PAGE_RE = re.compile(r"contact|partner|collaborat|business[-_/ ]?(?:inquir|develop|opportun)|get[-_/ ]?in[-_/ ]?touch", re.I)
 
 
 @dataclass
@@ -71,13 +74,23 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
     links: list[str] = []
+    channel_links: list[str] = []
+    other_links: list[str] = []
     origin_domain = normalize_domain(final_url)
     for anchor in soup.select("a[href]"):
         href = urljoin(final_url, str(anchor.get("href"))).split("#", 1)[0]
         label = f"{anchor.get_text(' ', strip=True)} {urlsplit(href).path}".lower()
         if href.startswith(("http://", "https://")) and normalize_domain(href) == origin_domain and any(term in label for term in HIGH_VALUE_TERMS):
-            if href not in links:
-                links.append(href)
+            destination = channel_links if CHANNEL_PAGE_RE.search(label) else other_links
+            if href not in destination and href not in channel_links and href not in other_links:
+                destination.append(href)
+    # Keep the existing page budget, but spend it on contact/business routes
+    # before generic product and editorial pages discovered in nav/footer order.
+    channel_links.sort(key=lambda url: (
+        0 if re.search(r"partner|collaborat|business[-_/ ]?(?:inquir|develop|opportun)", url, re.I)
+        else (1 if re.search(r"contact", url, re.I) else 2)
+    ))
+    links = channel_links + other_links
     page = WebsitePage(
         requested_url=requested_url,
         final_url=final_url,
@@ -88,6 +101,7 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
         canonical_url=urljoin(final_url, str(canonical_node.get("href"))) if canonical_node and canonical_node.get("href") else None,
         visible_text=text,
         contact_evidence=json.dumps(extract_contact_evidence(markup, final_url), sort_keys=True),
+        extracted_channels=json.dumps(_channel_evidence(markup, final_url), sort_keys=True),
         visible_text_length=len(text),
         content_hash=hashlib.sha256(markup.encode("utf-8", errors="replace")).hexdigest(),
         structured_data_types=json.dumps(sorted(schema_types)),
@@ -209,6 +223,12 @@ class WebsiteCollector:
                     snapshot.http_status = response.status_code
                     snapshot.error_type = f"HTTP_{response.status_code}"
                     snapshot.error_message = "Remote site denied or rate-limited access; no bypass attempted"
+                    snapshot.pages.append(WebsitePage(
+                        requested_url=url, final_url=str(response.url), http_status=response.status_code,
+                        content_type=content_type, contact_evidence="[]", extracted_channels="[]",
+                        visible_text_length=0, structured_data_types="[]", fetch_status="BLOCKED",
+                        error_type=snapshot.error_type, error_message=snapshot.error_message,
+                    ))
                     break
                 if response.status_code >= 400:
                     raise httpx.HTTPStatusError(f"HTTP {response.status_code}", request=response.request, response=response)
@@ -223,15 +243,26 @@ class WebsiteCollector:
                 snapshot.error_type = type(exc).__name__
                 snapshot.error_message = str(exc)[:1000]
                 logger.warning("stage=website company_id=%s url=%s error=%s", company.id, url, exc)
-                if not snapshot.pages:
+                failed_response = getattr(exc, "response", None)
+                snapshot.pages.append(WebsitePage(
+                    requested_url=url,
+                    final_url=str(failed_response.url) if failed_response is not None else None,
+                    http_status=failed_response.status_code if failed_response is not None else None,
+                    content_type=failed_response.headers.get("content-type") if failed_response is not None else None,
+                    contact_evidence="[]", extracted_channels="[]", visible_text_length=0,
+                    structured_data_types="[]", fetch_status="FAILED",
+                    error_type=type(exc).__name__, error_message=str(exc)[:1000],
+                ))
+                if not any(page.fetch_status in {"SUCCESS", "PARTIAL"} for page in snapshot.pages):
                     snapshot.fetch_status = "FETCH_FAILED"
                 continue
 
-        if snapshot.pages:
-            homepage = snapshot.pages[0]
-            all_types = sorted({kind for page in snapshot.pages for kind in json.loads(page.structured_data_types)})
-            paths = " ".join(urlsplit(page.final_url or page.requested_url).path.lower() for page in snapshot.pages)
-            total_text = sum(page.visible_text_length for page in snapshot.pages)
+        successful_pages = [page for page in snapshot.pages if page.fetch_status in {"SUCCESS", "PARTIAL"}]
+        if successful_pages:
+            homepage = successful_pages[0]
+            all_types = sorted({kind for page in successful_pages for kind in json.loads(page.structured_data_types)})
+            paths = " ".join(urlsplit(page.final_url or page.requested_url).path.lower() for page in successful_pages)
+            total_text = sum(page.visible_text_length for page in successful_pages)
             signals: dict[str, Any] = {
                 "reachable": True,
                 "meaningful_text": homepage.visible_text_length >= 500,
@@ -244,9 +275,12 @@ class WebsiteCollector:
                 "structured_data": bool(all_types),
                 "online_discovery_relevance": total_text >= 1000 and bool(homepage_links),
                 "thin_content_opportunity": 100 <= homepage.visible_text_length < 1000,
-                "pages_inspected": len(snapshot.pages),
+                "pages_inspected": len(successful_pages),
             }
-            snapshot.fetch_status = "SUCCESS" if not snapshot.error_type else "PARTIAL"
+            if snapshot.error_type:
+                snapshot.fetch_status = "PARTIAL"
+            else:
+                snapshot.fetch_status = "SUCCESS"
             snapshot.final_url = homepage.final_url
             snapshot.http_status = homepage.http_status
             snapshot.content_type = homepage.content_type

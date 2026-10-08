@@ -30,6 +30,36 @@ def test_extracts_metadata_text_links_and_jsonld():
     assert links == ["https://example.test/services", "https://example.test/faq"]
 
 
+def test_contact_and_partnership_links_are_prioritized_and_relative_urls_resolve():
+    markup = """
+    <html><body><main>
+      <a href="/products">Products</a>
+      <a href="/partner-with-us">Partner with us</a>
+      <a href="contact-us">Contact</a>
+    </main><footer><a href="/get-in-touch">Get in touch</a></footer></body></html>
+    """
+    _, links = extract_page(markup, "https://example.test/", "https://example.test/", 200, "text/html")
+    assert links[0:3] == [
+        "https://example.test/partner-with-us",
+        "https://example.test/contact-us",
+        "https://example.test/get-in-touch",
+    ]
+
+
+def test_extracts_channel_evidence_from_first_party_html():
+    markup = """
+    <html><body><section><h2>Partnerships</h2><p>Write to
+      <a href="mailto:partners@example.test">partners@example.test</a></p></section>
+    <section><h2>Contact Us</h2><form action="https://forms.example.test/contact">
+      <input type="email" name="email"><textarea name="message"></textarea>
+    </form></section></body></html>
+    """
+    page, _ = extract_page(markup, "https://example.test/contact", "https://example.test/contact", 200, "text/html")
+    channels = json.loads(page.extracted_channels)
+    assert any(row.get("email") == "partners@example.test" and row["type"] == "PARTNERSHIP_EMAIL" for row in channels)
+    assert any(row.get("form") and row["url"] == "https://forms.example.test/contact" for row in channels)
+
+
 def make_collector(handler) -> WebsiteCollector:
     settings = WebsiteSettings(
         delay_between_requests_seconds=0,
@@ -116,6 +146,31 @@ def test_blocked_site_does_not_crash_run(session):
     summary = collect_websites(session, collector.settings, collector=collector)
     assert summary.blocked == 1
     assert session.scalar(select(WebsiteSnapshot)).fetch_status == "BLOCKED"
+
+
+def test_failed_contact_page_url_is_persisted_without_counting_as_fetched(session):
+    company = Company(
+        company_name="Example", normalized_name="example", website="https://example.test",
+        normalized_domain="example.test",
+    )
+    session.add(company)
+    session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in {"/robots.txt", "/sitemap.xml"}:
+            return httpx.Response(404, headers={"content-type": "text/plain"})
+        if request.url.path == "/":
+            return httpx.Response(200, text='<a href="/contact-us">Contact us</a>', headers={"content-type": "text/html"})
+        return httpx.Response(403, text="blocked", headers={"content-type": "text/html"})
+
+    collector = make_collector(handler)
+    collect_websites(session, collector.settings, collector=collector)
+    snapshot = session.scalar(select(WebsiteSnapshot))
+    failed_page = next(page for page in snapshot.pages if page.fetch_status == "BLOCKED")
+    assert failed_page.requested_url == "https://example.test/contact-us"
+    assert failed_page.http_status == 403
+    assert sum(page.fetch_status == "SUCCESS" for page in snapshot.pages) == 1
+    assert snapshot.fetch_status == "PARTIAL"
 
 
 def test_streamed_compressed_body_is_decoded_once():

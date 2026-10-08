@@ -1,0 +1,9 @@
+company_id,company_name,trigger_reason,status,pages_processed,runtime_seconds,contacts_added,evidence_rejected,error_message
+9,Vyra,"no defensible named person in lightweight evidence",SUCCESS,1,0.29042383399792016,2,0,
+21,"ACME Block & Brick","no defensible named person in lightweight evidence",SUCCESS,2,0.28474324999842793,0,0,
+23,"Adcock Financial Group","no defensible named person in lightweight evidence",SUCCESS,1,0.29843074991367757,0,0,
+24,"AFC Urgent Care Dalton GA","no defensible named person in lightweight evidence",SUCCESS,2,0.29173762502614409,0,0,
+37,"American Carpet Wholesalers of GA, Inc.","no defensible named person in lightweight evidence",SUCCESS,1,0.34207441692706198,0,0,
+44,"Bench Builders","no defensible named person in lightweight evidence",SUCCESS,2,0.27971287490800023,0,1,
+71,Result,"no defensible named person in lightweight evidence",SUCCESS,1,0.32719587499741465,0,0,
+76,"Light Anchor","no defensible named person in lightweight evidence",SUCCESS,1,0.27267629199195653,2,0,

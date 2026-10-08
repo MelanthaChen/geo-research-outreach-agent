@@ -16,8 +16,9 @@ from outreach_agent.contacts import enrich_contacts
 from outreach_agent.database import create_db_engine, init_database, session_factory
 from outreach_agent.discovery import GrowthZoneDirectorySource, YCPublicDirectorySource, source_for
 from outreach_agent.logging_config import configure_logging
-from outreach_agent.models import Company, Contact, DiscoveryRecord, ReviewStatus, WebsiteSnapshot
+from outreach_agent.models import BusinessChannelType, Company, Contact, ContactabilityStatus, DiscoveryRecord, ReviewStatus, WebsiteSnapshot
 from outreach_agent.qualification import qualify_companies
+from outreach_agent.selection import export_company_selection
 from outreach_agent.services import ingest
 from outreach_agent.website import collect_websites
 
@@ -131,17 +132,30 @@ def enrich_contact_records(
     priority: str = typer.Option("HIGH,MEDIUM", help="Comma-separated machine priority tiers."),
     review: str | None = typer.Option(None, help="Optional comma-separated company review statuses."),
     limit: int = typer.Option(25, min=1, max=100),
+    crawl4ai_fallback: bool = typer.Option(False, "--crawl4ai-fallback", help="Enable the bounded optional Crawl4AI fallback."),
 ) -> None:
     """Discover contacts from stored, explicit first-party public evidence only."""
     try:
         reviews = [ReviewStatus(item) for item in _csv_values(review)] if review else None
     except ValueError as exc:
         raise typer.BadParameter("review must contain PENDING, APPROVED, REJECTED, or MAYBE") from exc
+    settings = load_settings()
+    fallback_settings = settings.contact_extraction.crawl4ai_fallback.model_copy(
+        update={"enabled": crawl4ai_fallback or settings.contact_extraction.crawl4ai_fallback.enabled}
+    )
     with db_session() as session:
-        summary = enrich_contacts(session, priorities=_csv_values(priority), reviews=reviews, limit=limit)
+        summary = enrich_contacts(
+            session, priorities=_csv_values(priority), reviews=reviews, limit=limit,
+            fallback_settings=fallback_settings,
+            user_agent=settings.website.user_agent,
+        )
     typer.echo(
         f"processed={summary.processed} found={summary.found} not_found={summary.not_found} "
-        f"blocked={summary.blocked} failed={summary.failed} contacts_created={summary.contacts_created} duplicates={summary.duplicates}"
+        f"blocked={summary.blocked} failed={summary.failed} contacts_created={summary.contacts_created} duplicates={summary.duplicates} "
+        f"fallback_triggered={summary.fallback_triggered} fallback_succeeded={summary.fallback_succeeded} "
+        f"fallback_failed={summary.fallback_failed} fallback_pages={summary.fallback_pages} "
+        f"fallback_contacts_created={summary.fallback_contacts_created} fallback_rejected={summary.fallback_evidence_rejected} "
+        f"fallback_runtime_seconds={summary.fallback_runtime_seconds:.2f}"
     )
 
 
@@ -247,6 +261,32 @@ def review_set(
     typer.echo(f"company_id={company_id} review_status={status.value}")
 
 
+@review_app.command("override-channel")
+def review_override_channel(company_id: int, contact_id: int, reason: str = typer.Option(...)) -> None:
+    """Choose a different suitable channel without changing the machine recommendation."""
+    suitable = {
+        BusinessChannelType.PARTNERSHIP_EMAIL, BusinessChannelType.BUSINESS_DEVELOPMENT_EMAIL,
+        BusinessChannelType.GENERAL_BUSINESS_EMAIL, BusinessChannelType.NAMED_PERSON_EMAIL,
+        BusinessChannelType.CONTACT_FORM, BusinessChannelType.SALES_MARKETING_EMAIL,
+    }
+    with db_session() as session:
+        company = session.get(Company, company_id)
+        contact = session.get(Contact, contact_id)
+        if company is None or contact is None or contact.company_id != company_id:
+            raise typer.BadParameter("contact_id must identify a channel belonging to company_id")
+        if contact.channel_type not in suitable:
+            raise typer.BadParameter("Only a suitable business/contact channel can be selected")
+        if len(reason.strip()) < 8:
+            raise typer.BadParameter("reason must document the decision (at least 8 characters)")
+        company.channel_override_contact_id = contact.id
+        company.channel_override_reason = reason.strip()
+        contact.review_status = ReviewStatus.MAYBE
+        contact.review_notes = f"Selected by human override: {reason.strip()}"
+        contact.reviewed_at = datetime.now(timezone.utc)
+        session.commit()
+    typer.echo(f"company_id={company_id} channel_override_contact_id={contact_id}")
+
+
 @contacts_app.command("list")
 def contacts_list(company_id: int | None = typer.Option(None), review: ReviewStatus | None = typer.Option(None)) -> None:
     with db_session() as session:
@@ -256,9 +296,10 @@ def contacts_list(company_id: int | None = typer.Option(None), review: ReviewSta
         if review is not None:
             query = query.where(Contact.review_status == review)
         rows = session.scalars(query).all()
-        typer.echo("ID  COMPANY SCORE TYPE                      ROLE                 EMAIL / NAME")
+        typer.echo("ID  COMPANY SCORE CHANNEL                   REVIEW    EMAIL / FORM / NAME")
         for row in rows:
-            typer.echo(f"{row.id:<3} {row.company_id:<7} {row.ranking_score:>5.0f} {row.contact_type.value:<25} {row.normalized_role:<20} {row.email or row.name or '-'}")
+            label = row.channel_type.value if row.channel_type else row.contact_type.value
+            typer.echo(f"{row.id:<3} {row.company_id:<7} {row.ranking_score:>5.0f} {label:<26} {row.review_status.value:<9} {row.email or row.source_url or row.name or '-'}")
 
 
 @contacts_app.command("show")
@@ -270,6 +311,7 @@ def contacts_show(contact_id: int) -> None:
         typer.echo(
             f"id: {row.id}\ncompany_id: {row.company_id}\nname: {row.name or '-'}\ntitle: {row.title or '-'}\n"
             f"role: {row.normalized_role}\ntype: {row.contact_type.value}\nemail: {row.email or '-'}\n"
+            f"channel_type: {row.channel_type.value if row.channel_type else '-'}\npurpose: {row.purpose or '-'}\nrecommended: {row.recommended}\n"
             f"validation: {row.validation_status}\nconfidence: {row.confidence}\nrank: {row.ranking_score}\n"
             f"reason: {row.ranking_reason or '-'}\nsource: {row.source_url or '-'}\nreview: {row.review_status.value}"
         )
@@ -322,6 +364,9 @@ def export_review(output: Path = typer.Option(Path("data/research_partner_review
         "website_fetch_status", "eligibility", "qualification_score", "geo_opportunity", "priority_score",
         "priority_tier", "confidence", "qualification_reason", "geo_opportunity_reason", "key_evidence",
         "pipeline_status", "review_status", "review_notes", "reviewed_by", "last_inspected_at",
+        "primary_channel_type", "primary_channel", "primary_channel_purpose", "primary_channel_confidence",
+        "primary_channel_source_url", "primary_channel_evidence", "alternative_channels", "named_decision_maker",
+        "primary_channel_review_status", "contactability_status", "channel_override_contact_id", "channel_override_reason",
     ]
     with db_session() as session, output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -329,6 +374,9 @@ def export_review(output: Path = typer.Option(Path("data/research_partner_review
         for company in session.scalars(select(Company).order_by(Company.priority_score.desc().nullslast(), Company.id)).all():
             snapshot = session.scalar(select(WebsiteSnapshot).where(WebsiteSnapshot.company_id == company.id).order_by(WebsiteSnapshot.fetched_at.desc()))
             evidence = json.loads(company.qualification_evidence or "{}")
+            channel = session.get(Contact, company.channel_override_contact_id) if company.channel_override_contact_id else company.primary_channel
+            alternatives = [item for item in company.contacts if item.channel_type and item.id != company.primary_channel_id]
+            people = [item.name for item in company.contacts if item.contact_type.value == "PERSON" and item.name]
             writer.writerow({
                 "company_id": company.id, "company_name": company.company_name, "website": company.website,
                 "normalized_domain": company.normalized_domain, "industry": company.industry_normalized,
@@ -345,8 +393,35 @@ def export_review(output: Path = typer.Option(Path("data/research_partner_review
                 "pipeline_status": company.pipeline_status.value, "review_status": company.review_status.value,
                 "review_notes": company.review_notes, "reviewed_by": company.reviewed_by,
                 "last_inspected_at": snapshot.fetched_at.isoformat() if snapshot else "",
+                "primary_channel_type": channel.channel_type.value if channel and channel.channel_type else "",
+                "primary_channel": (channel.email or channel.channel_url or channel.source_url or "") if channel else "",
+                "primary_channel_purpose": channel.purpose or "" if channel else "",
+                "primary_channel_confidence": channel.confidence or "" if channel else "",
+                "primary_channel_source_url": channel.source_url or "" if channel else "",
+                "primary_channel_evidence": channel.evidence_text or "" if channel else "",
+                "alternative_channels": json.dumps([
+                    {"type": item.channel_type.value, "email": item.email, "url": item.source_url, "purpose": item.purpose, "review_status": item.review_status.value}
+                    for item in alternatives
+                ], ensure_ascii=False),
+                "named_decision_maker": "; ".join(people),
+                "primary_channel_review_status": channel.review_status.value if channel else "",
+                "contactability_status": company.contactability_status.value,
+                "channel_override_contact_id": company.channel_override_contact_id or "",
+                "channel_override_reason": company.channel_override_reason or "",
             })
     typer.echo(f"Exported review dataset to {output}")
+
+
+@app.command("export-company-selection")
+def export_selection(
+    output: Path = typer.Option(Path("data/company_selection_review.csv")),
+    summary: Path = typer.Option(Path("data/company_selection_summary.csv")),
+    config: Path = typer.Option(Path("config/qualification.yaml"), exists=True, dir_okay=False),
+) -> None:
+    """Export a unified company selection queue and summary without changing records."""
+    with db_session() as session:
+        records = export_company_selection(session, config, output, summary)
+    typer.echo(f"companies={len(records)} exported={output} summary={summary}")
 
 
 @app.command("import-review")
@@ -357,16 +432,46 @@ def import_review(source: Path = typer.Option(..., exists=True, dir_okay=False))
         for row in csv.DictReader(handle):
             try:
                 company_id = int(row.get("company_id", ""))
-                status = ReviewStatus(row.get("review_status", "").strip().upper())
+                status = ReviewStatus((row.get("company_review_status") or row.get("review_status", "")).strip().upper())
             except (ValueError, TypeError) as exc:
                 raise typer.BadParameter(f"Invalid company_id or review_status in row: {row}") from exc
             company = session.get(Company, company_id)
             if company is None:
                 raise typer.BadParameter(f"Company {company_id} does not exist")
             company.review_status = status
-            company.review_notes = row.get("review_notes") or None
+            company.review_notes = row.get("review_notes") or row.get("reviewer_notes") or None
             company.reviewed_by = row.get("reviewed_by") or None
             company.reviewed_at = datetime.now(timezone.utc)
+            override_id = (row.get("channel_override_contact_id") or "").strip()
+            override_reason = (row.get("channel_override_reason") or "").strip()
+            if override_id:
+                try:
+                    parsed_override_id = int(override_id)
+                except ValueError as exc:
+                    raise typer.BadParameter(f"Invalid channel override id for company_id={company.id}") from exc
+                contact = session.get(Contact, parsed_override_id)
+                suitable = {
+                    BusinessChannelType.PARTNERSHIP_EMAIL, BusinessChannelType.BUSINESS_DEVELOPMENT_EMAIL,
+                    BusinessChannelType.GENERAL_BUSINESS_EMAIL, BusinessChannelType.NAMED_PERSON_EMAIL,
+                    BusinessChannelType.CONTACT_FORM, BusinessChannelType.SALES_MARKETING_EMAIL,
+                }
+                if contact is None or contact.company_id != company.id or contact.channel_type not in suitable or len(override_reason) < 8:
+                    raise typer.BadParameter(f"Invalid channel override for company_id={company.id}; a same-company suitable channel and documented reason are required")
+                company.channel_override_contact_id = contact.id
+                company.channel_override_reason = override_reason
+            elif "channel_override_contact_id" in row:
+                company.channel_override_contact_id = None
+                company.channel_override_reason = None
+            channel_status = (row.get("channel_review_status") or "").strip().upper()
+            selected_channel = session.get(Contact, company.channel_override_contact_id or company.primary_channel_id) if (company.channel_override_contact_id or company.primary_channel_id) else None
+            if channel_status and selected_channel:
+                try:
+                    selected_channel.review_status = ReviewStatus(channel_status)
+                except ValueError as exc:
+                    raise typer.BadParameter(f"Invalid channel_review_status for company_id={company.id}") from exc
+                selected_channel.review_notes = row.get("channel_review_notes") or selected_channel.review_notes
+                selected_channel.reviewed_by = row.get("reviewed_by") or selected_channel.reviewed_by
+                selected_channel.reviewed_at = datetime.now(timezone.utc)
             updated += 1
         session.commit()
     typer.echo(f"Imported review fields for {updated} companies; canonical fields were ignored")

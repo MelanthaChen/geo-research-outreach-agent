@@ -44,6 +44,25 @@ class ContactType(str, enum.Enum):
     GENERIC_BUSINESS_CONTACT = "GENERIC_BUSINESS_CONTACT"
 
 
+class BusinessChannelType(str, enum.Enum):
+    PARTNERSHIP_EMAIL = "PARTNERSHIP_EMAIL"
+    BUSINESS_DEVELOPMENT_EMAIL = "BUSINESS_DEVELOPMENT_EMAIL"
+    GENERAL_BUSINESS_EMAIL = "GENERAL_BUSINESS_EMAIL"
+    NAMED_PERSON_EMAIL = "NAMED_PERSON_EMAIL"
+    CONTACT_FORM = "CONTACT_FORM"
+    SALES_MARKETING_EMAIL = "SALES_MARKETING_EMAIL"
+    SUPPORT_EMAIL = "SUPPORT_EMAIL"
+    RESTRICTED_EMAIL = "RESTRICTED_EMAIL"
+    OTHER = "OTHER"
+
+
+class ContactabilityStatus(str, enum.Enum):
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    NO_SUITABLE_CHANNEL = "NO_SUITABLE_CHANNEL"
+    FETCH_FAILED = "FETCH_FAILED"
+
+
 class ContactDiscoveryStatus(str, enum.Enum):
     NOT_RUN = "NOT_RUN"
     CONTACT_FOUND = "CONTACT_FOUND"
@@ -104,12 +123,20 @@ class Company(Base):
         Enum(ContactDiscoveryStatus), default=ContactDiscoveryStatus.NOT_RUN, index=True
     )
     contacts_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    contactability_status: Mapped[ContactabilityStatus] = mapped_column(
+        Enum(ContactabilityStatus), default=ContactabilityStatus.NO_SUITABLE_CHANNEL, index=True
+    )
+    primary_channel_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id", use_alter=True, name="fk_company_primary_channel"), nullable=True)
+    channel_override_contact_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    channel_override_reason: Mapped[str | None] = mapped_column(Text)
     pipeline_status: Mapped[CompanyStatus] = mapped_column(Enum(CompanyStatus), default=CompanyStatus.DISCOVERED)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     discoveries: Mapped[list[DiscoveryRecord]] = relationship(back_populates="company", cascade="all, delete-orphan")
-    contacts: Mapped[list[Contact]] = relationship(back_populates="company", cascade="all, delete-orphan")
+    contacts: Mapped[list[Contact]] = relationship(back_populates="company", cascade="all, delete-orphan", foreign_keys="Contact.company_id")
+    primary_channel: Mapped[Contact | None] = relationship(foreign_keys=[primary_channel_id], post_update=True)
+    contact_extraction_runs: Mapped[list[ContactExtractionRun]] = relationship(cascade="all, delete-orphan")
 
 
 class DiscoveryRecord(Base):
@@ -168,6 +195,7 @@ class WebsitePage(Base):
     canonical_url: Mapped[str | None] = mapped_column(String(2048))
     visible_text: Mapped[str | None] = mapped_column(Text)
     contact_evidence: Mapped[str] = mapped_column(Text, default="[]")
+    extracted_channels: Mapped[str] = mapped_column(Text, default="[]")
     visible_text_length: Mapped[int] = mapped_column(Integer, default=0)
     content_hash: Mapped[str | None] = mapped_column(String(64))
     structured_data_types: Mapped[str] = mapped_column(Text, default="[]")
@@ -191,6 +219,12 @@ class Contact(Base):
     contact_type: Mapped[ContactType] = mapped_column(Enum(ContactType), default=ContactType.GENERIC_BUSINESS_CONTACT)
     source_type: Mapped[str | None] = mapped_column(String(50))
     source_url: Mapped[str | None] = mapped_column(String(2048))
+    extraction_method: Mapped[str] = mapped_column(String(50), default="LIGHTWEIGHT_HTML")
+    evidence_text: Mapped[str | None] = mapped_column(Text)
+    channel_type: Mapped[BusinessChannelType | None] = mapped_column(Enum(BusinessChannelType), index=True)
+    channel_url: Mapped[str | None] = mapped_column(String(2048))
+    purpose: Mapped[str | None] = mapped_column(Text)
+    recommended: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     validation_status: Mapped[str] = mapped_column(String(50), default="UNKNOWN")
     confidence: Mapped[str] = mapped_column(String(50), default="LOW")
     ranking_score: Mapped[float] = mapped_column(Float, default=0)
@@ -202,7 +236,38 @@ class Contact(Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-    company: Mapped[Company] = relationship(back_populates="contacts")
+    company: Mapped[Company] = relationship(back_populates="contacts", foreign_keys=[company_id])
+    evidence_records: Mapped[list[ContactEvidence]] = relationship(back_populates="contact", cascade="all, delete-orphan")
+
+
+class ContactEvidence(Base):
+    __tablename__ = "contact_evidence"
+    __table_args__ = (UniqueConstraint("contact_id", "source_url", "extraction_method", name="uq_contact_evidence_source"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), index=True)
+    source_url: Mapped[str] = mapped_column(String(2048))
+    extraction_method: Mapped[str] = mapped_column(String(50))
+    evidence_text: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(50), default="MEDIUM")
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    contact: Mapped[Contact] = relationship(back_populates="evidence_records")
+
+
+class ContactExtractionRun(Base):
+    __tablename__ = "contact_extraction_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    method: Mapped[str] = mapped_column(String(50))
+    trigger_reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), index=True)
+    pages_processed: Mapped[int] = mapped_column(Integer, default=0)
+    runtime_seconds: Mapped[float] = mapped_column(Float, default=0)
+    contacts_added: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Outreach(Base):

@@ -1,0 +1,29 @@
+company_id,company_name,contact_status,named_contacts,named_person_emails,generic_mailboxes,people,emails
+1,Honeylove,CONTACT_FOUND,0,0,1,,accessibility@honeylove.com
+5,Vexo,CONTACT_FOUND,0,0,1,,info@vexoai.com
+7,"Shire Intelligence",CONTACT_FOUND,0,0,1,,alex@shireintelligence.com
+8,Roma,CONTACT_NOT_FOUND,0,0,0,,
+9,Vyra,CONTACT_FOUND,2,0,0,"Sulan Zhang [FOUNDER_OWNER]; Caleb Pong [FOUNDER_OWNER]",
+12,Grocalo,CONTACT_FOUND,0,0,1,,support@grocalo.com
+14,"Veeza AI",CONTACT_FOUND,1,0,1,"Aly Moursy [FOUNDER_OWNER]",info@veeza.ai
+16,Jcode,CONTACT_FOUND,1,0,0,"Jeremy Huang [FOUNDER_OWNER]",
+17,tash,CONTACT_FOUND,0,0,1,,founders@tash.cards
+20,"Egoist Machines",CONTACT_NOT_FOUND,0,0,0,,
+21,"ACME Block & Brick",CONTACT_NOT_FOUND,0,0,0,,
+22,"Actikare Responsive in-home care",CONTACT_NOT_FOUND,0,0,0,,
+23,"Adcock Financial Group",CONTACT_FOUND,0,0,1,,info@adcockfinancialgroup.com
+24,"AFC Urgent Care Dalton GA",CONTACT_NOT_FOUND,0,0,0,,
+31,"Artistic Civic Theatre",CONTACT_NOT_FOUND,0,0,0,,
+34,"Alarm City",CONTACT_FOUND,0,0,1,,ajackson@alarmcityusa.com
+36,"Alrol of America, Inc.",FAILED,0,0,0,,
+37,"American Carpet Wholesalers of GA, Inc.",CONTACT_NOT_FOUND,0,0,0,,
+44,"Bench Builders",CONTACT_NOT_FOUND,0,0,0,,
+46,"Big Brothers Big Sisters of Northwest Georgia Mountains",CONTACT_FOUND,3,0,0,"Joey Stuart [EXECUTIVE]; Chris Miles [EXECUTIVE]; Scott Chitwood [EXECUTIVE]",
+51,"Bradford AV",CONTACT_NOT_FOUND,0,0,0,,
+54,"Bruster's Real Ice Cream",CONTACT_FOUND,0,0,1,,daltonbrusters@gmail.com
+55,"Brymans Plaza",CONTACT_NOT_FOUND,0,0,0,,
+67,"Carpet Capital Association of REALTORS®",CONTACT_FOUND,2,0,0,"Marbin Campos [EXECUTIVE]; Talli Williams [EXECUTIVE]",
+69,Moonshot,CONTACT_NOT_FOUND,0,0,0,,
+71,Result,CONTACT_FOUND,0,0,1,,support@result.dev
+73,Pops,CONTACT_FOUND,0,0,1,,alon@undefinedinc.io
+76,"Light Anchor",CONTACT_FOUND,2,0,1,"Sangha Park [FOUNDER_OWNER]; Chase Kim [FOUNDER_OWNER]",founders@lightanchor.ai

@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0,<9"]
+crawl4ai = ["crawl4ai==0.9.4"]
 
 [project.scripts]
 outreach-agent = "outreach_agent.cli:app"

@@ -20,7 +20,7 @@ class QualificationResult:
     score: float
     decision: CompanyStatus
     reasons: list[str]
-    eligibility: str = "UNKNOWN"
+    eligibility: str = "NEEDS_REVIEW"
     geo_opportunity: str = "UNKNOWN"
     geo_reasons: list[str] | None = None
     priority_score: float = 0
@@ -30,44 +30,6 @@ class QualificationResult:
 
 
 def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationResult:
-    weights = rules["weights"]
-    penalties = rules["penalties"]
-    score = 0.0
-    reasons: list[str] = []
-    positive_signals = {
-        "has_website": True,
-        "customer_facing": signals.get("customer_facing", False),
-        "search_dependent": signals.get("search_dependent", False),
-        "content_rich": signals.get("content_rich", False),
-        "smb_or_startup": str(signals.get("company_size", "")).lower() in {"small", "medium", "smb", "startup"},
-        "active": signals.get("active", True),
-        "geo_opportunity": str(signals.get("geo_opportunity", "")).lower() in {"medium", "high"},
-    }
-    for name, present in positive_signals.items():
-        if present:
-            score += float(weights.get(name, 0))
-            reasons.append(f"+{weights.get(name, 0)} {name}")
-    for name, penalty in penalties.items():
-        if signals.get(name, False):
-            score += float(penalty)
-            reasons.append(f"{penalty} {name}")
-    website = signals.get("website_evidence") or {}
-    for name, weight in rules.get("website_weights", {}).items():
-        if website.get(name, False):
-            score += float(weight)
-            reasons.append(f"+{weight} website:{name}")
-    for name, penalty in rules.get("website_penalties", {}).items():
-        if website.get(name, False):
-            score += float(penalty)
-            reasons.append(f"{penalty} website:{name}")
-    score = max(0.0, min(100.0, score))
-    thresholds = rules["thresholds"]
-    if score >= float(thresholds["qualified"]):
-        decision = CompanyStatus.QUALIFIED
-    elif score >= float(thresholds["needs_review"]):
-        decision = CompanyStatus.NEEDS_REVIEW
-    else:
-        decision = CompanyStatus.REJECTED
     website = signals.get("website_evidence") or {}
     fetch_status = signals.get("fetch_status")
     pages = int(website.get("pages_inspected", 0))
@@ -78,12 +40,17 @@ def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationRes
     else:
         confidence = "MEDIUM"
 
-    if confidence == "LOW":
-        eligibility = "UNKNOWN"
-    elif website.get("reachable") and (website.get("meaningful_text") or website.get("substantial_public_information")):
+    # Eligibility is deliberately independent of industry, geography, size, and
+    # contactability. Only explicit exclusion evidence can make a record ineligible.
+    exclusions = rules.get("eligibility", {}).get("explicit_exclusions", [])
+    explicit_exclusion = next((key for key in exclusions if signals.get(key) is True), None)
+    discovery_supported = bool(signals.get("discovery_source"))
+    if explicit_exclusion:
+        eligibility = "INELIGIBLE"
+    elif signals.get("active") is False:
+        eligibility = "NEEDS_REVIEW"
+    elif website.get("reachable") and (website.get("meaningful_text") or website.get("substantial_public_information")) and discovery_supported:
         eligibility = "ELIGIBLE"
-    elif website.get("reachable") and signals.get("visible_text_length") is not None and int(signals["visible_text_length"]) < 100:
-        eligibility = "LOW_FIT"
     else:
         eligibility = "NEEDS_REVIEW"
 
@@ -99,14 +66,16 @@ def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationRes
     if not website.get("structured_data"):
         gap_count += 1
         geo_reasons.append("no structured data was observed in inspected pages")
-    if eligibility != "ELIGIBLE":
+    if confidence == "LOW" or not website:
         geo_opportunity = "UNKNOWN"
     elif website.get("substantial_public_information") and website.get("online_discovery_relevance") and gap_count >= 1:
         geo_opportunity = "HIGH"
-    elif website.get("meaningful_text") and gap_count >= 1:
+    elif website.get("meaningful_text") and website.get("online_discovery_relevance"):
         geo_opportunity = "MEDIUM"
-    else:
+    elif website.get("meaningful_text"):
         geo_opportunity = "LOW"
+    else:
+        geo_opportunity = "UNKNOWN"
 
     priority_rules = rules.get("priority", {})
     priority = 0.0
@@ -120,14 +89,19 @@ def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationRes
 
     add("eligible", eligibility == "ELIGIBLE")
     add("analyzable_website", confidence in {"HIGH", "MEDIUM"} and website.get("reachable", False))
-    add("smb_or_startup", str(signals.get("company_size_category", signals.get("company_size", ""))).upper() in {"MICRO", "SMALL", "MEDIUM", "STARTUP"})
+    # Company size is descriptive only unless the study explicitly configures
+    # size-based selection criteria. Unknown size never changes eligibility/score.
     add("online_discovery_relevance", website.get("online_discovery_relevance", False))
     add("geo_opportunity_high", geo_opportunity == "HIGH")
     add("geo_opportunity_medium", geo_opportunity == "MEDIUM")
     add("confidence_high", confidence == "HIGH")
     add("confidence_medium", confidence == "MEDIUM")
     priority = min(100.0, priority)
-    if confidence == "LOW" or eligibility in {"UNKNOWN", "NEEDS_REVIEW"}:
+    # Keep the legacy qualification_score column as a compatibility alias for
+    # the one machine priority score; do not retain a competing heuristic score.
+    score = priority
+    reasons = list(priority_evidence)
+    if confidence == "LOW" or eligibility == "NEEDS_REVIEW":
         tier = "NEEDS_REVIEW"
     elif priority >= float(priority_rules.get("thresholds", {}).get("high", 75)):
         tier = "HIGH"
@@ -142,13 +116,11 @@ def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationRes
         "uncertainty": (["website evidence unavailable or blocked"] if confidence == "LOW" else []),
         "priority_math": priority_evidence,
     }
-    if website:
-        decision = {
-            "ELIGIBLE": CompanyStatus.QUALIFIED,
-            "LOW_FIT": CompanyStatus.REJECTED,
-            "UNKNOWN": CompanyStatus.NEEDS_REVIEW,
-            "NEEDS_REVIEW": CompanyStatus.NEEDS_REVIEW,
-        }[eligibility]
+    decision = {
+        "ELIGIBLE": CompanyStatus.QUALIFIED,
+        "INELIGIBLE": CompanyStatus.REJECTED,
+        "NEEDS_REVIEW": CompanyStatus.NEEDS_REVIEW,
+    }[eligibility]
     return QualificationResult(score, decision, reasons, eligibility, geo_opportunity, geo_reasons, priority, tier, confidence, structured)
 
 
@@ -163,10 +135,13 @@ def qualify_companies(session: Session, config_path: Path, force: bool = False) 
         signals: dict[str, Any] = {
             "company_size": company.company_size,
             "company_size_category": company.company_size_category,
-            "geo_opportunity": company.geo_opportunity,
+            "discovery_source": bool(company.discoveries),
         }
         if company.discoveries and company.discoveries[0].raw_data:
-            signals.update(json.loads(company.discoveries[0].raw_data))
+            raw_discovery = json.loads(company.discoveries[0].raw_data)
+            # Candidate metadata may supply explicit activity/exclusion evidence,
+            # but missing fields are not synthesized.
+            signals.update({key: raw_discovery[key] for key in ("active", "ineligible", "unsuitable") if key in raw_discovery})
         snapshot = session.scalar(
             select(WebsiteSnapshot)
             .where(WebsiteSnapshot.company_id == company.id)

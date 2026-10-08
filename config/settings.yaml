@@ -10,3 +10,10 @@ website:
   retry_count: 1
   cache_ttl_hours: 168
   max_response_bytes: 2000000
+contact_extraction:
+  crawl4ai_fallback:
+    enabled: false
+    max_pages_per_company: 2
+    timeout_seconds: 20
+    max_companies_per_run: 20
+    cache_ttl_hours: 168

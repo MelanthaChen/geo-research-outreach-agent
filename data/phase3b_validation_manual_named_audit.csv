@@ -1,0 +1,12 @@
+company_id,company_name,contact_name,source_url,name_accuracy,role_taxonomy_accuracy,company_association,evidence_accuracy,note
+9,Vyra,Caleb Pong,https://www.usevyra.com/about,PASS,PASS,PASS,PASS,"First-party About page explicitly says Caleb Pong is a co-founder."
+9,Vyra,Sulan Zhang,https://www.usevyra.com/about,PASS,PASS,PASS,PASS,"First-party About page explicitly says Sulan Zhang is a co-founder."
+14,Veeza AI,Aly Moursy,https://www.veeza.ai/en/about,PASS,PASS,PASS,PASS,"First-party About page explicitly identifies Aly Moursy as founder."
+16,Jcode,Jeremy Huang,https://jcode.sh/about,PASS,PASS,PASS,PASS,"First-party About page uses a first-person introduction and says solo founder."
+46,Big Brothers Big Sisters of Northwest Georgia Mountains,Chris Miles,https://bbbsngm.org/leadership/,PASS,PASS,PASS,PASS,"Leadership page lists Chris Miles as vice president; normalized EXECUTIVE role is correct although the stored display title is less specific."
+46,Big Brothers Big Sisters of Northwest Georgia Mountains,Joey Stuart,https://bbbsngm.org/leadership/,PASS,PASS,PASS,PASS,"Leadership page lists Joey Stuart as president."
+46,Big Brothers Big Sisters of Northwest Georgia Mountains,Scott Chitwood,https://bbbsngm.org/leadership/,PASS,PASS,PASS,PASS,"Leadership page lists Scott Chitwood as past president; normalized EXECUTIVE role is correct although the stored display title is less specific."
+67,Carpet Capital Association of REALTORS®,Marbin Campos,https://usamls.net/dalton/,PASS,PASS,PASS,PASS,"First-party association page identifies Marbin Campos as 2026 president."
+67,Carpet Capital Association of REALTORS®,Talli Williams,https://usamls.net/dalton/default.asp?content=custom&menu_id=40977,PASS,PASS,PASS,PASS,"First-party board page identifies Talli Williams as president elect; normalized EXECUTIVE role is correct although the stored display title is less specific."
+76,Light Anchor,Chase Kim,https://lightanchor.ai/about,PASS,PASS,PASS,PASS,"First-party About page explicitly identifies Chase Kim as a co-founder."
+76,Light Anchor,Sangha Park,https://lightanchor.ai/about,PASS,PASS,PASS,PASS,"First-party About page explicitly identifies Sangha Park as a co-founder."

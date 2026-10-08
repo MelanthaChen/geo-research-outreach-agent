@@ -1,0 +1,456 @@
+[
+  {
+    "company_name": "Vyra",
+    "source": "yc_public",
+    "source_url": "https://www.usevyra.com/about",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.113,
+    "contacts": [],
+    "error": null
+  },
+  {
+    "company_name": "Vyra",
+    "source": "yc_public",
+    "source_url": "https://www.usevyra.com/about",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 1.015,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "sulanzhangart@gmail.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "sulanzhangart@gmail.com",
+        "evidence_url": "https://www.usevyra.com/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      },
+      {
+        "name": "Sulan Zhang",
+        "title": "co-founder",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "Use the AI you already pay for. Claude, ChatGPT, and Cursor can drive Vyra directly. You don't need a second subscription. | Who we are | Sulan Zhang, co-founder. Painter. On leave from Brown. | Caleb Pong, co-founder. Also at @calebjunep. | Questions go to our Discord or sulanzhangart@gmail.com.",
+        "evidence_url": "https://www.usevyra.com/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      },
+      {
+        "name": "Caleb Pong",
+        "title": "co-founder",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "Who we are | Sulan Zhang, co-founder. Painter. On leave from Brown. | Caleb Pong, co-founder. Also at @calebjunep. | Questions go to our Discord or sulanzhangart@gmail.com. | Try it on your footage",
+        "evidence_url": "https://www.usevyra.com/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 5168,
+    "cleaned_html_chars": 14891
+  },
+  {
+    "company_name": "Light Anchor",
+    "source": "yc_public",
+    "source_url": "https://lightanchor.ai/about",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.093,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "founders@lightanchor.ai",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "About Hiring Contact",
+        "evidence_url": "https://lightanchor.ai/about",
+        "extraction_method": "EXISTING_EXTRACTOR",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null
+  },
+  {
+    "company_name": "Light Anchor",
+    "source": "yc_public",
+    "source_url": "https://lightanchor.ai/about",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.853,
+    "contacts": [
+      {
+        "name": "Sangha Park",
+        "title": "Co-Founder · ex-Sendbird Lead Product Manager",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "About Light Anchor | Sangha Park and Chase Kim, co-founders of Light Anchor | Sangha Park | [](https://www.linkedin.com/in/sanghaha/)[](https://x.com/sanghaya1) | Co-Founder · ex-Sendbird Lead Product Manager",
+        "evidence_url": "https://lightanchor.ai/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      },
+      {
+        "name": "Chase Kim",
+        "title": "Co-Founder · ex-Sendbird Lead Product Manager",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "[](https://www.linkedin.com/in/sanghaha/)[](https://x.com/sanghaya1) | Co-Founder · ex-Sendbird Lead Product Manager | Chase Kim | [](https://www.linkedin.com/in/chasingjohnn/)[](https://x.com/chasingjohnnn) | Co-Founder · ex-Sendbird Head of Forward Deployment",
+        "evidence_url": "https://lightanchor.ai/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 2331,
+    "cleaned_html_chars": 7203
+  },
+  {
+    "company_name": "Honeylove",
+    "source": "yc_public",
+    "source_url": "https://www.honeylove.com/pages/accessibility",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.376,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "accessibility@honeylove.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "Honeylove Accessibility Statement Honeylove is making efforts to maintain and increase the accessibility of its Digital Properties to ensure that persons with disabilities have full and equal enjoyment of Honeylove's online goods, services, facilities, privileges, advantages, and accommodations. We want to hear from you if you encounter any accessibility barriers on our digital properties. We also welcome any accessibility feedback or suggestions that you may have. Please contact our Customer Support at accessibility@honeylove.com . Honeylove's Customer Experience team is available from 6am to",
+        "evidence_url": "https://www.honeylove.com/pages/accessibility",
+        "extraction_method": "EXISTING_EXTRACTOR",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null
+  },
+  {
+    "company_name": "Honeylove",
+    "source": "yc_public",
+    "source_url": "https://www.honeylove.com/pages/accessibility",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 1.204,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "accessibility@honeylove.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "accessibility@honeylove.com",
+        "evidence_url": "https://www.honeylove.com/pages/accessibility",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 14346,
+    "cleaned_html_chars": 91327
+  },
+  {
+    "company_name": "Alrol of America, Inc.",
+    "source": "growthzone_public",
+    "source_url": "https://alrolofamerica.com/about/",
+    "approach": "A_EXISTING",
+    "crawl_status": "FAILED",
+    "processing_seconds": 30.313,
+    "contacts": [],
+    "error": "ReadTimeout: "
+  },
+  {
+    "company_name": "Alrol of America, Inc.",
+    "source": "growthzone_public",
+    "source_url": "https://alrolofamerica.com/about/",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "FAILED",
+    "processing_seconds": 32.138,
+    "contacts": [],
+    "error": "Unexpected error in _crawl_web at line 778 in _crawl_web (../../../../../../tmp/crawl4ai-benchmark-venv/lib/python3.12/site-packages/crawl4ai/async_crawler_strategy.py):\nError: Failed on navigating ACS-GOTO:\nPage.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://alrolofamerica.com/about/\", waiting until \"domcontentloaded\"\n\n\nCode context:\n 773                                   tag=\"GOTO\",\n 774                                   params={\"url\": url},\n 775                               )\n 776                               response = None\n 777                           else:\n 778 →                             raise RuntimeError(f\"Failed on navigating ACS-GOTO:\\n{str(e)}\")\n 779   \n 780                       # ──────────────────────────────────────────────────────────────\n 781                       # Walk the redirect chain.  Playwright returns only the last\n 782                       # hop, so we trace the `request.redirected_from` links until the\n 783                       # first response that differs from the final one and surface its",
+    "markdown_chars": 0,
+    "cleaned_html_chars": 0
+  },
+  {
+    "company_name": "Shire Intelligence",
+    "source": "yc_public",
+    "source_url": "https://shireintelligence.com/contact-us",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.152,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "alex@shireintelligence.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "alex@shireintelligence.com",
+        "evidence_url": "https://shireintelligence.com/contact-us",
+        "extraction_method": "EXISTING_EXTRACTOR",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null
+  },
+  {
+    "company_name": "Shire Intelligence",
+    "source": "yc_public",
+    "source_url": "https://shireintelligence.com/contact-us",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 1.102,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "alex@shireintelligence.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "alex@shireintelligence.com",
+        "evidence_url": "https://shireintelligence.com/contact-us",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      },
+      {
+        "name": "Alex Tabaku",
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "alex@shireintelligence.com",
+        "contact_type": "PERSON",
+        "evidence_text": "Contact | Alex Tabaku | alex@shireintelligence.com | 8435828486",
+        "evidence_url": "https://shireintelligence.com/contact-us",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 1558,
+    "cleaned_html_chars": 9852
+  },
+  {
+    "company_name": "Veeza AI",
+    "source": "yc_public",
+    "source_url": "https://www.veeza.ai/en/about",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.175,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "info@veeza.ai",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "Email : info@veeza.ai",
+        "evidence_url": "https://www.veeza.ai/en/about",
+        "extraction_method": "EXISTING_EXTRACTOR",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null
+  },
+  {
+    "company_name": "Veeza AI",
+    "source": "yc_public",
+    "source_url": "https://www.veeza.ai/en/about",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.898,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "info@veeza.ai",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "info@veeza.ai",
+        "evidence_url": "https://www.veeza.ai/en/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      },
+      {
+        "name": "Aly Moursy",
+        "title": "Veeza AI was built by people who have lived the visa process from the applicant's side. Our founder, Aly Moursy, started Veeza after watching family members lose hours and weeks to the Schengen visa process: filling the same forms over and over, refreshing portal calendars for an appointment, and paying premium prices for something that should be simple.",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "An AI travel agent for tourist visas. Applications prepared end to end, every detail checked by a human expert. | Who we are | Veeza AI was built by people who have lived the visa process from the applicant's side. Our founder, Aly Moursy, started Veeza after watching family members lose hours and weeks to the Schengen visa process: filling the same forms over and over, refreshing portal calendars for an appointment, and paying premium prices for something that should be simple. | What Veeza doe",
+        "evidence_url": "https://www.veeza.ai/en/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 2933,
+    "cleaned_html_chars": 5511
+  },
+  {
+    "company_name": "Jcode",
+    "source": "yc_public",
+    "source_url": "https://jcode.sh/about",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.089,
+    "contacts": [],
+    "error": null
+  },
+  {
+    "company_name": "Jcode",
+    "source": "yc_public",
+    "source_url": "https://jcode.sh/about",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.821,
+    "contacts": [
+      {
+        "name": "Jeremy Huang",
+        "title": "Solo founder and developer",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "Hi, I'm Jeremy Huang. | Jeremy Huang standing behind the Y Combinator sign at 580, wearing a YC badge | 21 years old",
+        "evidence_url": "https://jcode.sh/about",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 10744,
+    "cleaned_html_chars": 30209
+  },
+  {
+    "company_name": "Bench Builders",
+    "source": "growthzone_public",
+    "source_url": "https://bench-builders.com/contact",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.131,
+    "contacts": [],
+    "error": null
+  },
+  {
+    "company_name": "Bench Builders",
+    "source": "growthzone_public",
+    "source_url": "https://bench-builders.com/contact",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.809,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "info@bench-builders.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "info@bench-builders.com",
+        "evidence_url": "https://bench-builders.com/contact",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      },
+      {
+        "name": "Mike O'Neill",
+        "title": "Founder and Executive Coach, Bench Builders, Dalton Georgia",
+        "normalized_role": "FOUNDER_OWNER",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "Let’s Start a Conversation | Whether you're looking to develop stronger leaders, build bench strength, or explore executive coaching for yourself or a senior leader in your organization. | Mike O'Neill, Founder and Executive Coach, Bench Builders, Dalton Georgia | Let’s Start a Conversation | Whether you're looking to strengthen supervisors, build bench strength, or explore executive coaching, let's talk about the right next step.",
+        "evidence_url": "https://bench-builders.com/contact",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 2744,
+    "cleaned_html_chars": 37566
+  },
+  {
+    "company_name": "Big Brothers Big Sisters of Northwest Georgia Mountains",
+    "source": "growthzone_public",
+    "source_url": "https://bbbsngm.org/our-staff/",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.9,
+    "contacts": [],
+    "error": null
+  },
+  {
+    "company_name": "Big Brothers Big Sisters of Northwest Georgia Mountains",
+    "source": "growthzone_public",
+    "source_url": "https://bbbsngm.org/our-staff/",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 1.647,
+    "contacts": [
+      {
+        "name": "Lindsey Foster",
+        "title": "Executive Director",
+        "normalized_role": "GENERAL_BUSINESS",
+        "email": null,
+        "contact_type": "PERSON",
+        "evidence_text": "Our Staff | Executive Director | Lindsey Foster | Site Based Enrollment/Match Support Specialist | Anne Bearden",
+        "evidence_url": "https://bbbsngm.org/our-staff/",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "HIGH"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 3364,
+    "cleaned_html_chars": 11166
+  },
+  {
+    "company_name": "Bruster's Real Ice Cream",
+    "source": "growthzone_public",
+    "source_url": "https://brusters.com/locations/dalton/349/",
+    "approach": "A_EXISTING",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 0.213,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "daltonbrusters@gmail.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "daltonbrusters@gmail.com",
+        "evidence_url": "https://brusters.com/locations/dalton/349/",
+        "extraction_method": "EXISTING_EXTRACTOR",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null
+  },
+  {
+    "company_name": "Bruster's Real Ice Cream",
+    "source": "growthzone_public",
+    "source_url": "https://brusters.com/locations/dalton/349/",
+    "approach": "B_CRAWL4AI_DETERMINISTIC",
+    "crawl_status": "SUCCESS",
+    "processing_seconds": 1.091,
+    "contacts": [
+      {
+        "name": null,
+        "title": null,
+        "normalized_role": "UNKNOWN",
+        "email": "daltonbrusters@gmail.com",
+        "contact_type": "GENERIC_BUSINESS_CONTACT",
+        "evidence_text": "daltonbrusters@gmail.com",
+        "evidence_url": "https://brusters.com/locations/dalton/349/",
+        "extraction_method": "CRAWL4AI_DETERMINISTIC",
+        "confidence": "MEDIUM"
+      }
+    ],
+    "error": null,
+    "markdown_chars": 40571,
+    "cleaned_html_chars": 127608
+  }
+]

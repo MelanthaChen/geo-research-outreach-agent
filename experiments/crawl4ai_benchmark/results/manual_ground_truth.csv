@@ -1,0 +1,22 @@
+company_name,source_url,name,title,email,email_association,contact_type,evidence_text,ground_truth_status
+Vyra,https://www.usevyra.com/about,Sulan Zhang,Co-Founder,,N/A,PERSON,"Sulan Zhang, co-founder. Painter. On leave from Brown.",CONFIRMED
+Vyra,https://www.usevyra.com/about,Caleb Pong,Co-Founder,,N/A,PERSON,"Caleb Pong, co-founder.",CONFIRMED
+Vyra,https://www.usevyra.com/about,,,sulanzhangart@gmail.com,GENERIC_OR_UNASSOCIATED,GENERIC_BUSINESS_CONTACT,"Questions go to our Discord or sulanzhangart@gmail.com.",CONFIRMED
+Light Anchor,https://lightanchor.ai/about,Sangha Park,Co-Founder,,N/A,PERSON,"Sangha Park — Co-Founder · ex-Sendbird Lead Product Manager",CONFIRMED
+Light Anchor,https://lightanchor.ai/about,Chase Kim,Co-Founder,,N/A,PERSON,"Chase Kim — Co-Founder · ex-Sendbird Head of Forward Deployment",CONFIRMED
+Light Anchor,https://lightanchor.ai/about,,,founders@lightanchor.ai,SHARED_GENERIC,GENERIC_BUSINESS_CONTACT,"Contact founders@lightanchor.ai",CONFIRMED
+Honeylove,https://www.honeylove.com/pages/accessibility,,,accessibility@honeylove.com,GENERIC,GENERIC_BUSINESS_CONTACT,"Please contact our Customer Support at accessibility@honeylove.com.",CONFIRMED
+Alrol of America Inc.,https://alrolofamerica.com/about/,Andreas Bruhwiler,CEO & Owner,andreas@alrolusa.com,PERSON,PERSON,"CEO & OWNER — Andreas Bruhwiler — andreas@alrolusa.com",CONFIRMED
+Alrol of America Inc.,https://alrolofamerica.com/about/,Daniela Bruhwiler,CFO & Owner,daniela@alrolusa.com,PERSON,PERSON,"CFO & OWNER — Daniela Bruhwiler — daniela@alrolusa.com",CONFIRMED
+Alrol of America Inc.,https://alrolofamerica.com/about/,Jack Flowers,VP Operations,jack@alrolusa.com,PERSON,PERSON,"VP OPERATIONS — Jack Flowers — jack@alrolusa.com",CONFIRMED
+Shire Intelligence,https://shireintelligence.com/contact-us,Alex Tabaku,UNKNOWN,alex@shireintelligence.com,PERSON,PERSON,"Contact — Alex Tabaku — alex@shireintelligence.com",CONFIRMED
+Veeza AI,https://www.veeza.ai/en/about,Aly Moursy,Founder,,N/A,PERSON,"Our founder, Aly Moursy, started Veeza",CONFIRMED
+Veeza AI,https://www.veeza.ai/en/about,,,info@veeza.ai,GENERIC,GENERIC_BUSINESS_CONTACT,"Questions, feedback, or press inquiries: Email: info@veeza.ai",CONFIRMED
+Jcode,https://jcode.sh/about,Jeremy Huang,Solo Founder and Developer,,N/A,PERSON,"Hi, I'm Jeremy Huang. Solo founder and developer",CONFIRMED
+Bench Builders,https://bench-builders.com/contact,Mike O'Neill,Founder and Executive Coach,,N/A,PERSON,"Mike O'Neill, Founder and Executive Coach, Bench Builders",CONFIRMED
+Big Brothers Big Sisters of Northwest Georgia Mountains,https://bbbsngm.org/our-staff/,Lindsey Foster,Executive Director,,N/A,PERSON,"Executive Director — Lindsey Foster",CONFIRMED
+Big Brothers Big Sisters of Northwest Georgia Mountains,https://bbbsngm.org/our-staff/,Anne Bearden,Site Based Enrollment/Match Support Specialist,,N/A,PERSON,"Site Based Enrollment/Match Support Specialist — Anne Bearden",CONFIRMED
+Big Brothers Big Sisters of Northwest Georgia Mountains,https://bbbsngm.org/our-staff/,Joanna Galvan,Site Based Enrollment/Match Support Specialist,,N/A,PERSON,"Site Based Enrollment/Match Support Specialist — Joanna Galvan",CONFIRMED
+Big Brothers Big Sisters of Northwest Georgia Mountains,https://bbbsngm.org/our-staff/,Lori Abernathy,Community Based Enrollment and Match Support Specialist,,N/A,PERSON,"Community Based Enrollment and Match Support Specialist — Lori Abernathy",CONFIRMED
+Bruster's Real Ice Cream,https://brusters.com/locations/dalton/349/,,,daltonbrusters@gmail.com,GENERIC_OR_SHARED,GENERIC_BUSINESS_CONTACT,"Manager - Trey & Lauren Tucker: DaltonBrusters@gmail.com",CONFIRMED
+Bruster's Real Ice Cream,https://brusters.com/locations/dalton/349/,Trey & Lauren Tucker,Manager,,UNCERTAIN,PERSON,"Manager - Trey & Lauren Tucker",UNCERTAIN_COMPOUND_NAME

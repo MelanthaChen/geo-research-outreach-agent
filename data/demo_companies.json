@@ -1,0 +1,16 @@
+[
+  {
+    "company_name": "Harbor Home Goods",
+    "website": "https://www.harborhome.example/catalog/",
+    "industry": "Retail",
+    "location": "Portland, ME",
+    "company_size": "small",
+    "source_url": "demo:json-list",
+    "customer_facing": true,
+    "search_dependent": true,
+    "content_rich": true,
+    "active": true,
+    "geo_opportunity": "high"
+  }
+]
+

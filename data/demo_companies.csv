@@ -1,0 +1,7 @@
+company_name,website,industry,location,company_size,source_url,customer_facing,search_dependent,content_rich,active,geo_opportunity,unsuitable,dead_website
+Acme Garden Studio,https://www.acmegarden.example/services,Landscaping,"Portland, OR",small,demo:research-list-a,true,true,true,true,high,false,false
+ACME Garden Studio,http://acmegarden.example/,Landscaping,"Portland, OR",small,demo:research-list-b,true,true,true,true,high,false,false
+BrightPath Tutoring,https://brightpath.example,Tutoring,"Boston, MA",startup,demo:research-list-a,true,true,true,true,medium,false,false
+Dormant Example,https://dormant.example,Unknown,,unknown,demo:research-list-a,false,false,false,false,low,false,true
+Internal Research Archive,https://archive.example,Archive,,large,demo:research-list-a,false,false,true,true,low,true,false
+

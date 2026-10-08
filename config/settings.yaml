@@ -1,0 +1,12 @@
+database_url: sqlite:///data/outreach.db
+log_level: INFO
+send_mode: dry_run
+website:
+  user_agent: "GEOResearchOutreachAgent/0.2 (academic research; no outreach; contact: research@example.invalid)"
+  request_timeout_seconds: 15
+  delay_between_requests_seconds: 1.0
+  max_pages_per_company: 4
+  max_companies_per_run: 25
+  retry_count: 1
+  cache_ttl_hours: 168
+  max_response_bytes: 2000000

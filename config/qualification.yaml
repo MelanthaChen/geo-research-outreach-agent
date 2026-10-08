@@ -1,0 +1,33 @@
+# Initial research heuristics only. Tune these with the research team.
+thresholds:
+  qualified: 55
+  needs_review: 30
+
+weights:
+  has_website: 25
+  customer_facing: 20
+  search_dependent: 20
+  content_rich: 15
+  smb_or_startup: 20
+  active: 10
+  geo_opportunity: 15
+
+penalties:
+  dead_website: -60
+  unsuitable: -50
+  large_enterprise: -25
+
+# Phase 2 evidence. Missing evidence adds no points and causes no penalty.
+website_weights:
+  reachable: 15
+  meaningful_text: 15
+  product_or_service_page: 10
+  informational_content: 10
+  faq_page: 5
+  structured_data: 5
+  online_discovery_relevance: 10
+  thin_content_opportunity: 10
+
+website_penalties:
+  fetch_failed: -40
+  blocked: -10

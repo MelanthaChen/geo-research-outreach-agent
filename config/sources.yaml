@@ -1,0 +1,11 @@
+sources:
+  demo_csv:
+    type: csv
+    path: data/demo_companies.csv
+  demo_json:
+    type: json
+    path: data/demo_companies.json
+  yc_consumer:
+    type: yc_public
+    source_name: Y Combinator Consumer Startup Directory
+    url: https://www.ycombinator.com/companies/industry/consumer

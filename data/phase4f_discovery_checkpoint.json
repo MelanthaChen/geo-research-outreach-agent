@@ -1,0 +1,158 @@
+{
+  "categories": {
+    "artificial-intelligence": {
+      "company_count_after": 488,
+      "company_count_before": 463,
+      "created": 25,
+      "duplicates": 0,
+      "processed": 25,
+      "provenance_added": 25,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/artificial-intelligence",
+      "status": "complete"
+    },
+    "b2b": {
+      "company_count_after": 220,
+      "company_count_before": 198,
+      "created": 22,
+      "duplicates": 0,
+      "processed": 22,
+      "provenance_added": 22,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/b2b",
+      "status": "complete"
+    },
+    "developer-tools": {
+      "company_count_after": 463,
+      "company_count_before": 426,
+      "created": 37,
+      "duplicates": 0,
+      "processed": 37,
+      "provenance_added": 37,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/developer-tools",
+      "status": "complete"
+    },
+    "e-commerce": {
+      "company_count_after": 426,
+      "company_count_before": 385,
+      "created": 41,
+      "duplicates": 0,
+      "processed": 41,
+      "provenance_added": 41,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/e-commerce",
+      "status": "complete"
+    },
+    "education": {
+      "company_count_after": 385,
+      "company_count_before": 335,
+      "created": 50,
+      "duplicates": 0,
+      "processed": 50,
+      "provenance_added": 50,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/education",
+      "status": "complete"
+    },
+    "fintech": {
+      "company_count_after": 295,
+      "company_count_before": 255,
+      "created": 40,
+      "duplicates": 0,
+      "processed": 40,
+      "provenance_added": 40,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/fintech",
+      "status": "complete"
+    },
+    "healthcare": {
+      "company_count_after": 335,
+      "company_count_before": 295,
+      "created": 40,
+      "duplicates": 0,
+      "processed": 40,
+      "provenance_added": 40,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/healthcare",
+      "status": "complete"
+    },
+    "marketing": {
+      "company_count_after": 534,
+      "company_count_before": 488,
+      "created": 46,
+      "duplicates": 0,
+      "processed": 46,
+      "provenance_added": 46,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/marketing",
+      "status": "complete"
+    },
+    "saas": {
+      "company_count_after": 255,
+      "company_count_before": 220,
+      "created": 35,
+      "duplicates": 0,
+      "processed": 35,
+      "provenance_added": 35,
+      "provenance_existing": 0,
+      "route": "https://www.ycombinator.com/companies/industry/saas",
+      "status": "complete"
+    }
+  },
+  "chamber_categories": {
+    "https://business.daltonchamber.org/list/Search/advertising-marketing-media-creative-services-806698": {
+      "company_count_after": 537,
+      "company_count_before": 537,
+      "created": 0,
+      "duplicates": 1,
+      "processed": 1,
+      "provenance_added": 0,
+      "provenance_existing": 1,
+      "route": "https://business.daltonchamber.org/list/Search/advertising-marketing-media-creative-services-806698",
+      "status": "complete"
+    },
+    "https://business.daltonchamber.org/list/Search/health-care-wellness-human-services-806709": {
+      "company_count_after": 537,
+      "company_count_before": 537,
+      "created": 0,
+      "duplicates": 2,
+      "processed": 2,
+      "provenance_added": 0,
+      "provenance_existing": 2,
+      "route": "https://business.daltonchamber.org/list/Search/health-care-wellness-human-services-806709",
+      "status": "complete"
+    },
+    "https://business.daltonchamber.org/list/Search/technology-telecommunications-electronics-806714": {
+      "company_count_after": 537,
+      "company_count_before": 537,
+      "created": 0,
+      "duplicates": 0,
+      "processed": 0,
+      "provenance_added": 0,
+      "provenance_existing": 0,
+      "route": "https://business.daltonchamber.org/list/Search/technology-telecommunications-electronics-806714",
+      "status": "complete"
+    }
+  },
+  "chamber_runtime_seconds": 0.0,
+  "company_count": 537,
+  "completed_categories": [
+    "b2b",
+    "saas",
+    "fintech",
+    "healthcare",
+    "education",
+    "e-commerce",
+    "developer-tools",
+    "artificial-intelligence",
+    "marketing"
+  ],
+  "completed_chamber_routes": [
+    "https://business.daltonchamber.org/list/Search/technology-telecommunications-electronics-806714",
+    "https://business.daltonchamber.org/list/Search/health-care-wellness-human-services-806709",
+    "https://business.daltonchamber.org/list/Search/advertising-marketing-media-creative-services-806698"
+  ],
+  "profile_urls_reused_or_seen": 477,
+  "runtime_seconds": 0.01
+}

@@ -124,11 +124,17 @@ def evaluate(signals: dict[str, Any], rules: dict[str, Any]) -> QualificationRes
     return QualificationResult(score, decision, reasons, eligibility, geo_opportunity, geo_reasons, priority, tier, confidence, structured)
 
 
-def qualify_companies(session: Session, config_path: Path, force: bool = False) -> dict[str, int]:
+def qualify_companies(
+    session: Session, config_path: Path, force: bool = False, *, company_ids: list[int] | None = None,
+) -> dict[str, int]:
     rules = load_yaml(config_path)
     query = select(Company)
     if not force:
         query = query.where(Company.pipeline_status == CompanyStatus.DISCOVERED)
+    if company_ids is not None:
+        if not company_ids:
+            return {status.value: 0 for status in (CompanyStatus.QUALIFIED, CompanyStatus.NEEDS_REVIEW, CompanyStatus.REJECTED)} | {"processed": 0}
+        query = query.where(Company.id.in_(company_ids))
     companies = session.scalars(query.order_by(Company.id)).all()
     counts = {status.value: 0 for status in (CompanyStatus.QUALIFIED, CompanyStatus.NEEDS_REVIEW, CompanyStatus.REJECTED)}
     for company in companies:

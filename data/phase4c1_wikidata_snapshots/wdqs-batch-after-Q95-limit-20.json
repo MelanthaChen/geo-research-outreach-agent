@@ -1,0 +1,188 @@
+{
+  "head" : {
+    "vars" : [ "company", "website" ]
+  },
+  "results" : {
+    "bindings" : [ {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950042"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.stoneisland.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950054"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.fiatindustrial.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950269"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://app.burgeranch.co.il/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950288"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://amprofon.com.mx/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950380"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.cbscorporation.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950419"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.mercadolibre.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95043005"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.bebir.es"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95053659"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.abc.cl/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950584"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.orlenlietuva.lt"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950650"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.macktrucks.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950734"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://deep2001fc.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950734"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://deepmma.amebaownd.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950734"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.deep2001.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q950766"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.safilogroup.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q951093"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.birravenezia.it/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95111323"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.skds.lv"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95111323"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.skds.lv/index.php?langs=2053"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95111373"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.snapshots.lv/en/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95111373"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.snapshots.lv/lv/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95111373"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.snapshots.lv/ru/"
+      }
+    } ]
+  }
+}

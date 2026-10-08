@@ -5,7 +5,7 @@ import httpx
 from sqlalchemy import func, select
 
 from outreach_agent.config import WebsiteSettings
-from outreach_agent.models import Company, WebsiteSnapshot
+from outreach_agent.models import Company, CompanyStatus, WebsiteSnapshot
 from outreach_agent.website import WebsiteCollector, collect_websites, extract_page
 
 
@@ -92,9 +92,9 @@ def test_collection_stores_evidence_and_reuses_cache(session):
 
     collector = make_collector(handler)
     settings = collector.settings
-    first = collect_websites(session, settings, collector=collector)
+    first = collect_websites(session, settings, collector=collector, company_ids=[company.id])
     call_count = len(calls)
-    second = collect_websites(session, settings, collector=collector)
+    second = collect_websites(session, settings, collector=collector, company_ids=[company.id])
 
     assert first.fetched == 1
     assert second.cached == 1
@@ -107,6 +107,47 @@ def test_collection_stores_evidence_and_reuses_cache(session):
     signals = json.loads(snapshot.extracted_signals)
     assert signals["meaningful_text"] is True
     assert signals["product_or_service_page"] is True
+
+
+def test_collection_keeps_processing_after_unexpected_company_failure(session):
+    companies = [
+        Company(company_name=name, normalized_name=name.lower(), website=f"https://{name.lower()}.test", normalized_domain=f"{name.lower()}.test", pipeline_status=CompanyStatus.DISCOVERED)
+        for name in ("Broken", "Healthy")
+    ]
+    session.add_all(companies)
+    session.commit()
+
+    class PartialFailureCollector:
+        def inspect(self, company):
+            if company.id == companies[0].id:
+                raise RuntimeError("isolated failure")
+            return WebsiteSnapshot(company_id=company.id, requested_url=company.website, fetch_status="SUCCESS")
+
+    summary = collect_websites(session, WebsiteSettings(max_companies_per_run=2), collector=PartialFailureCollector())
+    assert (summary.processed, summary.failed, summary.fetched) == (2, 1, 1)
+    session.expire_all()
+    snapshots = session.scalars(select(WebsiteSnapshot).order_by(WebsiteSnapshot.company_id)).all()
+    assert [snapshot.fetch_status for snapshot in snapshots] == ["FETCH_FAILED", "SUCCESS"]
+
+
+def test_targeted_collection_does_not_inspect_other_company_ids(session):
+    companies = [Company(company_name=f"Example {n}", normalized_name=f"example {n}", website=f"https://example{n}.test", normalized_domain=f"example{n}.test") for n in (1, 2)]
+    session.add_all(companies)
+    session.commit()
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /", headers={"content-type": "text/plain"})
+        if request.url.path == "/sitemap.xml":
+            return httpx.Response(404)
+        return httpx.Response(200, text=HOME, headers={"content-type": "text/html"})
+
+    collector = make_collector(handler)
+    summary = collect_websites(session, collector.settings, collector=collector, company_ids=[companies[1].id])
+    assert summary.processed == 1
+    assert all("example2.test" in url for url in requested)
     assert session.scalar(select(func.count(WebsiteSnapshot.id))) == 1
 
 

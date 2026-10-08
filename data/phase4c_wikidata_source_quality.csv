@@ -1,0 +1,9 @@
+metric,count,details
+first_bounded_query_rows,0,75-row query timed out; no records returned
+simplified_20_row_query_success,20,Live query succeeded; transient terminal output was not persisted as a data artifact
+simplified_50_row_query_success,50,Live query succeeded once; result was not persisted before the bounded rerun
+bounded_reproduction_attempt_http_502,1,Same 50-row query then returned 502; no repeated retry made
+pilot_rows_preserved,0,No records copied or fabricated; pilot CSV is intentionally header-only
+websites_verified,0,No website identity checks were run
+companies_added,0,Source quality and reproducible sample artifact could not be established
+experimental_cohort_total,77,Byte-for-byte copy of frozen Phase 3D review export; baseline DB untouched

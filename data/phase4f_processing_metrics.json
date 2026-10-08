@@ -1,0 +1,47 @@
+{
+  "contact_company_ids": [
+    199,
+    203,
+    204,
+    205,
+    207,
+    208,
+    209,
+    210,
+    211,
+    212
+  ],
+  "contact_summary": {
+    "blocked": 0,
+    "contacts_created": 0,
+    "duplicates": 19,
+    "failed": 0,
+    "fallback_contacts_created": 0,
+    "fallback_evidence_rejected": 0,
+    "fallback_failed": 0,
+    "fallback_pages": 0,
+    "fallback_runtime_seconds": 0,
+    "fallback_succeeded": 0,
+    "fallback_triggered": 0,
+    "found": 9,
+    "not_found": 1,
+    "processed": 10
+  },
+  "crawl": {
+    "blocked": 0,
+    "cached": 339,
+    "failed": 0,
+    "fetched": 0,
+    "processed": 339
+  },
+  "new_additions": 339,
+  "qualification": {
+    "NEEDS_REVIEW": 26,
+    "QUALIFIED": 277,
+    "REJECTED": 0,
+    "processed": 303
+  },
+  "runtime_seconds": 0.64,
+  "total_companies": 537,
+  "verified_new": 303
+}

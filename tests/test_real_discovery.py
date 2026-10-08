@@ -27,10 +27,20 @@ def test_yc_detail_parser_preserves_public_provenance():
     assert candidate is not None
     assert candidate.company_name == "Sample Co"
     assert candidate.source_identifier == "42"
-    assert candidate.source_name == "Y Combinator Consumer Startup Directory"
+    assert candidate.source_name == "Y Combinator Public Startup Directory"
     assert candidate.source_url.endswith("/sample-co")
     assert candidate.customer_facing is False
     assert candidate.search_dependent is False
+
+
+def test_yc_parser_preserves_directory_route_provenance():
+    payload = {"props": {"company": {"id": 44, "name": "Route Co", "website": "https://route.example", "ycdc_status": "Active"}}}
+    markup = f'<div data-page="{html.escape(json.dumps(payload), quote=True)}"></div>'
+    candidate = YCPublicDirectorySource._parse_detail(
+        markup, "https://www.ycombinator.com/companies/route-co",
+        directory_url="https://www.ycombinator.com/companies/industry/health-tech",
+    )
+    assert candidate.source_directory_url.endswith("/health-tech")
 
 
 def test_yc_detail_parser_skips_company_without_website():
@@ -55,6 +65,29 @@ def test_yc_source_checks_robots_and_honors_limit():
     assert [candidate.company_name for candidate in source.discover()] == ["Public Co"]
 
 
+def test_yc_source_skips_profile_urls_seen_in_prior_category_or_run():
+    payload = {"props": {"company": {"id": 7, "name": "Public Co", "website": "https://public.example", "team_size": 2, "ycdc_status": "Active"}}}
+    detail = f'<div data-page="{html.escape(json.dumps(payload), quote=True)}"></div>'
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /companies/industry/\n")
+        if request.url.path == "/companies/industry/saas":
+            return httpx.Response(200, text='<a href="/companies/public-co">Public</a>')
+        return httpx.Response(200, text=detail)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    source = YCPublicDirectorySource(
+        directory_url="https://www.ycombinator.com/companies/industry/saas",
+        limit=1, delay_seconds=0, client=client,
+        seen_profile_urls={"https://www.ycombinator.com/companies/public-co"},
+    )
+    assert list(source.discover()) == []
+    assert not any(url.endswith("/companies/public-co") for url in requested)
+
+
 def test_yc_source_stops_when_robots_disallows_directory():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="User-agent: *\nDisallow: /companies/\n")
@@ -62,6 +95,21 @@ def test_yc_source_stops_when_robots_disallows_directory():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     source = YCPublicDirectorySource(limit=1, delay_seconds=0, client=client)
     with pytest.raises(ValueError, match="robots.txt disallows"):
+        list(source.discover())
+
+
+@pytest.mark.parametrize("status", [404, 503])
+def test_yc_source_fails_closed_when_robots_cannot_be_checked(status):
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status)))
+    source = YCPublicDirectorySource(limit=1, delay_seconds=0, client=client)
+    with pytest.raises(httpx.HTTPStatusError):
+        list(source.discover())
+
+
+def test_growthzone_source_fails_closed_when_robots_cannot_be_checked():
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(404)))
+    source = GrowthZoneDirectorySource(limit=1, client=client)
+    with pytest.raises(httpx.HTTPStatusError):
         list(source.discover())
 
 
@@ -83,3 +131,40 @@ def test_growthzone_parser_extracts_public_business_without_contact_data():
     assert rows[0].location == "Dalton, GA"
     assert rows[0].source_identifier == "123"
     assert rows[0].industry_raw == "Plumbing Services"
+
+
+def test_growthzone_category_card_extracts_official_website_and_route():
+    markup = """
+    <div class="card gz-directory-card" itemscope itemtype="http://schema.org/LocalBusiness">
+      <h5 class="gz-card-title" itemprop="name"><a href="//business.daltonchamber.org/list/Details/example-co-501234">Example Co</a></h5>
+      <div class="gz-card-website"><a href="https://example-business.test">Visit Website</a></div>
+      <div class="gz-card-cat"><span>Technology</span></div>
+    </div>
+    <div class="card gz-directory-card" itemscope itemtype="http://schema.org/LocalBusiness">
+      <h5 class="gz-card-title" itemprop="name"><a href="//business.daltonchamber.org/list/Details/no-site-501235">No Site</a></h5>
+    </div>
+    """
+    source = GrowthZoneDirectorySource(limit=10, delay_seconds=0, client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200))))
+    rows = list(source._parse_list(markup, "https://business.daltonchamber.org/list/Search/technology-123"))
+    assert len(rows) == 1
+    assert rows[0].company_name == "Example Co"
+    assert rows[0].website == "https://example-business.test"
+    assert rows[0].source_identifier == "501234"
+    assert rows[0].source_directory_url.endswith("technology-123")
+
+
+def test_growthzone_category_route_checks_robots_and_never_opens_contact_page():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /list/Search/\n")
+        return httpx.Response(200, text="""<div class="gz-directory-card" itemscope itemtype="http://schema.org/LocalBusiness">
+          <h5 class="gz-card-title" itemprop="name"><a href="/list/Details/example-501">Example</a></h5>
+          <a href="https://example.test">Visit Website</a></div>""")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    source = GrowthZoneDirectorySource(directory_url="https://business.daltonchamber.org/list/Search/technology-1", limit=1, delay_seconds=0, client=client)
+    assert len(list(source.discover())) == 1
+    assert calls == ["https://business.daltonchamber.org/robots.txt", "https://business.daltonchamber.org/list/Search/technology-1/"]

@@ -95,7 +95,7 @@ python -m outreach_agent status
 
 Run discovery again to confirm idempotency: no new company or identical provenance rows will be created. Use `qualify --force` only when deliberately re-evaluating records after changing rules.
 
-`discover-real` uses the public, static YC Consumer industry directory. It ignores inactive companies and companies reporting more than 250 people, caps a run at 50, and retains the YC company ID and detail URL as provenance. The selected static directory/detail paths were checked against YC's published robots rules; the disallowed query-driven directory route is not used.
+`discover-real` defaults to the official, public static YC Consumer industry directory and accepts another static category URL with `--directory-url`. It ignores inactive companies and companies reporting more than 250 people, caps a run at 50, and retains the YC company ID/profile URL and directory route as provenance. Static routes are checked against `robots.txt` fail-closed; the disallowed query-driven directory route is not used.
 
 `discover-chamber` reads public listing cards from the Greater Dalton Chamber GrowthZone directory. This source was selected to add local services, retailers, healthcare, finance, manufacturing, and nonprofit organizations rather than another internet-startup-only population. It reads business names, public websites, locations, and categories; it does not open email/contact endpoints. Its current robots policy permits the alphabetical listing routes.
 
@@ -139,6 +139,65 @@ The 28-company live validation audit, methodology, before/after metrics, and lim
 Phase 3C's 28-company sample and 77-company dataset reports are documented in [`docs/phase3c_business_channel_validation.md`](docs/phase3c_business_channel_validation.md). Channel-level exports and representative manual checks are stored in `data/phase3c_validation_*.csv`.
 
 Phase 3D's fixed 77-company unified selection review is documented in [`docs/phase3d_company_selection_validation.md`](docs/phase3d_company_selection_validation.md); the consolidated review queue and count summary are in `data/phase3d_company_review_77.csv` and `data/phase3d_company_selection_summary.csv`.
+
+Phase 4A's discovery-source audit and expansion decision are documented in [`docs/phase4a_discovery_expansion.md`](docs/phase4a_discovery_expansion.md). The cohort remains at 77: candidate public directories were excluded where their terms prohibit automation, and official open business registries without company website fields were not converted into company records. The existing 77-company artifacts remain unchanged.
+
+Phase 4A.1's isolated Los Angeles Open Data website-matching pilot is documented in [`docs/phase4a1_open_dataset_pilot.md`](docs/phase4a1_open_dataset_pilot.md); its 30-row evidence log is [`data/phase4a1_website_matching_pilot.csv`](data/phase4a1_website_matching_pilot.csv). Three first-party matches were verified, and none were imported into the canonical database.
+
+Phase 4B evaluated the YC OSS company JSON dataset. Its source schema and provenance are promising, but the dataset repository declares no license for the redistributed company records; no bulk download or ingestion was performed pending permission clarification. See [`docs/phase4b_yc_oss_dataset_evaluation.md`](docs/phase4b_yc_oss_dataset_evaluation.md).
+
+Phase 4C's Wikidata CC0 query pilot is documented in [`docs/phase4c_wikidata_discovery_validation.md`](docs/phase4c_wikidata_discovery_validation.md). WDQS answered a bounded query once but the result was not preserved and an exact rerun returned HTTP 502; no companies were imported. The Phase 4C cohort/review exports remain copies of the unchanged 77-company baseline. After the endpoint recovers, the bounded evidence script can be rerun with `PYTHONPATH=src uv run python scripts/phase4c_wikidata_pilot.py`; review the pilot and verify websites before any import.
+
+Phase 4C.1 fixed this workflow and completed a saved 30-company live pilot; see [`docs/phase4c1_wikidata_retrieval_validation.md`](docs/phase4c1_wikidata_retrieval_validation.md). Successful raw responses are stored under `data/phase4c1_wikidata_snapshots/`.
+
+Resume safely after an interruption:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase4c_wikidata_pilot.py --resume --target 30 --batch-size 20
+```
+
+Replay saved snapshots without network:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase4c_wikidata_pilot.py --offline --target 30 --batch-size 20
+```
+
+The live retrieval command is the same without `--resume`. Website evidence and the generated pilot are under `data/phase4c1_*.csv`. No Phase 3 database was changed.
+
+Phase 4C.2's offline quality audit and row-level evidence are documented in [`docs/phase4c2_wikidata_quality_analysis.md`](docs/phase4c2_wikidata_quality_analysis.md), with exports in `data/phase4c2_company_quality_audit.csv` and `data/phase4c2_filter_comparison.csv`. Rebuild them without network access from the saved Phase 4C.1 snapshots:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase4c2_wikidata_quality.py
+```
+
+Recommendation: **do not use Wikidata for automated SMB discovery**. Keep it, at most, as a manually reviewed secondary lead source: the 30-company QID-order cohort has only 5 conservatively verified website identities, 24 lack employee counts, and no record has sourced evidence supporting SMB size. No live comparison query was run because available filters did not offer a defensible route to improve SMB quality.
+
+Phase 4D expanded the two existing sources in an isolated copy to 198 unique companies (111 new YC directory records and 10 new Greater Dalton Chamber records); see [`docs/phase4d_existing_source_expansion.md`](docs/phase4d_existing_source_expansion.md). Phase 4E then checked all 121 additions using the existing bounded crawler and first-party identity evidence, and applied the existing qualification rules only to verified identities. Results and the contact sample are documented in [`docs/phase4e_expanded_cohort_validation.md`](docs/phase4e_expanded_cohort_validation.md). The frozen 77-company database remains unchanged; all 121 additions remain pending human review. Website verification, qualification, and unified review exports are `data/phase4e_website_verification.csv`, `data/phase4e_qualification_results.csv`, and `data/phase4e_expanded_company_review.csv`.
+
+Reproduce Phase 4E against the isolated Phase 4D database (the script resumes from fresh snapshots and only targets the 121 additions):
+
+```sh
+OUTREACH_DATABASE_URL=sqlite:///data/phase4d_experimental.db PYTHONPATH=src uv run python scripts/phase4e_verify_expansion.py --batch-size 25 --contact-sample-limit 10
+```
+
+To skip bounded contact-channel extraction, add `--no-contact-sample`. Contact extraction is capped at 10 verified HIGH-priority additions and Crawl4AI fallback is disabled. Rebuild the unified review CSV from the experimental database with:
+
+```sh
+OUTREACH_DATABASE_URL=sqlite:///data/phase4d_experimental.db PYTHONPATH=src uv run python -m outreach_agent export-review --output data/phase4e_expanded_company_review.csv
+```
+
+Phase 4F copied the experimental database again and expanded it to 537 unique companies using nine official, robots-allowed static YC category routes plus three bounded Greater Dalton Chamber category routes. The workflow stopped after reaching the approximate target; it did not crawl all possible categories or infer a source-wide total. It verified and qualified only new additions in batches, resumed from category checkpoints and cached website snapshots, and contact-enriched at most ten verified HIGH-priority additions. All new additions remain pending human review. See [`docs/phase4f_500_company_scale_validation.md`](docs/phase4f_500_company_scale_validation.md) and the exports `data/phase4f_expanded_cohort.csv`, `data/phase4f_website_verification.csv`, `data/phase4f_qualification_results.csv`, and `data/phase4f_review_queue.csv`.
+
+Create the Phase 4F copy once (do not overwrite an existing copy), run bounded discovery, then run resumable verification/qualification:
+
+```sh
+test ! -e data/phase4f_experimental.db && cp -p data/phase4d_experimental.db data/phase4f_experimental.db
+OUTREACH_DATABASE_URL=sqlite:///data/phase4f_experimental.db PYTHONPATH=src uv run python scripts/phase4f_scale_cohort.py discover --target 500 --category-limit 50 --delay-seconds 1
+OUTREACH_DATABASE_URL=sqlite:///data/phase4f_experimental.db PYTHONPATH=src uv run python scripts/phase4f_scale_cohort.py discover-chamber --category-limit 60 --delay-seconds 1
+OUTREACH_DATABASE_URL=sqlite:///data/phase4f_experimental.db PYTHONPATH=src uv run python scripts/phase4f_scale_cohort.py process --batch-size 25 --contact-limit 10
+```
+
+The category checkpoint is `data/phase4f_discovery_checkpoint.json`; website snapshots are cached in the isolated database. Add `--no-contacts` to the `process` command to skip the bounded contact sample.
 
 The integrated Phase 3B rerun is documented in [`docs/phase3b_live_validation.md`](docs/phase3b_live_validation.md). It recovered 11 manually verified named contacts while retaining all 12 public mailbox records, and invoked the fallback for only 8 of 28 companies.
 

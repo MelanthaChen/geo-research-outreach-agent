@@ -73,11 +73,15 @@ class YCPublicDirectorySource(DiscoverySource):
         timeout_seconds: float = 15,
         user_agent: str = "GEOResearchOutreachAgent/0.2 (academic research; no outreach)",
         client: httpx.Client | None = None,
+        seen_profile_urls: set[str] | None = None,
     ):
         self.path = Path("yc-public")
         self.directory_url = directory_url
         self.limit = max(1, min(limit, 50))
         self.delay_seconds = delay_seconds
+        self.seen_profile_urls = seen_profile_urls if seen_profile_urls is not None else set()
+        self.skipped_seen_profiles = 0
+        self.profile_requests_attempted = 0
         self._owns_client = client is None
         self.client = client or httpx.Client(
             timeout=timeout_seconds, follow_redirects=True, headers={"User-Agent": user_agent}
@@ -87,17 +91,14 @@ class YCPublicDirectorySource(DiscoverySource):
         try:
             parsed = httpx.URL(self.directory_url)
             robots_url = str(parsed.copy_with(path="/robots.txt", query=None, fragment=None))
-            try:
-                robots_response = self.client.get(robots_url)
-                if robots_response.status_code == 200:
-                    robots = RobotFileParser()
-                    robots.set_url(robots_url)
-                    robots.parse(robots_response.text.splitlines())
-                    if not robots.can_fetch(self.client.headers.get("User-Agent", "*"), self.directory_url):
-                        raise ValueError(f"robots.txt disallows discovery URL: {self.directory_url}")
-                time.sleep(self.delay_seconds)
-            except httpx.HTTPError as exc:
-                logger.warning("stage=discovery source=yc_public robots_check_failed=%s", exc)
+            robots_response = self.client.get(robots_url)
+            robots_response.raise_for_status()
+            robots = RobotFileParser()
+            robots.set_url(robots_url)
+            robots.parse(robots_response.text.splitlines())
+            if not robots.can_fetch(self.client.headers.get("User-Agent", "*"), self.directory_url):
+                raise ValueError(f"robots.txt disallows discovery URL: {self.directory_url}")
+            time.sleep(self.delay_seconds)
             response = self.client.get(self.directory_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
@@ -113,10 +114,15 @@ class YCPublicDirectorySource(DiscoverySource):
                 if index:
                     time.sleep(self.delay_seconds)
                 detail_url = urljoin(self.directory_url, href)
+                if detail_url in self.seen_profile_urls:
+                    self.skipped_seen_profiles += 1
+                    continue
+                self.seen_profile_urls.add(detail_url)
+                self.profile_requests_attempted += 1
                 try:
                     detail = self.client.get(detail_url)
                     detail.raise_for_status()
-                    candidate = self._parse_detail(detail.text, detail_url)
+                    candidate = self._parse_detail(detail.text, detail_url, directory_url=self.directory_url)
                 except httpx.HTTPError as exc:
                     logger.warning("stage=discovery source=yc_public url=%s error=%s", detail_url, exc)
                     continue
@@ -130,7 +136,7 @@ class YCPublicDirectorySource(DiscoverySource):
                 self.client.close()
 
     @staticmethod
-    def _parse_detail(markup: str, detail_url: str) -> CompanyCandidate | None:
+    def _parse_detail(markup: str, detail_url: str, *, directory_url: str | None = None) -> CompanyCandidate | None:
         soup = BeautifulSoup(markup, "html.parser")
         page_node = soup.select_one('[data-page*="company"]')
         company: dict[str, Any] | None = None
@@ -155,9 +161,10 @@ class YCPublicDirectorySource(DiscoverySource):
             company_size=size,
             company_size_value=int(team_size) if team_size is not None else None,
             company_size_source="directory_reported" if team_size is not None else "unknown",
-            source_name="Y Combinator Consumer Startup Directory",
+            source_name="Y Combinator Public Startup Directory",
             source_url=detail_url,
             source_identifier=str(company.get("id") or company.get("slug")),
+            source_directory_url=directory_url or f"https://www.ycombinator.com/companies/industry/consumer",
             active=company.get("ycdc_status") == "Active",
             # Directory membership alone is not website evidence for these signals.
             customer_facing=False,
@@ -195,15 +202,24 @@ class GrowthZoneDirectorySource(DiscoverySource):
         try:
             robots_url = urljoin(self.directory_url, "/robots.txt")
             robots_response = self.client.get(robots_url)
-            if robots_response.status_code == 200:
-                robots = RobotFileParser(robots_url)
-                robots.parse(robots_response.text.splitlines())
-            else:
-                robots = None
+            robots_response.raise_for_status()
+            robots = RobotFileParser(robots_url)
+            robots.parse(robots_response.text.splitlines())
+            if "/list/Search/" in self.directory_url:
+                if not robots.can_fetch(self.client.headers.get("User-Agent", "*"), self.directory_url):
+                    raise ValueError(f"robots.txt disallows discovery URL: {self.directory_url}")
+                time.sleep(self.delay_seconds)
+                response = self.client.get(self.directory_url)
+                response.raise_for_status()
+                for index, candidate in enumerate(self._parse_list(response.text, self.directory_url)):
+                    yield candidate
+                    if index + 1 >= self.limit:
+                        break
+                return
             yielded = 0
             for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
                 page_url = urljoin(self.directory_url, f"FindStartsWith?term={letter}")
-                if robots and not robots.can_fetch(self.client.headers.get("User-Agent", "*"), page_url):
+                if not robots.can_fetch(self.client.headers.get("User-Agent", "*"), page_url):
                     raise ValueError(f"robots.txt disallows discovery URL: {page_url}")
                 if yielded or letter != "A":
                     time.sleep(self.delay_seconds)
@@ -220,13 +236,17 @@ class GrowthZoneDirectorySource(DiscoverySource):
 
     def _parse_list(self, markup: str, page_url: str) -> Iterator[CompanyCandidate]:
         soup = BeautifulSoup(markup, "html.parser")
-        for card in soup.select(".gz-list-card, [itemscope][itemtype*='Organization'], [itemscope][itemtype*='LocalBusiness']"):
+        for card in soup.select(".gz-list-card, .gz-directory-card, [itemscope][itemtype*='Organization'], [itemscope][itemtype*='LocalBusiness']"):
             name_node = card.select_one("[itemprop='name']")
             website_node = card.select_one("a[href] [itemprop='sameAs']")
-            if not name_node or not website_node or not website_node.parent:
+            website_anchor = website_node.parent if website_node and website_node.parent else next((
+                anchor for anchor in card.select("a[href]")
+                if anchor.get_text(" ", strip=True).casefold() in {"visit website", "website"}
+            ), None)
+            if not name_node or not website_anchor:
                 continue
-            website = str(website_node.parent.get("href", ""))
-            if not website.startswith(("http://", "https://")):
+            website = urljoin(page_url, str(website_anchor.get("href", "")))
+            if not website.startswith(("http://", "https://")) or "daltonchamber.org" in httpx.URL(website).host:
                 continue
             detail_node = card.select_one(".gz-card-title a[href], a[itemprop='url']")
             detail_url = urljoin(page_url, str(detail_node.get("href"))) if detail_node else page_url
@@ -241,7 +261,7 @@ class GrowthZoneDirectorySource(DiscoverySource):
                 industry=category, industry_raw=category, location=location or None,
                 company_size="unknown", company_size_source="unknown",
                 source_name=self.source_name, source_url=detail_url, source_identifier=identifier,
-                active=True, geo_opportunity="unknown",
+                source_directory_url=page_url, active=True, geo_opportunity="unknown",
             )
 
 

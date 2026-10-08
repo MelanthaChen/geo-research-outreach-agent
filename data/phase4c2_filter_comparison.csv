@@ -1,0 +1,10 @@
+filter,records_retained,records_removed,verified_websites_retained,verified_yield_among_retained_pct,smb_supported_retained,human_review_required_retained,interpretation
+Baseline cohort,30,0,5,16.7,0,30,"Reference only; QID-order sample, not random"
+Business organization type (P31 includes company),30,0,5,16.7,0,30,No incremental filter: all 30 were selected by P31=company; other P31 types may be useful for review
+Industry evidence present (P452),20,10,5,25.0,0,20,20 records; completeness rises but does not establish business or GEO suitability
+Inception date present (P571),25,5,5,20.0,0,25,25 records; age is not a size proxy
+Country evidence present (P17),26,4,5,19.2,0,26,26 records; missing geography must remain unknown
+Employee-count evidence present (P1128),6,24,1,16.7,0,6,6 records; excludes 24 legitimate unknown-size candidates
+No explicit dissolution claim (P576),27,3,5,18.5,0,27,27 retained; missing P576 does not prove operating status
+Official website claim present (P856),30,0,5,16.7,0,30,All 30; P856 is not verified identity
+Website identity verified,5,25,5,100.0,0,5,"Outcome gate, not discovery filter; 5 verified after one false positive was downgraded"

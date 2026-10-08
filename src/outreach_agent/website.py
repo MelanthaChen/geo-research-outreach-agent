@@ -301,9 +301,17 @@ def collect_websites(
     limit: int | None = None,
     refresh: bool = False,
     collector: WebsiteCollector | None = None,
+    company_ids: list[int] | None = None,
 ) -> CollectionSummary:
     summary = CollectionSummary()
-    companies = session.scalars(select(Company).order_by(Company.id).limit(limit or settings.max_companies_per_run)).all()
+    query = select(Company).order_by(Company.id)
+    if company_ids is not None:
+        if not company_ids:
+            return summary
+        query = query.where(Company.id.in_(company_ids))
+    if limit is not None or company_ids is None:
+        query = query.limit(limit or settings.max_companies_per_run)
+    companies = session.scalars(query).all()
     worker = collector or WebsiteCollector(settings)
     try:
         for company in companies:
@@ -316,8 +324,17 @@ def collect_websites(
                 latest.used_cache = True
                 summary.cached += 1
                 logger.info("stage=website decision=cached company_id=%s snapshot_id=%s", company.id, latest.id)
+                session.commit()
                 continue
-            snapshot = worker.inspect(company)
+            try:
+                snapshot = worker.inspect(company)
+            except Exception as exc:  # keep one unexpected failure from aborting its cohort batch
+                logger.exception("stage=website company_id=%s unexpected_error=%s", company.id, exc)
+                snapshot = WebsiteSnapshot(
+                    company_id=company.id, requested_url=company.website,
+                    fetch_status="FETCH_FAILED", error_type=type(exc).__name__,
+                    error_message=str(exc)[:1000],
+                )
             session.add(snapshot)
             session.flush()
             if snapshot.fetch_status == "BLOCKED":
@@ -327,7 +344,7 @@ def collect_websites(
             else:
                 summary.fetched += 1
             logger.info("stage=website decision=%s company_id=%s snapshot_id=%s", snapshot.fetch_status, company.id, snapshot.id)
-        session.commit()
+            session.commit()
     finally:
         if collector is None:
             worker.close()

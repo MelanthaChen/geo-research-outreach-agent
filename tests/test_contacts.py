@@ -27,6 +27,12 @@ def test_normalization_and_role_taxonomy():
     assert normalize_role(None) == "UNKNOWN"
 
 
+def test_channel_evidence_handles_jsonld_type_arrays():
+    markup = '''<script type="application/ld+json">{"@type":["Organization","LocalBusiness"],"email":"info@example.com"}</script>'''
+    rows = _channel_evidence(markup, "https://example.com/")
+    assert any(row.get("email") == "info@example.com" for row in rows)
+
+
 def test_extracts_explicit_person_and_generic_contacts_without_guessing():
     markup = """
     <section class="team-member"><h3>Jane Doe</h3><strong>Founder</strong>

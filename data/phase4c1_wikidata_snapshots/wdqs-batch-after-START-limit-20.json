@@ -1,0 +1,188 @@
+{
+  "head" : {
+    "vars" : [ "company", "website" ]
+  },
+  "results" : {
+    "bindings" : [ {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q248"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.intel.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q95"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://about.google/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1000428"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.mysql.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1000531"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.sogo.com.hk/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1000533"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.ubgnet.de/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1000725"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.reuther-stc.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100089670"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.canalsat.ch/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100094013"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.telia.dk"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1001021"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://en.winston-battery.com"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q10010225"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.bcig.cn/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100105751"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://autismusstiftung.de/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1001118"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://fivosz.hu/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100120106"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://fujitaxi.jp/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q10012776"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://en.tried.com.cn/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q1001330"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.buddysknife.de"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100138320"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.solek.com/cs/fond-kvalifikovanych-investoru"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100140409"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "http://www.simbasleep.com.cn/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100140409"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://simbamatelas.fr/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100140409"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://simbasleep.com/"
+      }
+    }, {
+      "company" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q100140409"
+      },
+      "website" : {
+        "type" : "uri",
+        "value" : "https://www.simbasleep.ca/"
+      }
+    } ]
+  }
+}

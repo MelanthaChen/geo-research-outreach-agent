@@ -341,10 +341,9 @@ def _channel_evidence(markup: str, page_url: str) -> list[dict[str, object]]:
                     context = json.dumps(item)[:1200]
                     channel_type = classify_channel(context, email)
                     json_type = item.get("@type", "")
-                    is_business = json_type in {"Organization", "LocalBusiness", "MedicalOrganization", "Corporation", "Store"} or (
-                        isinstance(json_type, list) and any(value in {"Organization", "LocalBusiness", "MedicalOrganization", "Corporation", "Store"} for value in json_type)
-                    )
-                    is_person = json_type == "Person" or (isinstance(json_type, list) and "Person" in json_type)
+                    schema_types = set(json_type) if isinstance(json_type, list) else {json_type}
+                    is_business = bool(schema_types & {"Organization", "LocalBusiness", "MedicalOrganization", "Corporation", "Store"})
+                    is_person = "Person" in schema_types
                     if is_person:
                         channel_type = BusinessChannelType.NAMED_PERSON_EMAIL
                     elif channel_type == BusinessChannelType.OTHER and is_business:
@@ -649,12 +648,19 @@ def _channel_rank(contact: Contact) -> int:
 def enrich_contacts(
     session: Session, *, priorities: Iterable[str] = ("HIGH", "MEDIUM"),
     reviews: Iterable[ReviewStatus] | None = None, limit: int = 25,
+    company_ids: Iterable[int] | None = None,
     fallback_settings: Crawl4AIFallbackSettings | None = None,
     fallback_adapter: Crawl4AIAdapter | None = None,
     user_agent: str = "GEOResearchOutreachAgent/0.2 (academic research; no outreach)",
 ) -> EnrichmentSummary:
     summary = EnrichmentSummary()
-    query = select(Company).where(Company.priority_tier.in_([p.upper() for p in priorities])).order_by(Company.priority_score.desc(), Company.id).limit(limit)
+    query = select(Company).where(Company.priority_tier.in_([p.upper() for p in priorities]))
+    if company_ids is not None:
+        company_ids = list(company_ids)
+        if not company_ids:
+            return summary
+        query = query.where(Company.id.in_(company_ids))
+    query = query.order_by(Company.priority_score.desc(), Company.id).limit(limit)
     companies = list(session.scalars(query).unique())
     if reviews:
         allowed = set(reviews)

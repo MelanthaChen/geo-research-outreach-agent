@@ -1,0 +1,16 @@
+{
+  "batch_id": "wdqs-batch-after-Q95-limit-20",
+  "params": {
+    "format": "json",
+    "query": "SELECT ?company ?website WHERE {\n  ?company wdt:P31 wd:Q4830453;\n           wdt:P856 ?website.\n  FILTER(STR(?company) > \"http://www.wikidata.org/entity/Q95\")\n}\nORDER BY ?company ?website\nLIMIT 20"
+  },
+  "request_timestamp_utc": "2026-10-08T16:37:11.372124+00:00",
+  "response_headers": {
+    "content-length": "470",
+    "content-type": "application/sparql-results+json;charset=utf-8",
+    "date": "Thu, 08 Oct 2026 16:37:17 GMT"
+  },
+  "response_sha256": "ebc49a369d127b3f055186867a76225c59ea3c327b193dbcdf68c91bac6f007e",
+  "status_code": 200,
+  "url": "https://query.wikidata.org/sparql?query=SELECT+%3Fcompany+%3Fwebsite+WHERE+%7B%0A++%3Fcompany+wdt%3AP31+wd%3AQ4830453%3B%0A+++++++++++wdt%3AP856+%3Fwebsite.%0A++FILTER%28STR%28%3Fcompany%29+%3E+%22http%3A%2F%2Fwww.wikidata.org%2Fentity%2FQ95%22%29%0A%7D%0AORDER+BY+%3Fcompany+%3Fwebsite%0ALIMIT+20&format=json"
+}

@@ -1,0 +1,101 @@
+demo_label,company_id,company_name,contact_id,recipient,sender_name,sender_email,reply_to_email,subject,body,evidence_url,evidence_excerpt,company_review_status,channel_review_status,outreach_state,approval_status,signup_url_included,idempotency_key
+DEMO DRAFT — NOT A REAL MESSAGE,5,Vexo,7,info@vexoai.com,,,,University research invitation: Vexo,"Hello Vexo team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+DEMO / SIMULATED ONLY — reserved non-operational URL: https://research.example.invalid/phase5a-signup
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://www.vexoai.com/,"Is it really always listening? Yes. That’s how it remembers what was said and gets things done without you asking. Power it off anytime and it stops listening. Does it capture the people around me? It hears the conversations around you, the same ones you hear. Some places require everyone’s consent to record, so follow local laws. You can delete any conversation in the app. How can it protect my privacy? You stay in control. Everything is encrypted on its way to our servers, you can delete any c",PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,SIMULATED_ONLY,9a54b18e8093b8f0f05990318964674fb76bbf3a76e2bcfe01d7913a7f17b68d
+DEMO DRAFT — NOT A REAL MESSAGE,6,Cyclon,80,contact@cyclon.ai,,,,University research invitation: Cyclon,"Hello Cyclon team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://cyclon.ai/contact,"For questions about Cyclon , please email us at contact@cyclon.ai .",PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,ce3591e0ca9c4e21354549974225ba12ec426d112e0f6ee0b62657e4bdb5d25e
+DEMO DRAFT — NOT A REAL MESSAGE,7,Shire Intelligence,8,alex@shireintelligence.com,,,,University research invitation: Shire Intelligence,"Hello Shire Intelligence team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://shireintelligence.com,alex@shireintelligence.com,PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,27812f494ed6a9dc615eca78ce3788673eb7a737d6654d867346a017fb344c2a
+DEMO DRAFT — NOT A REAL MESSAGE,13,antimattr,13,team@antimattr.one,,,,University research invitation: antimattr,"Hello antimattr team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://www.antimattr.one/contact,team@antimattr.one,PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,de794360f553b5af22295fe8cfd29c5f6503a1b9c95cfc91164234fc1bbc1dfb
+DEMO DRAFT — NOT A REAL MESSAGE,25,"AIRL, Inc.",29,information@airlonline.com,,,,"University research invitation: AIRL, Inc.","Hello AIRL, Inc. team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://airlonline.com,"About Us For more than 45 years, AIRL, Inc. in Cleveland, Tennessee, has provided detailed environmental testing services. Our testing laboratory analyzes everything from surface water to air. Recommended for carpet, engineering, and Federal Government companies, our services are just what you need to get accurate results. Each of our specialists is knowledgeable and has the equipment to fully examine any environmental sample. We also specialize in GCMS Gas chromatography and chemical testing. W",PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,894bbc426c63f648f3ffde1c0fab529ca4c36538efa960fe50b6e33e1b0c9f0e
+DEMO DRAFT — NOT A REAL MESSAGE,76,Light Anchor,3,founders@lightanchor.ai,,,,University research invitation: Light Anchor,"Hello Light Anchor team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://lightanchor.ai,About Hiring Contact,PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,4353a91987e612ce98e67493f2dc361ead5fa4944b597ce915e9bf9ca85872b9
+DEMO DRAFT — NOT A REAL MESSAGE,83,Chattanooga Paint and Decorating,84,info@chattanoogapaint.com,,,,University research invitation: Chattanooga Paint and Decorating,"Hello Chattanooga Paint and Decorating team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://www.chattanoogapaint.com/,"{""@context"": {""@vocab"": ""http://schema.org/""}, ""@type"": ""HomeAndConstructionBusiness"", ""name"": ""Chattanooga Paint and Decorating"", ""address"": {""@type"": ""PostalAddress"", ""streetAddress"": ""5529 Hixson Pike"", ""addressLocality"": ""Hixson"", ""addressRegion"": ""TN"", ""postalCode"": ""37343"", ""addressCountry"": ""US""}, ""geo"": {""@type"": ""GeoCoordinates"", ""latitude"": ""35.14602"", ""longitude"": ""-85.22294""}, ""url"": ""https://www.chattanoogapaint.com"", ""telephone"": ""(423) 843-9286"", ""email"": ""info@chattanoogapaint.co",PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,9c08f4f1a2a130aa94a5f1dd55e6a7e17024d8c44159918d73405420fcc4c940
+DEMO DRAFT — NOT A REAL MESSAGE,114,Swerve,108,founders@getswerve.com,,,,University research invitation: Swerve,"Hello Swerve team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://www.getswerve.com/,"© 2026 MSPW Labs, Inc. (U.S.) · Swerve is operated by MSPW Labs, Inc. Support : support @ getswerve.com · Business : founders @ getswerve.com",PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,1b9375b4fac18aad66124eb143659b9a2cbe9ba9185bd7fd70c3ea4230b80d0b
+DEMO DRAFT — NOT A REAL MESSAGE,126,Waffle,110,founders@waffle.ai,,,,University research invitation: Waffle,"Hello Waffle team,
+
+My name is [RESEARCHER NAME NOT CONFIGURED], and I am with [UNIVERSITY AFFILIATION NOT CONFIGURED]. I am preparing a research project about [RESEARCH PROJECT DESCRIPTION NOT CONFIGURED].
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to [REPLY-TO ADDRESS NOT CONFIGURED].
+
+
+Regards,
+[SENDER NAME NOT CONFIGURED]",https://waffle.ai,founders@waffle.ai,PENDING,PENDING,NEEDS_REVIEW,NOT_APPROVED,false,d131925a69ac8360f6ab8b8d77e15cfca210d822dcbdcab3eeeba6dee31f3349

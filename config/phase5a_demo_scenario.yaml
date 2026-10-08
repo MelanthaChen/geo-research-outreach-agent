@@ -1,0 +1,12 @@
+# Deterministic fixture only. These are not real approvals, responses, signups, or sends.
+scenarios:
+  business_email_company_id: 5
+  contact_form_company_id: 105
+  no_channel_company_id: 88
+simulated_approval_fixture: true
+simulated_response:
+  type: INTERESTED
+  text: "SIMULATED: We would be interested in learning more about the study."
+simulated_signup:
+  url: https://research.example.invalid/phase5a-signup
+  approval_fixture: true

@@ -1,0 +1,11 @@
+Hello {company_name} team,
+
+My name is {researcher_name}, and I am with {university_affiliation}. I am preparing a research project about {research_project_description}.
+
+Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+
+You may reply to {reply_to_email}.
+{research_signup_section}
+
+Regards,
+{sender_name}

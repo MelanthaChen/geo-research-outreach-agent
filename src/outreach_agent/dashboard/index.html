@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f4">
+  <title>GEO Research Outreach · Professor Demo</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brandmark">G</div><div><div class="brand-title">Research Outreach Agent</div><div class="brand-subtitle">University research partner discovery</div></div></div>
+    <div class="demo-flag"><span class="pulse"></span> DEMO MODE <span class="demo-note">offline · no delivery</span></div>
+  </header>
+  <main>
+    <section class="hero">
+      <div><p class="eyebrow">UNIFIED GEO RESEARCH PIPELINE</p><h1>Research-ready companies,<br><em>with the evidence in view.</em></h1><p class="lede">Explore the research cohort, understand why a company may fit GEO research, and preview an invitation. All outreach actions in this dashboard are simulated.</p></div>
+      <div class="hero-stamp"><div class="stamp-icon">◎</div><div><strong>Local research workspace</strong><span>537-company experimental cohort</span></div></div>
+    </section>
+    <section class="workflow" aria-label="How to use this dashboard">
+      <div class="workflow-heading"><div><p class="eyebrow">A SIMPLE WALKTHROUGH</p><h2>From company research to a simulated invitation</h2></div><span class="workflow-note">No companies are contacted</span></div>
+      <ol class="workflow-steps">
+        <li><span class="step-number">1</span><div><strong>Select a company</strong><small>Search or choose a row</small></div></li>
+        <li><span class="step-number">2</span><div><strong>Review GEO fit</strong><small>Reasons and evidence</small></div></li>
+        <li><span class="step-number">3</span><div><strong>Inspect contact</strong><small>Saved email or form</small></div></li>
+        <li><span class="step-number">4</span><div><strong>Preview invitation</strong><small>Always marked NOT SENT</small></div></li>
+        <li><span class="step-number">5</span><div><strong>Simulate response</strong><small>Browser-only demo</small></div></li>
+      </ol>
+    </section>
+    <section class="overview-section" aria-labelledby="overview-title">
+      <div class="overview-heading"><div><p class="eyebrow">COHORT OVERVIEW</p><h2 id="overview-title">The research cohort at a glance</h2></div><span>Counts reflect saved cohort data</span></div>
+      <section class="metrics" id="metrics" aria-live="polite"></section>
+      <details class="secondary-details">
+        <summary>See review workload and qualification breakdowns</summary>
+        <div class="secondary-metrics" id="secondary-metrics"></div>
+        <section class="distribution-grid" id="distributions"></section>
+      </details>
+    </section>
+    <section class="workspace">
+      <div class="explorer panel">
+        <div class="section-head"><div><p class="eyebrow">STEP 1 · COMPANY EXPLORER</p><h2>Find a company to review</h2><p class="section-help">Search by company name or narrow the list with filters.</p></div><span class="result-count" id="result-count"></span></div>
+        <div class="filters">
+          <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search name, website, industry…"></label>
+          <select id="source"><option value="">All sources</option></select>
+          <select id="verification"><option value="">All identity states</option></select>
+          <select id="eligibility"><option value="">All eligibility</option></select>
+          <select id="geo"><option value="">All GEO opportunity</option></select>
+          <select id="priority"><option value="">All priorities</option></select>
+          <select id="channel"><option value="">All contact coverage</option><option value="HAS_SUITABLE_CHANNEL">Suitable channel</option><option value="NO_SUITABLE_CHANNEL">No suitable channel</option></select>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Company</th><th>Discovered through</th><th>Website check</th><th>GEO eligible</th><th>Opportunity</th><th>Priority</th><th>Contact channel</th></tr></thead><tbody id="company-rows"></tbody></table></div>
+        <p class="table-footnote">Saved contact details are research evidence—not permission to contact. No company websites are opened by this dashboard.</p>
+      </div>
+      <aside class="detail-column">
+        <section class="panel detail-panel" id="company-detail"><div class="empty-state"><div class="empty-icon">↖</div><h3>Choose a company</h3><p>Select a row to inspect its source, qualification rationale, missing evidence, contacts, and review states.</p></div></section>
+        <section class="panel demo-panel" id="demo-panel">
+          <div class="section-head"><div><p class="eyebrow">STEPS 4–5 · OUTREACH DEMO</p><h2>Preview and simulate</h2></div><span class="mini-tag">SIMULATED ONLY</span></div>
+          <p class="demo-intro">Select an eligible company above, choose a saved contact, then preview the research invitation. Delivery and response are practice events only.</p>
+          <label class="field-label" for="channel-select">Choose a saved contact channel</label>
+          <select id="channel-select" disabled><option>Select a company first</option></select>
+          <button class="button primary" id="preview-button" disabled>Generate draft preview <span>→</span></button>
+          <div id="draft-preview" class="draft-preview hidden"></div>
+          <div id="simulate-controls" class="simulate-controls hidden">
+            <button class="button dark" id="deliver-button">Simulate delivery <span>→</span></button>
+            <div id="response-controls" class="hidden"><label class="field-label" for="response-select">Simulated response</label><select id="response-select"><option value="INTERESTED">Interested</option><option value="DECLINED">Declined</option><option value="UNANSWERED">No response</option></select><button class="button outline" id="response-button">Record simulated outcome</button></div>
+          </div>
+          <div id="simulation-log" class="simulation-log" aria-live="polite"></div>
+          <div class="safety-note"><span>⛨</span><p><strong>No real delivery path.</strong> No provider, SMTP, form submit, or external site request is available. Human approvals remain unchanged.</p></div>
+        </section>
+      </aside>
+    </section>
+    <footer><span>GEO Research Outreach Agent</span><span>Read-only cohort · local demo · no company website requests</span></footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -4,7 +4,7 @@ A small, standalone Python application for discovering and qualifying potential 
 
 ## MVP scope
 
-Phase 1 imports safe local CSV/JSON demo data. Phase 2A adds bounded YC discovery and website evidence. Phase 2B adds a public local-chamber source, separates eligibility/opportunity/priority/confidence, and provides ranking plus independent human review. Phase 3 and 3B add first-party contact extraction with an optional selective Crawl4AI fallback. Phase 3C ranks official business channels, including published business emails and contact forms, for mandatory human review. There is still no message generation, provider integration, form submission, or sending behavior.
+Phase 1 imports safe local CSV/JSON demo data. Phase 2A adds bounded YC discovery and website evidence. Phase 2B adds a public local-chamber source, separates eligibility/opportunity/priority/confidence, and provides ranking plus independent human review. Phase 3 and 3B add first-party contact extraction with an optional selective Crawl4AI fallback. Phase 3C ranks official business channels, including published business emails and contact forms, for mandatory human review. Phase 5A adds provider-free draft generation and a local-only simulated workflow; it does not add real message delivery or form submission.
 
 ```mermaid
 flowchart LR
@@ -48,7 +48,7 @@ SQLite is the internal source of truth. Google Sheets may later become a human-f
 - A person is created only when first-party evidence explicitly associates a plausible name with a relevant role; an email is optional. Generic published mailboxes remain separate `GENERIC_BUSINESS_CONTACT` records, and no address is generated from a name or domain.
 - The same `enrich-contacts` run extracts business channels from the fetched HTML: partnership, business-development, general-business, named-person, sales/marketing, support, restricted email, and official contact form. It recommends one suitable primary channel and preserves alternatives. Unsuitable support/restricted channels remain visible for review but are never recommended.
 - Role ranking is contextual: founder/owner leads for startups, marketing/digital/content leads for medium companies, and owner/general management leads for local SMBs.
-- Sending does not exist. `SEND_MODE=dry_run` is a defensive default reserved for future work.
+- Phase 5A has no real sending adapter. The offline `DemoTransport` has no network code path; the real-delivery gate stays blocked even when every future approval/configuration flag is true.
 
 ## Setup
 
@@ -213,6 +213,30 @@ The script writes `data/phase4g_review_queue.csv`, filtered review views (`phase
 
 The integrated Phase 3B rerun is documented in [`docs/phase3b_live_validation.md`](docs/phase3b_live_validation.md). It recovered 11 manually verified named contacts while retaining all 12 public mailbox records, and invoked the fallback for only 8 of 28 companies.
 
+## Phase 5A professor demo — offline only
+
+The sender account is intentionally not selected. `config/outreach.yaml` keeps sender name, sender email, reply-to, researcher/institution details, and signup URL blank, with live delivery disabled. No Gmail, Microsoft 365, SMTP, API key, browser automation, or form-submit integration is required or present. The demo reads the existing 537-company Phase 4F database read-only, combines its stored qualifications/contact evidence with saved website-verification exports, and writes labeled draft/simulation CSVs. It does not modify approval fields or the database, send email, submit forms, or establish consent. The fixture response and signup handoff are simulated; the URL uses reserved `.invalid` and is not operational.
+
+Run the deterministic walkthrough from the repository root:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase5a_outreach_demo.py demo --max-draft-companies 10
+```
+
+Expected summary: `cohort=537 draft_companies=10 email_drafts=9 form_drafts=1`; `simulated_deliveries=1 simulated_interested_responses=1 simulated_signup_handoffs=1`; and `real_sends=0 form_submissions=0 sender_configured=False`. The named examples are Vexo (saved business-email evidence), AnswerThis (saved first-party contact-form evidence), and CodeWisp (no usable channel). The run produces `phase5a_outreach_candidates.csv`, `phase5a_email_drafts.csv`, `phase5a_contact_form_drafts.csv`, and `phase5a_delivery_simulation.csv` in `data/`. All are labeled with real-vs-simulated boundaries; drafts remain unapproved.
+
+Phase 5A also provides a bounded, resumable offline contact extraction command that reuses the existing contact extractor against cached page evidence only. This command writes contact records/statuses into the Phase 4F experimental DB, not the frozen baseline; use it only when intentionally continuing the contact review pass:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase5a_outreach_demo.py enrich-cache --limit 100 --batch-size 25
+```
+
+It is limited to 100 companies per invocation and batches of at most 25. It makes no network calls, disables Crawl4AI fallback, and preserves/checks existing human-review fields. Re-running resumes on remaining `NOT_RUN` companies. Real delivery remains a separately authorized future integration and is not part of Phase 5A. See [`docs/professor_demo_walkthrough.md`](docs/professor_demo_walkthrough.md) and [`docs/phase5a_outreach_pipeline_validation.md`](docs/phase5a_outreach_pipeline_validation.md).
+
+## Phase 5B professor dashboard
+
+Start the read-only local dashboard with `uv run python scripts/phase5b_dashboard.py`, then open [http://127.0.0.1:8765](http://127.0.0.1:8765). It explores the actual 537-company experimental cohort, saved qualification/contact evidence, and Phase 5A simulation counts. Interactive drafts and delivery/response/handoff events stay in browser memory. The server binds to loopback, opens the Phase 4F database read-only, rejects HTTP writes, and makes no company website requests. It requires no provider credentials or frontend build. The full walkthrough and safety boundaries are in [`docs/phase5b_professor_dashboard.md`](docs/phase5b_professor_dashboard.md).
+
 ## Qualification and review
 
 Machine output contains:
@@ -243,7 +267,7 @@ tests/                  unit and integration tests
 
 ## Safety guarantees
 
-- There is no email-sending implementation or provider dependency.
+- Phase 5A has no live email-sending implementation or provider dependency; demo delivery is local simulation only.
 - Demo domains use the reserved `.example` namespace.
 - No paid APIs, social-platform scraping, LinkedIn dependency, private-data source, or GEO-platform integration exists.
 - Real-company discovery and website inspection only read ordinary public pages; blocks and robots restrictions are honored.
@@ -251,8 +275,8 @@ tests/                  unit and integration tests
 
 ## Intentionally deferred
 
-Additional discovery sources, mailbox deliverability checks, Google Sheets/Forms, templates, human approval UI, Gmail/provider integration, response tracking, and GEO handoff are future phases. A small additive schema upgrader supports existing Phase 1/2 databases, but a formal migration tool will be needed once the model evolves further.
+Additional discovery sources, mailbox deliverability checks, Google Sheets/Forms, automated form submission, Gmail/provider integration, real response tracking, and GEO handoff are future phases. Phase 5A's templates, local simulated state machine, and simulated response are demo-only. A small additive schema upgrader supports existing Phase 1/2 databases, but a formal migration tool will be needed once the model evolves further.
 
 ## Suggested next phase
 
-Have the professor label a sample of stored snapshots, then calibrate the provisional weights/thresholds and add an inspection export for human review. Keep outreach sending deferred until review, approval, allowlisting, and audit controls are designed and tested.
+Have the professor label a sample of stored snapshots, then calibrate the provisional weights/thresholds and add an inspection export for human review. Keep real delivery deferred until the sender is selected and a separately reviewed provider integration, explicit approvals, allowlisting, and audit controls are designed and tested.

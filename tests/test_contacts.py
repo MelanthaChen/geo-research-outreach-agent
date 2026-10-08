@@ -35,7 +35,31 @@ def test_extracts_explicit_person_and_generic_contacts_without_guessing():
     rows = extract_contact_evidence(markup, "https://example.com/team")
     assert any(row["name"] == "Jane Doe" and row["contact_type"] == "PERSON" for row in rows)
     assert any(row["email"] == "hello@example.com" and row["contact_type"] == "GENERIC_BUSINESS_CONTACT" for row in rows)
-    assert not any(row["name"] == "Sam Smith" for row in rows)  # no invented email/contact record
+    assert any(row["name"] == "Sam Smith" and row["email"] is None for row in rows)
+
+
+def test_rejects_page_headings_as_people_and_keeps_shared_mailbox_generic():
+    markup = """
+    <main><h1>Frequently Asked Questions</h1><p>Still need help?
+      <a href="mailto:accessibility@example.com">Email us</a></p></main>
+    <section><h2>Jane Smith</h2><p>Head of Marketing</p>
+      <a href="mailto:info@example.com">Contact Jane</a></section>
+    """
+    rows = extract_contact_evidence(markup, "https://example.com/faq")
+    assert any(row["email"] == "accessibility@example.com" and row["name"] is None for row in rows)
+    assert any(row["email"] == "info@example.com" and row["name"] is None for row in rows)
+    assert any(row["name"] == "Jane Smith" and row["email"] is None for row in rows)
+    assert not any(row["name"] == "Frequently Asked Questions" for row in rows)
+
+
+def test_extracts_explicit_staff_member_without_inventing_email():
+    markup = "<section><h3>Jane Smith</h3><p>Executive Director</p></section>"
+    rows = extract_contact_evidence(markup, "https://example.com/team")
+    assert rows == [{
+        "name": "Jane Smith", "title": "Executive Director", "email": None,
+        "contact_type": "PERSON", "source_url": "https://example.com/team",
+        "evidence": "Jane Smith — Executive Director",
+    }]
 
 
 def test_context_changes_role_ranking(session):
@@ -78,3 +102,15 @@ def test_cached_enrichment_is_idempotent_and_not_found_is_valid(session):
     assert low.contact_status == ContactDiscoveryStatus.NOT_RUN
     assert found.contacts[0].review_status == ReviewStatus.PENDING
     assert found.contacts[0].source_url == "https://example.com/team"
+
+
+def test_fetch_failure_is_not_reported_as_contact_not_found(session):
+    target = company()
+    session.add(target)
+    session.flush()
+    session.add(WebsiteSnapshot(company_id=target.id, requested_url=target.website, fetch_status="FETCH_FAILED"))
+    session.commit()
+    summary = enrich_contacts(session, limit=1)
+    assert summary.failed == 1
+    assert summary.not_found == 0
+    assert target.contact_status == ContactDiscoveryStatus.FAILED

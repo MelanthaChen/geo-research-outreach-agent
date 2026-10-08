@@ -141,7 +141,7 @@ def enrich_contact_records(
         summary = enrich_contacts(session, priorities=_csv_values(priority), reviews=reviews, limit=limit)
     typer.echo(
         f"processed={summary.processed} found={summary.found} not_found={summary.not_found} "
-        f"blocked={summary.blocked} contacts_created={summary.contacts_created} duplicates={summary.duplicates}"
+        f"blocked={summary.blocked} failed={summary.failed} contacts_created={summary.contacts_created} duplicates={summary.duplicates}"
     )
 
 

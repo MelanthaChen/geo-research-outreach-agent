@@ -26,6 +26,8 @@ from outreach_agent.models import Company, Contact, ReviewStatus, WebsiteSnapsho
 from outreach_agent.normalization import normalize_domain  # noqa: E402
 from outreach_agent.outreach_pipeline import (  # noqa: E402
     ApprovalGate,
+    DEMO_PARTICIPATION_FORM_URL,
+    DEFAULT_RESEARCH_SUBJECT,
     DemoTransport,
     OutreachState,
     SUITABLE_CHANNEL_TYPES,
@@ -35,7 +37,9 @@ from outreach_agent.outreach_pipeline import (  # noqa: E402
     form_submission_safety,
     idempotency_key,
     map_contact_form_fields,
+    contact_form_invitation_message,
     prepare_signup_handoff,
+    research_invitation_values,
     render_template,
     transition,
     validate_recipient,
@@ -58,12 +62,13 @@ OUTREACH_CANDIDATE_FIELDS = [
 ]
 EMAIL_DRAFT_FIELDS = [
     "demo_label", "company_id", "company_name", "contact_id", "recipient", "sender_name", "sender_email", "reply_to_email",
-    "subject", "body", "evidence_url", "evidence_excerpt", "company_review_status", "channel_review_status",
-    "outreach_state", "approval_status", "signup_url_included", "idempotency_key",
+    "subject", "body", "participation_interest_form_url", "research_contact_email", "evidence_url", "evidence_excerpt",
+    "company_review_status", "channel_review_status", "outreach_state", "approval_status", "idempotency_key",
 ]
 FORM_DRAFT_FIELDS = [
     "demo_label", "company_id", "company_name", "contact_id", "form_url", "evidence_url", "visible_form_evidence",
-    "field_mapping_json", "proposed_values_json", "captcha_detected", "consent_detected", "submission_status",
+    "participation_interest_form_url", "research_contact_email", "field_mapping_json", "proposed_values_json",
+    "captcha_detected", "consent_detected", "submission_status",
     "manual_confirmation_required", "company_review_status", "channel_review_status",
 ]
 DELIVERY_FIELDS = [
@@ -71,7 +76,7 @@ DELIVERY_FIELDS = [
     "idempotency_key", "attempt_status", "simulated_approval_fixture", "real_company_review_status",
     "real_channel_review_status", "real_outreach_approval_status", "simulated_response_status",
     "simulated_response_text", "signup_handoff_status", "signup_url", "signup_completed", "research_consent_status",
-    "outreach_state_trace", "form_submission_status",
+    "outreach_state_trace", "participation_workflow_trace", "form_submission_status",
 ]
 
 
@@ -179,23 +184,10 @@ def select_demo_channels(companies: dict[int, dict[str, Any]], contacts: dict[in
 
 def invitation_values(config: dict[str, Any], company_name: str, *, signup_url: str = "",
                       signup_is_simulated: bool = False) -> dict[str, str]:
-    defaults = {
-        "researcher_name": "[RESEARCHER NAME NOT CONFIGURED]",
-        "university_affiliation": "[UNIVERSITY AFFILIATION NOT CONFIGURED]",
-        "research_project_description": "[RESEARCH PROJECT DESCRIPTION NOT CONFIGURED]",
-        "reply_to_email": "[REPLY-TO ADDRESS NOT CONFIGURED]",
-        "sender_name": "[SENDER NAME NOT CONFIGURED]",
-        "company_name": company_name,
-        "research_signup_section": "",
-    }
-    for key in ("researcher_name", "university_affiliation", "research_project_description", "reply_to_email", "sender_name"):
-        if config.get(key):
-            defaults[key] = str(config[key])
-    if signup_url and signup_is_simulated:
-        defaults["research_signup_section"] = f"\nDEMO / SIMULATED ONLY — reserved non-operational URL: {signup_url}"
-    elif signup_url and config.get("research_signup_url_approved"):
-        defaults["research_signup_section"] = f"\nIf you would like to review the study information: {signup_url}"
-    return defaults
+    return research_invitation_values(
+        config, company_name,
+        demo_form_url=(signup_url or DEMO_PARTICIPATION_FORM_URL) if signup_is_simulated else "",
+    )
 
 
 def render_invitation(config: dict[str, Any], company_name: str, *, signup_url: str = "",
@@ -203,19 +195,23 @@ def render_invitation(config: dict[str, Any], company_name: str, *, signup_url: 
     template_file = ROOT / str(config.get("template_file") or "config/templates/research_invitation.txt")
     template = template_file.read_text(encoding="utf-8")
     values = invitation_values(config, company_name, signup_url=signup_url, signup_is_simulated=signup_is_simulated)
-    subject = render_template(str(config.get("subject_template") or "University research invitation: {company_name}"), values)
+    subject = str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT)
     body = render_template(template, values)
     return subject, body
 
 
 def build_form_draft(company: dict[str, Any], contact: dict[str, Any], config: dict[str, Any],
                      signup_url: str) -> dict[str, str]:
-    subject, body = render_invitation(config, company["company_name"])
+    values = invitation_values(config, company["company_name"], signup_url=signup_url, signup_is_simulated=True)
+    body = contact_form_invitation_message(
+        company["company_name"], values["participation_interest_form_url"], values["research_contact_email"]
+    )
     evidence = contact.get("purpose") or ""
     mapping = map_contact_form_fields(evidence)
+    subject = str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT)
     proposed = {
         "name": "[NOT CONFIGURED — NOT SUBMITTED]" if "name" in mapping else "",
-        "email": "[REPLY-TO NOT CONFIGURED — NOT SUBMITTED]" if "email" in mapping else "",
+        "email": f"{values['research_contact_email']} — NOT SUBMITTED" if "email" in mapping else "",
         "company": company["company_name"] if "company" in mapping else "",
         "subject": subject if "subject" in mapping else "",
         "message": body if "message" in mapping else "",
@@ -227,6 +223,8 @@ def build_form_draft(company: dict[str, Any], contact: dict[str, Any], config: d
         "demo_label": "DEMO — NOT SUBMITTED",
         "company_id": str(company["id"]), "company_name": company["company_name"], "contact_id": str(contact["id"]),
         "form_url": contact.get("channel_url") or "", "evidence_url": contact.get("source_url") or "",
+        "participation_interest_form_url": values["participation_interest_form_url"],
+        "research_contact_email": values["research_contact_email"],
         "visible_form_evidence": evidence[:1200], "field_mapping_json": json.dumps(mapping, ensure_ascii=False, sort_keys=True),
         "proposed_values_json": json.dumps(proposed, ensure_ascii=False, sort_keys=True), **safety,
         "company_review_status": company["review_status"], "channel_review_status": contact["review_status"],
@@ -287,11 +285,11 @@ def run_demo(database: Path = DB_PATH, output_dir: Path = DATA, max_draft_compan
         raise ValueError("configured no-channel scenario now has a suitable saved channel; update the demo fixture deliberately")
 
     template = (ROOT / str(config.get("template_file") or "config/templates/research_invitation.txt")).read_text(encoding="utf-8")
-    if "{research_signup_section}" not in template:
-        raise ValueError("invitation template must contain the optional {research_signup_section} placeholder")
+    if "{participation_interest_form_url}" not in template or "{research_contact_email}" not in template:
+        raise ValueError("invitation template must contain the participation form and research contact placeholders")
     signup = scenario["simulated_signup"]
     simulated_signup_url = str(signup["url"])
-    if not simulated_signup_url.endswith(".invalid/phase5a-signup"):
+    if not simulated_signup_url.endswith(".invalid/participation-interest"):
         raise ValueError("demo signup fixture must use the reserved .invalid domain")
     simulated_approval = bool(scenario.get("simulated_approval_fixture"))
     suppression_path = ROOT / str(config.get("suppression_file") or "data/outreach_suppression.csv")
@@ -324,11 +322,11 @@ def run_demo(database: Path = DB_PATH, output_dir: Path = DATA, max_draft_compan
             continue
 
         recipient = validate_recipient(contact.get("email"))
-        use_simulated_signup = company_id == scenario_email_id and bool(signup.get("approval_fixture"))
         subject, body = render_invitation(config, company["company_name"],
-                                          signup_url=simulated_signup_url if use_simulated_signup else "",
-                                          signup_is_simulated=use_simulated_signup)
+                                          signup_url=simulated_signup_url, signup_is_simulated=True)
         key = idempotency_key(company_id, contact["id"], recipient, subject, body)
+        email_values = invitation_values(config, company["company_name"], signup_url=simulated_signup_url,
+                                         signup_is_simulated=True)
         email_drafts.append({
             "demo_label": "DEMO DRAFT — NOT A REAL MESSAGE", "company_id": str(company_id),
             "company_name": company["company_name"], "contact_id": str(contact["id"]), "recipient": recipient,
@@ -337,7 +335,9 @@ def run_demo(database: Path = DB_PATH, output_dir: Path = DATA, max_draft_compan
             "evidence_url": contact.get("source_url") or "", "evidence_excerpt": (contact.get("evidence_text") or "")[:500],
             "company_review_status": company["review_status"], "channel_review_status": contact["review_status"],
             "outreach_state": "NEEDS_REVIEW", "approval_status": "NOT_APPROVED",
-            "signup_url_included": "SIMULATED_ONLY" if use_simulated_signup else "false", "idempotency_key": key,
+            "participation_interest_form_url": email_values["participation_interest_form_url"],
+            "research_contact_email": email_values["research_contact_email"],
+            "idempotency_key": key,
         })
         candidate_gate = ApprovalGate(
             identity_verified=company["identity_verification_status"] == "VERIFIED",
@@ -398,7 +398,12 @@ def run_demo(database: Path = DB_PATH, output_dir: Path = DATA, max_draft_compan
             "simulated_response_text": response_text, "signup_handoff_status": signup_status,
             "signup_url": signup_url, "signup_completed": signup_completed,
             "research_consent_status": "NOT_ESTABLISHED", "outreach_state_trace": " -> ".join("SIMULATED_" + state.value for state in state_trace),
-            "form_submission_status": "NOT_APPLICABLE",
+            "participation_workflow_trace": (
+                "INVITATION_DELIVERED_SIMULATED -> PARTICIPATION_FORM_OPENED_SIMULATED -> "
+                "INTEREST_SUBMITTED_SIMULATED -> RESEARCH_TEAM_REVIEW_PENDING_SIMULATED -> "
+                "FOLLOW_UP_PROCESS_STARTED_SIMULATED"
+            ) if is_scenario_delivery and delivery_status == "SIMULATED_DELIVERED" else "",
+            "form_submission_status": "SIMULATED_ONLY_NOT_A_REAL_SUBMISSION" if is_scenario_delivery and delivery_status == "SIMULATED_DELIVERED" else "NOT_APPLICABLE",
         })
 
     candidates.append(_candidate_row(no_channel_company, None, status="NO_SUITABLE_CHANNEL — NO DRAFT OR DELIVERY"))
@@ -412,6 +417,7 @@ def run_demo(database: Path = DB_PATH, output_dir: Path = DATA, max_draft_compan
         "simulated_response_text": "", "signup_handoff_status": "NOT_APPLICABLE", "signup_url": "",
         "signup_completed": "false", "research_consent_status": "NOT_ESTABLISHED",
         "outreach_state_trace": OutreachState.NOT_PREPARED.value, "form_submission_status": "NOT_APPLICABLE",
+        "participation_workflow_trace": "",
     })
 
     write_csv_atomic(output_dir / "phase5a_outreach_candidates.csv", OUTREACH_CANDIDATE_FIELDS, candidates)

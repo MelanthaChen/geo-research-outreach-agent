@@ -1,5 +1,9 @@
 # Phase 5A: Outreach Pipeline Validation
 
+## Phase 5C update
+
+The current invitation template is form-first: the Participation Interest Form is the primary call to action, while the research contact email is for questions only. The 5A run metrics below describe the original demo snapshot; the current offline demo uses a clearly labeled reserved `.invalid` form placeholder and simulates form open, interest indication, team review, and follow-up without external requests or actual submissions.
+
 ## Outcome
 
 Phase 5A adds an offline, provider-free outreach preparation and professor-demo path against the existing 537-company Phase 4F experiment. It demonstrates evidence-backed drafts and a local simulated workflow while keeping real delivery and website-form submission unavailable. The frozen 77-company validation database was not opened for writes. No real messages, form submissions, or research signups occurred.
@@ -8,7 +12,7 @@ Phase 5A adds an offline, provider-free outreach preparation and professor-demo 
 
 - `scripts/phase5a_outreach_demo.py demo` opens only `data/phase4f_experimental.db` in read-only mode, requires the existing 537-company cohort, uses saved qualification/identity/contact evidence, and deterministically exports email drafts, a form draft, candidate evidence, and simulated lifecycle rows.
 - `DemoTransport` is the only transport in this phase and has no network code. It creates deterministic `SIMULATED-*` IDs and suppresses duplicate demo deliveries by an idempotency key.
-- The default `config/outreach.yaml` leaves sender name/email, reply-to, researcher, affiliation, study description, and research signup URL unset. `live_sending_enabled` and signup URL approval are false. The delivery gate remains blocked in the absence of a real provider even if hypothetical future approval/configuration flags are set.
+- The default `config/outreach.yaml` leaves sender name/email, reply-to, participation form URL, research contact email, researcher name/team, and affiliation unset. `live_sending_enabled` is false. The delivery gate remains blocked in the absence of a real provider even if hypothetical future approval/configuration flags are set.
 - Contact form mapping uses only saved visible form evidence, marks CAPTCHA/consent indicators, requires manual confirmation, and always returns `NOT_SUBMITTED_DEMO`.
 - Fixture approval, Vexo delivery, interested response, and signup handoff are isolated as DEMO/SIMULATED. The `.invalid` destination is non-operational. Signup completion is false and research consent remains `NOT_ESTABLISHED`.
 - Review state and suppression data are read only during the demo. Simulated responses do not persist opt-out/approval changes.

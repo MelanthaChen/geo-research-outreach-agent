@@ -213,9 +213,9 @@ The script writes `data/phase4g_review_queue.csv`, filtered review views (`phase
 
 The integrated Phase 3B rerun is documented in [`docs/phase3b_live_validation.md`](docs/phase3b_live_validation.md). It recovered 11 manually verified named contacts while retaining all 12 public mailbox records, and invoked the fallback for only 8 of 28 companies.
 
-## Phase 5A professor demo — offline only
+## Phase 5A/5C professor demo — offline only
 
-The sender account is intentionally not selected. `config/outreach.yaml` keeps sender name, sender email, reply-to, researcher/institution details, and signup URL blank, with live delivery disabled. No Gmail, Microsoft 365, SMTP, API key, browser automation, or form-submit integration is required or present. The demo reads the existing 537-company Phase 4F database read-only, combines its stored qualifications/contact evidence with saved website-verification exports, and writes labeled draft/simulation CSVs. It does not modify approval fields or the database, send email, submit forms, or establish consent. The fixture response and signup handoff are simulated; the URL uses reserved `.invalid` and is not operational.
+The sender account is intentionally not selected. `config/outreach.yaml` keeps sender name/email, reply-to, Participation Interest Form URL, research contact, researcher, team, and university affiliation unset, with live delivery disabled. Email drafts direct interest to the Participation Interest Form; email is listed only for research questions. Demo drafts use a clearly labeled reserved `.invalid` URL. No Gmail, Microsoft 365, SMTP, API key, browser automation, or form-submit integration is required or present. The demo reads the existing 537-company Phase 4F database read-only, combines its stored qualifications/contact evidence with saved website-verification exports, and writes labeled draft/simulation CSVs. It does not modify approval fields or the database, send email, submit forms, or establish consent. The simulated participation workflow distinguishes a form-interest indication from formal research consent.
 
 Run the deterministic walkthrough from the repository root:
 

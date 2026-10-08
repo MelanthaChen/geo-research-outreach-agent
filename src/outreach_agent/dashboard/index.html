@@ -48,7 +48,8 @@
           <select id="priority"><option value="">All priorities</option></select>
           <select id="channel"><option value="">All contact coverage</option><option value="HAS_SUITABLE_CHANNEL">Suitable channel</option><option value="NO_SUITABLE_CHANNEL">No suitable channel</option></select>
         </div>
-        <div class="table-wrap"><table><thead><tr><th>Company</th><th>Discovered through</th><th>Website check</th><th>GEO eligible</th><th>Opportunity</th><th>Priority</th><th>Contact channel</th></tr></thead><tbody id="company-rows"></tbody></table></div>
+        <p id="company-list-help" class="visually-hidden">Select a company to view its qualification evidence and contact details.</p>
+        <div id="company-rows" class="company-list" role="listbox" aria-label="Companies" aria-describedby="company-list-help"></div>
         <p class="table-footnote">Saved contact details are research evidence—not permission to contact. No company websites are opened by this dashboard.</p>
       </div>
       <aside class="detail-column">
@@ -62,7 +63,7 @@
           <div id="draft-preview" class="draft-preview hidden"></div>
           <div id="simulate-controls" class="simulate-controls hidden">
             <button class="button dark" id="deliver-button">Simulate delivery <span>→</span></button>
-            <div id="response-controls" class="hidden"><label class="field-label" for="response-select">Simulated response</label><select id="response-select"><option value="INTERESTED">Interested</option><option value="DECLINED">Declined</option><option value="UNANSWERED">No response</option></select><button class="button outline" id="response-button">Record simulated outcome</button></div>
+            <div id="response-controls" class="hidden"><label class="field-label" for="response-select">Simulated recipient action</label><select id="response-select"><option value="INTERESTED">Open the form and submit interest</option><option value="DECLINED">Decline the invitation</option><option value="UNANSWERED">No response</option></select><button class="button outline" id="response-button">Record simulated outcome</button></div>
           </div>
           <div id="simulation-log" class="simulation-log" aria-live="polite"></div>
           <div class="safety-note"><span>⛨</span><p><strong>No real delivery path.</strong> No provider, SMTP, form submit, or external site request is available. Human approvals remain unchanged.</p></div>

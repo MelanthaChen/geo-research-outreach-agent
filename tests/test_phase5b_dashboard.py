@@ -114,7 +114,27 @@ def test_draft_preview_uses_saved_recipient_and_marks_not_sent(tmp_path):
     assert draft["recipient"] == "hello@fixture.test"
     assert draft["delivery_status"] == "NOT_SENT"
     assert draft["approval_status"] == "NOT_APPROVED"
-    assert "[SENDER NAME NOT CONFIGURED]" in draft["body"]
+    assert draft["subject"] == "Invitation to Participate in University Research on AI Search"
+    assert "https://research.example.invalid/participation-interest" in draft["body"]
+    assert "[RESEARCH CONTACT EMAIL NOT CONFIGURED]" in draft["body"]
+    assert "[RESEARCHER NAME NOT CONFIGURED]" in draft["body"]
+    assert "You may reply" not in draft["body"]
+    assert draft["participation_interest_form_url"].startswith("DEMO PLACEHOLDER ONLY")
+    assert "Research contact email" in draft["missing_configuration"]
+    assert any("reserved .invalid demo placeholder" in item for item in draft["missing_configuration"])
+
+
+def test_contact_form_dashboard_draft_uses_concise_form_cta_and_question_contact_only():
+    data = load_dashboard_data()
+    detail = data["details"][105]
+    channel = next(item for item in detail["contact_channels"] if item["channel_type"] == "CONTACT_FORM" and item["is_suitable_first_party"])
+    draft = make_draft_preview(data, 105, int(channel["id"]))
+    assert draft["channel_type"] == "CONTACT_FORM"
+    assert "https://research.example.invalid/participation-interest" in draft["body"]
+    assert "[RESEARCH CONTACT EMAIL NOT CONFIGURED]" in draft["body"]
+    assert "For questions only" in draft["body"]
+    assert "reply" not in draft["body"].casefold()
+    assert len(draft["body"]) < 600
 
 
 def test_missing_channel_explanation_and_invalid_channel_are_fail_closed(tmp_path):
@@ -161,4 +181,21 @@ def test_dashboard_assets_do_not_load_external_resources_or_submit_forms():
     assert 'value="INTERESTED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     assert 'value="DECLINED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     assert 'value="UNANSWERED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
-    assert "SIMULATED SIGNUP HANDOFF" in js
+    assert "SIMULATED FORM OPENED" in js
+    assert "SIMULATED INTEREST SUBMITTED" in js
+    assert "SIMULATED RESEARCH-TEAM REVIEW" in js
+    assert "SIMULATED FOLLOW-UP PROCESS BEGINS" in js
+
+
+def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():
+    html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
+    css = (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")
+    js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    assert '<div id="company-rows" class="company-list" role="listbox"' in html
+    assert "<table>" not in html
+    assert 'role="option"' in js and 'aria-selected="${row.id === state.selectedId}"' in js
+    assert "websiteDomain(row.website)" in js
+    assert ".company-list { display: grid; overflow-y: auto; overflow-x: hidden;" in css
+    assert ".company-row { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto;" in css
+    assert ".company-name { display: block;" in css and "overflow-wrap: anywhere;" in css
+    assert ".company-row { grid-template-columns: minmax(0,1fr);" in css

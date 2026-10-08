@@ -40,9 +40,68 @@ def test_default_sender_and_signup_configuration_is_unset():
     assert config["sender_name"] == ""
     assert config["sender_email"] == ""
     assert config["reply_to_email"] == ""
-    assert config["research_signup_url"] == ""
-    assert config["research_signup_url_approved"] is False
+    assert config["participation_interest_form_url"] == ""
+    assert config["research_contact_email"] == ""
+    assert config["researcher_name"] == ""
+    assert config["research_team"] == ""
+    assert config["university_affiliation"] == ""
     assert config["live_sending_enabled"] is False
+
+
+def test_email_template_is_form_first_and_labels_demo_url_as_non_operational():
+    config = yaml.safe_load((ROOT / "config/outreach.yaml").read_text())
+    form_url = "https://research.example.invalid/participation-interest"
+    subject, body = demo_script.render_invitation(
+        config, "Example Co", signup_url=form_url, signup_is_simulated=True
+    )
+    assert subject == "Invitation to Participate in University Research on AI Search"
+    assert "DEMO PLACEHOLDER ONLY — NOT A REAL FORM:" in body
+    assert form_url in body
+    assert "[RESEARCH CONTACT EMAIL NOT CONFIGURED]" in body
+    assert "[RESEARCHER NAME NOT CONFIGURED]" in body
+    assert "You may reply" not in body
+    assert "contact us at [RESEARCH CONTACT EMAIL NOT CONFIGURED]" in body
+    assert "[RESEARCH TEAM NOT CONFIGURED]" in body
+    assert "[UNIVERSITY AFFILIATION NOT CONFIGURED]" in body
+    _, default_demo_body = demo_script.render_invitation(config, "Example Co", signup_is_simulated=True)
+    assert "https://research.example.invalid/participation-interest" in default_demo_body
+
+
+def test_contact_form_message_uses_same_form_cta_and_questions_contact_only():
+    message = demo_script.contact_form_invitation_message(
+        "Example Co", "DEMO PLACEHOLDER ONLY: https://research.example.invalid/participation-interest",
+        "research@example.edu",
+    )
+    assert "Participation Interest Form" in message
+    assert "https://research.example.invalid/participation-interest" in message
+    assert "research@example.edu" in message
+    assert "For questions only" in message
+    assert "reply" not in message.casefold()
+    assert len(message) < 600
+
+
+def test_demo_url_must_use_reserved_invalid_domain():
+    from outreach_agent.outreach_pipeline import research_invitation_values
+
+    with pytest.raises(ValueError, match="reserved .invalid domain"):
+        research_invitation_values({}, "Example Co", demo_form_url="https://research.example.com/form")
+
+
+def test_research_invitation_fields_accept_explicit_configuration():
+    config = {
+        "participation_interest_form_url": "https://study.example.edu/interest",
+        "research_contact_email": "geo-study@example.edu",
+        "researcher_name": "Researcher Name",
+        "research_team": "GEO Research Team",
+        "university_affiliation": "Example University",
+    }
+    subject, body = demo_script.render_invitation(config, "Example Co")
+    assert subject == "Invitation to Participate in University Research on AI Search"
+    assert "https://study.example.edu/interest" in body
+    assert "geo-study@example.edu" in body
+    assert "Researcher Name" in body
+    assert "GEO Research Team" in body
+    assert "Example University" in body
 
 
 def test_recipient_validation_normalizes_and_rejects_multiple_or_malformed_addresses():
@@ -162,4 +221,19 @@ def test_offline_demo_is_reproducible_and_does_not_write_database_or_approval_st
         delivery = list(csv.DictReader(handle))
     assert all(row["real_outreach_approval_status"] == "NOT_GRANTED" for row in delivery)
     assert all(row["research_consent_status"] == "NOT_ESTABLISHED" for row in delivery)
-    assert not any(row["form_submission_status"] not in {"NOT_SUBMITTED_DEMO", "NOT_APPLICABLE"} for row in delivery)
+    assert all(row["form_submission_status"] in {
+        "SIMULATED_ONLY_NOT_A_REAL_SUBMISSION", "NOT_SUBMITTED_DEMO", "NOT_APPLICABLE"
+    } for row in delivery)
+    scenario_delivery = next(row for row in delivery if row["delivery_status"] == "SIMULATED_DELIVERED")
+    assert "FORM_OPENED_SIMULATED" in scenario_delivery["participation_workflow_trace"]
+    assert "RESEARCH_TEAM_REVIEW_PENDING_SIMULATED" in scenario_delivery["participation_workflow_trace"]
+    assert scenario_delivery["signup_url"].endswith(".invalid/participation-interest")
+    with (tmp_path / "phase5a_email_drafts.csv").open(newline="", encoding="utf-8") as handle:
+        email_drafts = list(csv.DictReader(handle))
+    assert all("https://research.example.invalid/participation-interest" in row["body"] for row in email_drafts)
+    assert all("[RESEARCH CONTACT EMAIL NOT CONFIGURED]" in row["body"] for row in email_drafts)
+    assert all("You may reply" not in row["body"] for row in email_drafts)
+    with (tmp_path / "phase5a_contact_form_drafts.csv").open(newline="", encoding="utf-8") as handle:
+        form_drafts = list(csv.DictReader(handle))
+    assert all("https://research.example.invalid/participation-interest" in row["proposed_values_json"] for row in form_drafts)
+    assert all("[RESEARCH CONTACT EMAIL NOT CONFIGURED]" in row["proposed_values_json"] for row in form_drafts)

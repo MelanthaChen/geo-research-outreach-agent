@@ -1,11 +1,18 @@
-Hello {company_name} team,
+Hello {company_name} Team,
 
-My name is {researcher_name}, and I am with {university_affiliation}. I am preparing a research project about {research_project_description}.
+We are conducting a university research study on Generative Engine Optimization (GEO), exploring how businesses can improve their visibility and representation in AI-powered search engines such as ChatGPT and Google Gemini.
 
-Would your organization be open to learning more about the study? I can share additional information before you decide whether to participate. An expression of interest is not research consent.
+We are inviting selected businesses to participate in this research.
 
-You may reply to {reply_to_email}.
-{research_signup_section}
+If your company is interested in participating, please complete the short interest form below:
 
-Regards,
-{sender_name}
+{participation_interest_form_url}
+
+Submitting this form simply indicates your interest in learning more about the study and does not constitute a commitment to participate.
+
+If you have any questions about the research, please contact us at {research_contact_email}.
+
+Best regards,
+{researcher_name}
+{research_team}
+{university_affiliation}

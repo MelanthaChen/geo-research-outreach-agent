@@ -6,7 +6,7 @@ scenarios:
 simulated_approval_fixture: true
 simulated_response:
   type: INTERESTED
-  text: "SIMULATED: We would be interested in learning more about the study."
+  text: "SIMULATED: Interest form submission fixture; not a real company response or form submission."
 simulated_signup:
-  url: https://research.example.invalid/phase5a-signup
+  url: https://research.example.invalid/participation-interest
   approval_fixture: true

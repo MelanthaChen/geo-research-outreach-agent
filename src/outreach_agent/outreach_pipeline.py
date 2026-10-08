@@ -48,6 +48,45 @@ SUITABLE_EMAIL_TYPES = {
 }
 SUITABLE_CHANNEL_TYPES = SUITABLE_EMAIL_TYPES | {"CONTACT_FORM"}
 EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", re.I)
+DEFAULT_RESEARCH_SUBJECT = "Invitation to Participate in University Research on AI Search"
+DEMO_PARTICIPATION_FORM_URL = "https://research.example.invalid/participation-interest"
+
+
+def research_invitation_values(config: dict[str, Any], company_name: str, *, demo_form_url: str = "") -> dict[str, str]:
+    form_url = str(config.get("participation_interest_form_url") or "[PARTICIPATION INTEREST FORM URL NOT CONFIGURED]")
+    if demo_form_url:
+        host = demo_form_url.split("/", 3)[2].split(":", 1)[0].casefold() if "://" in demo_form_url else ""
+        if not host.endswith(".invalid"):
+            raise ValueError("demo participation form URL must use the reserved .invalid domain")
+        form_url = f"DEMO PLACEHOLDER ONLY — NOT A REAL FORM: {demo_form_url}"
+    return {
+        "company_name": company_name,
+        "participation_interest_form_url": form_url,
+        "research_contact_email": str(config.get("research_contact_email") or "[RESEARCH CONTACT EMAIL NOT CONFIGURED]"),
+        "researcher_name": str(config.get("researcher_name") or "[RESEARCHER NAME NOT CONFIGURED]"),
+        "research_team": str(config.get("research_team") or "[RESEARCH TEAM NOT CONFIGURED]"),
+        "university_affiliation": str(config.get("university_affiliation") or "[UNIVERSITY AFFILIATION NOT CONFIGURED]"),
+    }
+
+
+def missing_research_configuration(config: dict[str, Any]) -> list[str]:
+    labels = {
+        "participation_interest_form_url": "Participation Interest Form URL (showing reserved .invalid demo placeholder)",
+        "research_contact_email": "Research contact email",
+        "researcher_name": "Researcher name",
+        "research_team": "Research team",
+        "university_affiliation": "University affiliation",
+    }
+    return [label for key, label in labels.items() if not str(config.get(key) or "").strip()]
+
+
+def contact_form_invitation_message(company_name: str, participation_form_url: str, research_contact_email: str) -> str:
+    return (
+        f"Hello {company_name} team, we are conducting a university study on Generative Engine Optimization (GEO) "
+        "and AI-powered search. If interested in learning more, please complete the Participation Interest Form: "
+        f"{participation_form_url}. Submitting interest is not a commitment or research consent. "
+        f"For questions only, contact {research_contact_email}."
+    )
 
 
 def validate_recipient(value: str | None) -> str:

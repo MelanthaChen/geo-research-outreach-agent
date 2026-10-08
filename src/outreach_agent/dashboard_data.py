@@ -14,9 +14,14 @@ from urllib.parse import urlparse
 import yaml
 
 from outreach_agent.outreach_pipeline import (
+    DEFAULT_RESEARCH_SUBJECT,
+    DEMO_PARTICIPATION_FORM_URL,
     SUITABLE_CHANNEL_TYPES,
+    contact_form_invitation_message,
     form_submission_safety,
+    missing_research_configuration,
     map_contact_form_fields,
+    research_invitation_values,
     render_template,
     validate_recipient,
 )
@@ -233,7 +238,7 @@ def load_dashboard_data(
         "details": details,
         "channel_presence": channel_presence,
         "filters": filters,
-        "simulated_signup_url": scenario.get("simulated_signup", {}).get("url", ""),
+        "simulated_signup_url": scenario.get("simulated_signup", {}).get("url", DEMO_PARTICIPATION_FORM_URL),
     }
 
 
@@ -294,18 +299,16 @@ def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | 
     config = yaml.safe_load(DEFAULT_OUTREACH_CONFIG.read_text(encoding="utf-8")) or {}
     template = Path(config.get("template_file") or "config/templates/research_invitation.txt")
     template_path = ROOT / template
-    values = {
-        "company_name": detail["company_name"],
-        "researcher_name": config.get("researcher_name") or "[RESEARCHER NAME NOT CONFIGURED]",
-        "university_affiliation": config.get("university_affiliation") or "[UNIVERSITY AFFILIATION NOT CONFIGURED]",
-        "research_project_description": config.get("research_project_description") or "[RESEARCH PROJECT DESCRIPTION NOT CONFIGURED]",
-        "reply_to_email": config.get("reply_to_email") or "[REPLY-TO ADDRESS NOT CONFIGURED]",
-        "sender_name": config.get("sender_name") or "[SENDER NAME NOT CONFIGURED]",
-        "research_signup_section": "",
-    }
-    subject = str(config.get("subject_template") or "University research invitation: {company_name}").format_map(values)
-    body = render_template(template_path.read_text(encoding="utf-8"), values)
+    demo_form_url = data.get("simulated_signup_url") or DEMO_PARTICIPATION_FORM_URL
+    values = research_invitation_values(config, detail["company_name"], demo_form_url=demo_form_url)
+    subject = str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT)
     is_form = selected.get("channel_type") == "CONTACT_FORM"
+    if is_form:
+        body = contact_form_invitation_message(
+            detail["company_name"], values["participation_interest_form_url"], values["research_contact_email"]
+        )
+    else:
+        body = render_template(template_path.read_text(encoding="utf-8"), values)
     recipient = ""
     form_mapping: dict[str, str] = {}
     safety: dict[str, str] = {}
@@ -328,6 +331,9 @@ def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | 
         "evidence_excerpt": (selected.get("evidence_text") or selected.get("purpose") or "")[:800],
         "subject": subject,
         "body": body,
+        "participation_interest_form_url": values["participation_interest_form_url"],
+        "research_contact_email": values["research_contact_email"],
+        "missing_configuration": missing_research_configuration(config),
         "form_field_mapping": form_mapping,
         "form_safety": safety,
         "company_review_status": detail.get("review_status", "PENDING"),

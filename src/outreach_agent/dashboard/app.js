@@ -1,7 +1,11 @@
-const state = { filters: {}, companies: [], selectedId: null, detail: null, summary: null, signupUrl: "", draft: null, delivered: false, responseRecorded: false };
+const state = { filters: {}, companies: [], selectedId: null, detail: null, summary: null, participationFormUrl: "", draft: null, delivered: false, responseRecorded: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
+const websiteDomain = (value) => {
+  try { return new URL(value).hostname.replace(/^www\./i, ""); }
+  catch { return String(value || "Website not recorded"); }
+};
 const pillClass = (value) => ["VERIFIED","ELIGIBLE","HIGH","APPROVED","HAS_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "good" : ["UNKNOWN","NEEDS REVIEW","NEEDS_REVIEW","PENDING","BASELINE_NOT_RECHECKED","MEDIUM"].includes(String(value).toUpperCase()) ? "warn" : ["REJECTED_MISMATCH","REJECTED","LOW","NO_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "bad" : "neutral";
 
 async function api(path) {
@@ -53,12 +57,9 @@ function pill(value) { return `<span class="pill ${pillClass(value)}">${esc(comp
 function renderCompanies(rows) {
   state.companies = rows;
   $("result-count").textContent = `${rows.length} COMPANIES`;
-  $("company-rows").innerHTML = rows.slice(0, 250).map((row) => `<tr data-id="${row.id}" tabindex="0" role="button" aria-pressed="${row.id === state.selectedId}" class="${row.id === state.selectedId ? "selected" : ""}"><td><span class="company-cell">${esc(row.company_name)}</span><span class="company-url">${esc(row.website)}</span></td><td>${esc(row.discovery_sources.join(", ") || "Unknown")}</td><td>${pill(row.identity_verification_status)}</td><td>${pill(row.eligibility)}</td><td>${pill(row.geo_opportunity)}</td><td>${pill(row.research_priority)}</td><td class="${row.has_suitable_channel ? "contact-yes" : "contact-no"}">${row.has_suitable_channel ? "Available" : "None"}</td></tr>`).join("") || `<tr><td colspan="7">No companies match the selected filters.</td></tr>`;
-  document.querySelectorAll("#company-rows tr[data-id]").forEach((row) => {
+  $("company-rows").innerHTML = rows.slice(0, 250).map((row) => `<button type="button" role="option" data-id="${row.id}" aria-selected="${row.id === state.selectedId}" class="company-row${row.id === state.selectedId ? " selected" : ""}"><span class="company-main"><span class="company-name">${esc(row.company_name)}</span><span class="company-url">${esc(websiteDomain(row.website))}</span></span><span class="company-status"><span class="company-status-label">Priority</span>${pill(row.research_priority)}<span class="company-status-label">Website</span>${pill(row.identity_verification_status)}</span></button>`).join("") || `<div class="no-results" role="status">No companies match the selected filters.</div>`;
+  document.querySelectorAll("#company-rows .company-row[data-id]").forEach((row) => {
     row.addEventListener("click", () => selectCompany(Number(row.dataset.id)));
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectCompany(Number(row.dataset.id)); }
-    });
   });
 }
 async function reloadCompanies() {
@@ -125,7 +126,10 @@ async function previewDraft() {
   }
   const destination = result.recipient ? `Recipient: ${result.recipient}` : `Official form: ${result.form_url}`;
   const formNotes = result.form_url ? `<p>Form field map: ${esc(Object.keys(result.form_field_mapping).join(", ") || "no fields confidently mapped")} · ${esc(result.form_safety.submission_status)} · Manual submission is not available.</p>` : "";
-  container.innerHTML = `<div class="draft-banner">${esc(result.label)}</div><div class="draft-heading">${esc(result.subject)}</div><div class="draft-meta">${esc(destination)}<br>Company review: ${esc(result.company_review_status)} · Channel review: ${esc(result.channel_review_status)} · Approval: ${esc(result.approval_status)}<br>Evidence: ${esc(result.evidence_url)}</div>${formNotes}<pre class="draft-body">${esc(result.body)}</pre>`;
+  const warnings = result.missing_configuration?.length ? `<div class="draft-warnings"><strong>Missing configuration — this is a demo placeholder</strong><ul>${result.missing_configuration.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : "";
+  const participation = `<div class="participation-cta"><span>PRIMARY CALL TO ACTION · DEMO PLACEHOLDER ONLY</span><strong>${esc(result.participation_interest_form_url)}</strong><small>Recipients would use this form to express interest. The reserved .invalid link is not a real form.</small></div>`;
+  const researchContact = `<div class="draft-meta">Research questions only: ${esc(result.research_contact_email)}</div>`;
+  container.innerHTML = `<div class="draft-banner">DEMO DRAFT — NOT SENT</div><div class="draft-heading">${esc(result.subject)}</div><div class="draft-meta">${esc(destination)}<br>Company review: ${esc(result.company_review_status)} · Channel review: ${esc(result.channel_review_status)} · Approval: ${esc(result.approval_status)}<br>Evidence: ${esc(result.evidence_url)}</div>${participation}${researchContact}${warnings}${formNotes}<pre class="draft-body">${esc(result.body)}</pre>`;
   $("simulate-controls").classList.remove("hidden"); $("response-controls").classList.add("hidden"); $("deliver-button").disabled = false; $("simulation-log").innerHTML = "";
 }
 function addEvent(title, detail) {
@@ -149,16 +153,23 @@ function recordResponse() {
     return;
   }
   if (response === "DECLINED") {
-    addEvent("SIMULATED DECLINED RESPONSE", "Fixture response only. No actual company response or human review state is recorded.");
+    addEvent("SIMULATED DECLINED INVITATION", "Fixture action only. No actual company response or human review state is recorded.");
     return;
   }
-  addEvent("SIMULATED INTERESTED RESPONSE", "Fixture response only. Interest is not research consent or participation approval.");
-  const handoff = document.createElement("button"); handoff.className = "button outline"; handoff.textContent = "Show simulated research signup handoff";
-  handoff.addEventListener("click", () => {
-    addEvent("SIMULATED SIGNUP HANDOFF", `${state.signupUrl || "Reserved demo-only URL"}. It is non-operational; signup is not completed and consent is NOT ESTABLISHED.`);
-    handoff.disabled = true;
+  addEvent("SIMULATED FORM OPENED", `${state.participationFormUrl || "https://research.example.invalid/participation-interest"}. No external page or network request was opened.`);
+  addEvent("SIMULATED INTEREST SUBMITTED", "Demo event only—not a Google Form submission. It records interest in learning more, not research consent or a commitment to participate.");
+  const review = document.createElement("button"); review.className = "button outline"; review.textContent = "Review simulated interest submission";
+  review.addEventListener("click", () => {
+    addEvent("SIMULATED RESEARCH-TEAM REVIEW", "The interest submission is awaiting human review. No participant approval or consent is recorded.");
+    review.disabled = true;
+    const followup = document.createElement("button"); followup.className = "button outline"; followup.textContent = "Begin simulated follow-up research process";
+    followup.addEventListener("click", () => {
+      addEvent("SIMULATED FOLLOW-UP PROCESS BEGINS", "The research team would provide study information for a separate decision. No message is sent and consent remains NOT ESTABLISHED.");
+      followup.disabled = true;
+    });
+    $("simulation-log").append(followup);
   });
-  $("simulation-log").append(handoff);
+  $("simulation-log").append(review);
 }
 function wireFilters() {
   const bindings = [["search","q"],["source","source"],["verification","verification"],["eligibility","eligibility"],["geo","geo"],["priority","priority"],["channel","channel"]];
@@ -171,7 +182,7 @@ function showError(error) { $("result-count").textContent = "DATA LOAD ERROR"; $
 async function start() {
   wireFilters();
   const result = await api("/api/summary");
-  state.summary = result.summary; state.signupUrl = result.simulated_signup_url || "";
+  state.summary = result.summary; state.participationFormUrl = result.simulated_signup_url || "https://research.example.invalid/participation-interest";
   renderSummary({...result.summary, filters: result.filters});
   await reloadCompanies();
 }

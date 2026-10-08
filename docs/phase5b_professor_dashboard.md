@@ -28,7 +28,7 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765) in a browser. Stop the serve
 2. **Find a company (0:45–1:30):** Search by name, URL, industry, or location; combine source, identity, eligibility, GEO, priority, and channel filters. Choose a result. The table is capped visually at 250 rows at once; filters/search narrow it.
 3. **Inspect evidence (1:30–2:30):** Review the selected company’s source records, saved qualification evidence/reasons, GEO rationale, missing evidence, contact-channel source excerpt, and company/channel review state. Emphasize that machine `VERIFIED` or `ELIGIBLE` labels are not human approvals.
 4. **Preview (2:30–3:20):** Choose an existing suitable first-party channel for an identity-verified eligible company and generate the invitation preview. The actual saved email or official form URL and evidence source are shown. Sender values remain visibly unconfigured. The preview says **DEMO DRAFT — NOT SENT** and is not approved.
-5. **Simulate (3:20–4:40):** Click **Simulate delivery**, then choose an interested, declined, or unanswered response. These are local fixture interactions; no database event is written. For an interested response, show the simulated signup handoff. The displayed `.invalid` URL is reserved/non-operational; completion stays false and consent remains not established.
+5. **Simulate (3:20–4:40):** Click **Simulate delivery**, then choose the simulated action to open the participation form and submit interest, decline, or give no response. The interested path demonstrates a form-open event, a simulated interest indication, pending research-team review, and the start of a simulated follow-up process. These are browser-memory-only fixture interactions; no external URL is opened, no form is submitted, no database event is written, and no follow-up message is sent. The displayed `.invalid` URL is reserved/non-operational; interest is not formal research consent.
 6. **Close (4:40–5:00):** Explain that the experiment ends at the boundary: no real company was contacted, no form was submitted, no approval was created, and no consent/signup was recorded.
 
 ## Real versus simulated
@@ -38,8 +38,8 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765) in a browser. Stop the serve
 | Company identity, qualification, GEO, priority, provenance, review status | Stored values from the Phase 4F experimental SQLite database and saved verification exports |
 | Contact channels, recipients, contact forms, and evidence excerpts | Stored extraction records; not a verification of current deliverability and not authorization to use the channel |
 | Existing simulated send/response/handoff counters | Rows in the saved Phase 5A simulation CSV; they do not represent real outreach |
-| New interactive draft | Rendered from the configured template and selected stored channel; ephemeral preview, always unapproved and not sent |
-| New delivery, response, and signup handoff in the walkthrough | Browser-memory-only demonstration fixture; not saved and does not alter human review or outreach tables |
+| New interactive draft | Rendered from the configured invitation template and selected stored channel; includes a primary Participation Interest Form CTA, a question-only contact address, and warnings for unset configuration; ephemeral, unapproved, and not sent |
+| New delivery and participation workflow in the walkthrough | Browser-memory-only demonstration fixture; not saved and does not alter human review or outreach tables. Form open/submission, team review, and follow-up are simulated; no real signup, consent, or contact occurs. |
 | Real sends | Counted from the canonical outreach table. Phase 5A has no real provider and the cohort currently has no real outreach records. |
 
 ## Known limitations

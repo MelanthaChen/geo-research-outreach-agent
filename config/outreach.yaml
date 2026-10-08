@@ -2,12 +2,13 @@
 sender_name: ""
 sender_email: ""
 reply_to_email: ""
+participation_interest_form_url: ""
+research_contact_email: ""
 researcher_name: ""
+research_team: ""
 university_affiliation: ""
 research_project_description: ""
-research_signup_url: ""
-research_signup_url_approved: false
 live_sending_enabled: false
 suppression_file: data/outreach_suppression.csv
 template_file: config/templates/research_invitation.txt
-subject_template: "University research invitation: {company_name}"
+subject_template: "Invitation to Participate in University Research on AI Search"

@@ -232,6 +232,7 @@ def load_dashboard_data(
             "contact_channel": ["HAS_SUITABLE_CHANNEL", "NO_SUITABLE_CHANNEL"],
         }
     scenario = yaml.safe_load(DEFAULT_SCENARIO.read_text(encoding="utf-8")) or {}
+    outreach_config = yaml.safe_load(DEFAULT_OUTREACH_CONFIG.read_text(encoding="utf-8")) or {}
     return {
         "summary": summary,
         "companies": companies,
@@ -239,6 +240,10 @@ def load_dashboard_data(
         "channel_presence": channel_presence,
         "filters": filters,
         "simulated_signup_url": scenario.get("simulated_signup", {}).get("url", DEMO_PARTICIPATION_FORM_URL),
+        "participation_form_configuration": {
+            "study_description": outreach_config.get("research_project_description") or "Not configured",
+            "privacy_notice": outreach_config.get("participation_form_privacy_notice") or "Not configured",
+        },
     }
 
 

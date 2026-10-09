@@ -8,6 +8,7 @@ researcher_name: ""
 research_team: ""
 university_affiliation: ""
 research_project_description: ""
+participation_form_privacy_notice: ""
 live_sending_enabled: false
 suppression_file: data/outreach_suppression.csv
 template_file: config/templates/research_invitation.txt

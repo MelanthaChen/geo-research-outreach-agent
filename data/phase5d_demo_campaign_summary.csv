@@ -1,0 +1,2 @@
+demo_label,campaign_id,campaign_name,campaign_status,company_count,draft_count,email_draft_count,contact_form_review_count,excluded_count,simulated_deliveries,simulated_failures,simulated_responses,simulated_interest_submissions,demo_reviewed_submissions,eligible_count,ineligible_count,unresolved_count,simulated_followups_started,real_sends,real_form_submissions,formal_consents
+DEMO ONLY — SYNTHETIC EVENTS; NO REAL OUTREACH,28bcdbb0-81a3-4cbd-9494-b268bdc38ab0,Professor Walkthrough — DEMO ONLY,COMPLETED,20,20,19,1,0,19,2,3,1,1,20,0,0,1,0,0,0

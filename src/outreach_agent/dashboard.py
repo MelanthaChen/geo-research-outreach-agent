@@ -17,11 +17,12 @@ from outreach_agent.dashboard_data import (
     load_dashboard_data,
     make_draft_preview,
 )
+from outreach_agent.campaigns import CampaignStore, DEFAULT_CAMPAIGN_DB
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
 
-def make_handler(data: dict):
+def make_handler(data: dict, campaign_store: CampaignStore | None = None):
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "GEOResearchDashboard/1.0"
 
@@ -37,12 +38,48 @@ def make_handler(data: dict):
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/campaigns") or parsed.path.startswith("/api/campaign-analytics") or parsed.path.startswith("/api/companies/") and parsed.path.endswith("/outreach-history"):
+                if campaign_store is None:
+                    self._json({"error": "Persistent demo campaign store is unavailable"}, 503)
+                    return
+                try:
+                    if parsed.path == "/api/campaigns":
+                        self._json({"campaigns": campaign_store.list()})
+                    elif parsed.path == "/api/campaign-analytics":
+                        self._json(campaign_store.analytics())
+                    elif parsed.path.endswith("/outreach-history"):
+                        company_id = int(parsed.path.split("/")[-2])
+                        self._json({"history": campaign_store.outreach_history(company_id)})
+                    else:
+                        campaign_id = parsed.path.rsplit("/", 1)[-1]
+                        self._json(campaign_store.get(campaign_id))
+                except (ValueError, KeyError) as exc:
+                    self._json({"error": str(exc)}, 404)
+                return
             if parsed.path == "/api/summary":
-                self._json({"summary": data["summary"], "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"]})
+                self._json({"summary": data["summary"], "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
+                            "participation_form_configuration": data["participation_form_configuration"]})
                 return
             if parsed.path == "/api/companies":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
-                self._json({"companies": filter_companies(data, params)})
+                companies = filter_companies(data, params)
+                states = campaign_store.company_states() if campaign_store else {}
+                for company in companies:
+                    company["outreach_status"] = states.get(company["id"], "NO_CAMPAIGN_HISTORY")
+                if params.get("outreach_status"):
+                    companies = [row for row in companies if row["outreach_status"] == params["outreach_status"]]
+                total = len(companies)
+                if "page" in params or "page_size" in params:
+                    try:
+                        page = max(1, int(params.get("page", "1")))
+                        page_size = max(1, min(100, int(params.get("page_size", "50"))))
+                    except ValueError:
+                        self._json({"error": "page and page_size must be integers"}, 400)
+                        return
+                    companies = companies[(page - 1) * page_size:page * page_size]
+                else:
+                    page, page_size = 1, total
+                self._json({"companies": companies, "total": total, "page": page, "page_size": page_size})
                 return
             if parsed.path.startswith("/api/companies/"):
                 try:
@@ -81,7 +118,85 @@ def make_handler(data: dict):
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
-            self._json({"error": "Demo server is read-only; simulated events stay in browser memory"}, 405)
+            if campaign_store is None:
+                self._json({"error": "Demo server is read-only; campaign persistence is not enabled"}, 405)
+                return
+            try:
+                origin = self.headers.get("Origin")
+                fetch_site = self.headers.get("Sec-Fetch-Site", "same-origin")
+                if (origin and (urlparse(origin).scheme != "http" or urlparse(origin).netloc != self.headers.get("Host"))) or fetch_site in {"cross-site", "same-site"}:
+                    self._json({"error": "Cross-origin demo mutations are not allowed"}, 403)
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 1 or length > 128_000:
+                    self._json({"error": "Request body must be between 1 and 128000 bytes"}, 400)
+                    return
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError("JSON object required")
+                parsed = urlparse(self.path)
+                if parsed.path == "/api/campaigns":
+                    company_ids = body.get("company_ids", [])
+                    if body.get("all_matching") is True:
+                        params = body.get("filters") or {}
+                        if not isinstance(params, dict):
+                            raise ValueError("filters must be a JSON object")
+                        rows = filter_companies(data, {k: str(v) for k, v in params.items() if v})
+                        outreach_filter = params.get("outreach_status")
+                        states = campaign_store.company_states()
+                        if outreach_filter:
+                            rows = [row for row in rows if states.get(row["id"], "NO_CAMPAIGN_HISTORY") == outreach_filter]
+                        company_ids = [row["id"] for row in rows]
+                    result = campaign_store.create(data, body.get("name", ""), company_ids)
+                    self._json(result, 201)
+                    return
+                if parsed.path == "/api/demo/interest":
+                    self._json(campaign_store.submit_demo_interest(body.get("form_token", ""), body))
+                    return
+                if parsed.path == "/api/demo/form-open":
+                    self._json(campaign_store.open_demo_form(body.get("form_token", "")))
+                    return
+                if parsed.path == "/api/demo/emergency-stop":
+                    self._json(campaign_store.global_emergency_stop(bool(body.get("enabled", True))))
+                    return
+                if parsed.path.startswith("/api/demo/submissions/"):
+                    parts = parsed.path.strip("/").split("/")
+                    if len(parts) != 5 or parts[4] not in {"review", "handoff"}:
+                        self._json({"error": "Unknown simulated-submission action"}, 404)
+                        return
+                    submission_id = int(parts[3])
+                    result = (campaign_store.review_demo_submission(submission_id) if parts[4] == "review"
+                              else campaign_store.begin_demo_handoff(submission_id))
+                    self._json(result)
+                    return
+                parts = parsed.path.strip("/").split("/")
+                if len(parts) >= 3 and parts[:2] == ["api", "campaigns"]:
+                    campaign_id = parts[2]
+                    action = parts[3] if len(parts) > 3 else ""
+                    if action == "approve":
+                        result = campaign_store.approve_demo(campaign_id)
+                    elif action == "status":
+                        result = campaign_store.set_status(campaign_id, body.get("status", ""))
+                    elif action == "simulate-batch":
+                        outcomes = body.get("outcomes") or {}
+                        if not isinstance(outcomes, dict):
+                            raise ValueError("outcomes must be a company-ID mapping")
+                        result = campaign_store.simulate_batch(campaign_id, body.get("limit", 10),
+                                                               {int(key): value for key, value in outcomes.items()})
+                    elif action == "emergency-stop":
+                        result = campaign_store.emergency_stop(campaign_id)
+                    elif action == "responses":
+                        result = campaign_store.record_response(campaign_id, int(body["company_id"]), body.get("response", ""))
+                    else:
+                        self._json({"error": "Unknown campaign action"}, 404)
+                        return
+                    self._json(result)
+                    return
+                self._json({"error": "No live delivery or form-submission route exists"}, 405)
+            except KeyError as exc:
+                self._json({"error": f"Missing or unknown value: {exc}"}, 404)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self._json({"error": str(exc)}, 400)
 
         def log_message(self, fmt: str, *args: object) -> None:
             return
@@ -94,13 +209,14 @@ def serve(host: str = "127.0.0.1", port: int = 8765, db: Path = DEFAULT_DB,
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("Professor dashboard may only bind to loopback")
     data = load_dashboard_data(db, verification, delivery)
-    server = ThreadingHTTPServer((host, port), make_handler(data))
+    campaign_store = CampaignStore(DEFAULT_CAMPAIGN_DB)
+    server = ThreadingHTTPServer((host, port), make_handler(data, campaign_store))
     print(f"GEO RESEARCH OUTREACH — DEMO MODE — http://127.0.0.1:{port}")
-    print(f"Loaded {data['summary']['total_companies']} companies read-only. Ctrl+C stops the local dashboard.")
+    print(f"Loaded {data['summary']['total_companies']} companies read-only; DEMO campaign events persist in {DEFAULT_CAMPAIGN_DB.name}. Ctrl+C stops the local dashboard.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nDashboard stopped; no simulated event was persisted.")
+        print("\nDashboard stopped. No real delivery or form submission occurred.")
     finally:
         server.server_close()
 

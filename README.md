@@ -235,7 +235,19 @@ It is limited to 100 companies per invocation and batches of at most 25. It make
 
 ## Phase 5B professor dashboard
 
-Start the read-only local dashboard with `uv run python scripts/phase5b_dashboard.py`, then open [http://127.0.0.1:8765](http://127.0.0.1:8765). It explores the actual 537-company experimental cohort, saved qualification/contact evidence, and Phase 5A simulation counts. Interactive drafts and delivery/response/handoff events stay in browser memory. The server binds to loopback, opens the Phase 4F database read-only, rejects HTTP writes, and makes no company website requests. It requires no provider credentials or frontend build. The full walkthrough and safety boundaries are in [`docs/phase5b_professor_dashboard.md`](docs/phase5b_professor_dashboard.md).
+Start the local dashboard with `uv run python scripts/phase5b_dashboard.py`, then open [http://127.0.0.1:8765](http://127.0.0.1:8765). It explores the actual 537-company experimental cohort and saved qualification/contact evidence. Phase 5D adds persistent DEMO-only campaign records in a separate ignored SQLite sidecar; the Phase 4F cohort remains read-only. There is no email provider, real-send route, public form endpoint, or company website request. See [`docs/phase5b_professor_dashboard.md`](docs/phase5b_professor_dashboard.md) and [`docs/phase5d_campaign_manager.md`](docs/phase5d_campaign_manager.md).
+
+## Phase 5D campaign manager and reusable interest-form demo
+
+Seed/resume the reproducible 20-company professor scenario and generate its two review CSV exports:
+
+```sh
+uv run python scripts/phase5d_campaign_demo.py seed --count 20
+```
+
+The scenario uses 20 actual verified/eligible cohort companies with suitable saved first-party channels: 19 email drafts and one contact-form draft held in a separate manual review queue. It records only explicitly synthetic DEMO deliveries, failures/retries, responses, one interest form, demo review, and follow-up handoff. Expected first-run summary shape: `companies=20 drafts=20 simulated_deliveries=19 simulated_failures=2 simulated_submissions=1 real_sends=0 real_form_submissions=0 formal_consents=0`. Start the dashboard with the Phase 5B command above to inspect campaigns, history, drafts, and analytics.
+
+To re-export the unchanged sidecar state, run `uv run python scripts/phase5d_campaign_demo.py export`; exports are stable across repeated runs. The generated files are [`data/phase5d_demo_campaign_summary.csv`](data/phase5d_demo_campaign_summary.csv) and [`data/phase5d_demo_outreach_status.csv`](data/phase5d_demo_outreach_status.csv). To reset only one demo campaign, pass its printed ID to `uv run python scripts/phase5d_campaign_demo.py reset --campaign-id <campaign-id>`. This never resets company or human-review data. The dashboard uses only reserved `.invalid` demo URLs and all campaign/form states remain explicitly simulated. Sender, institution, study description, privacy notice, and real form settings remain unset. See [`docs/phase5d_professor_demo_walkthrough.md`](docs/phase5d_professor_demo_walkthrough.md) for a five-minute script and exact expectations.
 
 ## Qualification and review
 

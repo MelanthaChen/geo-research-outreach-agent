@@ -24,7 +24,7 @@
         <li><span class="step-number">2</span><div><strong>Review GEO fit</strong><small>Reasons and evidence</small></div></li>
         <li><span class="step-number">3</span><div><strong>Inspect contact</strong><small>Saved email or form</small></div></li>
         <li><span class="step-number">4</span><div><strong>Preview invitation</strong><small>Always marked NOT SENT</small></div></li>
-        <li><span class="step-number">5</span><div><strong>Simulate response</strong><small>Browser-only demo</small></div></li>
+        <li><span class="step-number">5</span><div><strong>Simulate response</strong><small>Saved local demo events</small></div></li>
       </ol>
     </section>
     <section class="overview-section" aria-labelledby="overview-title">
@@ -47,9 +47,11 @@
           <select id="geo"><option value="">All GEO opportunity</option></select>
           <select id="priority"><option value="">All priorities</option></select>
           <select id="channel"><option value="">All contact coverage</option><option value="HAS_SUITABLE_CHANNEL">Suitable channel</option><option value="NO_SUITABLE_CHANNEL">No suitable channel</option></select>
+          <select id="outreach-status"><option value="">All outreach history</option><option value="NO_CAMPAIGN_HISTORY">No campaign history</option><option value="DEMO_CAMPAIGNED">In a demo campaign</option><option value="SIMULATED_DELIVERED">Simulated delivery recorded</option></select>
         </div>
         <p id="company-list-help" class="visually-hidden">Select a company to view its qualification evidence and contact details.</p>
         <div id="company-rows" class="company-list" role="listbox" aria-label="Companies" aria-describedby="company-list-help"></div>
+        <div class="list-pagination"><button class="button outline" id="company-prev" disabled>Previous</button><span id="company-page" aria-live="polite"></span><button class="button outline" id="company-next" disabled>Next</button></div>
         <p class="table-footnote">Saved contact details are research evidence—not permission to contact. No company websites are opened by this dashboard.</p>
       </div>
       <aside class="detail-column">
@@ -69,6 +71,20 @@
           <div class="safety-note"><span>⛨</span><p><strong>No real delivery path.</strong> No provider, SMTP, form submit, or external site request is available. Human approvals remain unchanged.</p></div>
         </section>
       </aside>
+    </section>
+    <section class="campaign-manager panel" id="campaign-manager" aria-labelledby="campaign-manager-title">
+      <div class="section-head"><div><p class="eyebrow">PHASE 5D · PERSISTENT DEMO CAMPAIGNS</p><h2 id="campaign-manager-title">Campaign workspace</h2><p class="section-help">Use the company filters above, then create a campaign from every matching company—including results beyond the visible list.</p></div><span class="mini-tag">DEMO TRANSPORT ONLY</span></div>
+      <div class="campaign-create-row">
+        <label class="field-label" for="campaign-name">Campaign name</label>
+        <input id="campaign-name" type="text" maxlength="120" value="Professor walkthrough — DEMO ONLY">
+        <button class="button primary" id="create-campaign-button">Create from filtered companies</button>
+      </div>
+      <button class="button outline" id="global-stop-button">Stop all DEMO campaign processing</button>
+      <small id="global-stop-state" class="section-help">No live delivery exists. The stop control pauses only local simulated batches.</small>
+      <p class="campaign-safety">The campaign database is a separate local sidecar. Source qualifications and human review states are never changed. No email provider, live send, public signup endpoint, or real form submission is available.</p>
+      <div class="campaign-analytics" id="campaign-analytics" aria-live="polite"></div>
+      <div class="campaign-list" id="campaign-list"><p>Loading saved demo campaigns…</p></div>
+      <div class="campaign-detail" id="campaign-detail"><p>Select a saved campaign to inspect drafts, exclusions, the separate contact-form review queue, and simulated history.</p></div>
     </section>
     <footer><span>GEO Research Outreach Agent</span><span>Read-only cohort · local demo · no company website requests</span></footer>
   </main>

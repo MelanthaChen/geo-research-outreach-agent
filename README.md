@@ -249,6 +249,10 @@ The scenario uses 20 actual verified/eligible cohort companies with suitable sav
 
 To re-export the unchanged sidecar state, run `uv run python scripts/phase5d_campaign_demo.py export`; exports are stable across repeated runs. The generated files are [`data/phase5d_demo_campaign_summary.csv`](data/phase5d_demo_campaign_summary.csv) and [`data/phase5d_demo_outreach_status.csv`](data/phase5d_demo_outreach_status.csv). To reset only one demo campaign, pass its printed ID to `uv run python scripts/phase5d_campaign_demo.py reset --campaign-id <campaign-id>`. This never resets company or human-review data. The dashboard uses only reserved `.invalid` demo URLs and all campaign/form states remain explicitly simulated. Sender, institution, study description, privacy notice, and real form settings remain unset. See [`docs/phase5d_professor_demo_walkthrough.md`](docs/phase5d_professor_demo_walkthrough.md) for a five-minute script and exact expectations.
 
+### Phase 5E multi-page dashboard
+
+Run `uv run python scripts/phase5b_dashboard.py --host 127.0.0.1 --port 8765` and open `http://127.0.0.1:8765`. The local dashboard has separate Overview, Companies, Campaigns, Interest Form, Responses, Analytics, and Settings views. Company search/filter/pagination and evidence details remain available; selected companies can be kept across pages and added to a campaign. The Interest Form view accepts only a token from an existing test-delivered campaign and stores submissions in the isolated campaign sidecar. Responses and analytics are sourced from saved records and mark test activity separately. No real delivery, external company-site access, public form endpoint, or real form submission is available. See [`docs/phase5e_multipage_dashboard.md`](docs/phase5e_multipage_dashboard.md) for page behavior and validation commands.
+
 ## Qualification and review
 
 Machine output contains:

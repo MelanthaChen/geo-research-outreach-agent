@@ -1,4 +1,4 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, selectedId: null, detail: null, summary: null, participationFormUrl: "", formConfiguration: {}, draft: null, delivered: false, responseRecorded: false };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, draft: null, delivered: false, responseRecorded: false };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
@@ -47,17 +47,31 @@ function renderSummary(summary) {
     ["Saved simulated signup handoffs", outreach.simulated_handoff_events],
     ["Real outreach records", outreach.real_outreach_records],
   ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
-  $("distributions").innerHTML = [
+  const distributionHTML = [
     distCard("WEBSITE IDENTITY", summary.website_verification, summary.total_companies),
     distCard("ELIGIBILITY", summary.eligibility, summary.total_companies),
     distCard("GEO OPPORTUNITY", summary.geo_opportunity, summary.total_companies),
     distCard("RESEARCH PRIORITY", summary.research_priority, summary.total_companies),
+    distCard("CONTACT-CHANNEL COVERAGE", summary.contact_channel_coverage, summary.total_companies),
+  ].join("");
+  $("distributions").innerHTML = distributionHTML;
+  $("overview-distributions").innerHTML = [
+    distCard("ELIGIBILITY", summary.eligibility, summary.total_companies),
+    distCard("GEO OPPORTUNITY", summary.geo_opportunity, summary.total_companies),
   ].join("");
   setOptions("source", summary.filters.sources);
   setOptions("verification", summary.filters.website_verification);
   setOptions("eligibility", summary.filters.eligibility);
   setOptions("geo", summary.filters.geo_opportunity);
   setOptions("priority", summary.filters.research_priority);
+  renderSettings(state.formConfiguration);
+  const requiredFormConfig=["study_description","privacy_notice","research_contact_email","participation_interest_form_url"];
+  const missingFormConfig=requiredFormConfig.filter((key)=>!state.formConfiguration[key]||state.formConfiguration[key]==="Not configured");
+  $("form-config-status").textContent = `${missingFormConfig.length ? `${missingFormConfig.length} form configuration item(s) incomplete` : "Form configuration complete"}. Study description: ${state.formConfiguration.study_description || "Not configured"} · Research contact: ${state.formConfiguration.research_contact_email || "Not configured"}`;
+}
+function renderSettings(config) {
+  const fields = [["Researcher name",config.researcher_name],["Research team",config.research_team],["University affiliation",config.university_affiliation],["Research contact email",config.research_contact_email],["Sender name",config.sender_name],["Sender email",config.sender_email],["Unified interest form URL",config.participation_interest_form_url],["Delivery mode",config.delivery_mode || "TEST TRANSPORT"],["Sending limit",config.daily_limit],["Reply-to",config.reply_to]];
+  $("settings-grid").innerHTML = fields.map(([label,value]) => `<div class="setting-item"><span>${esc(label)}</span><strong>${esc(value || "Not configured")}</strong></div>`).join("");
 }
 function pill(value) { return `<span class="pill ${pillClass(value)}">${esc(compact(value))}</span>`; }
 function renderCompanies(rows) {
@@ -68,11 +82,12 @@ function renderCompanies(rows) {
   $("company-page").textContent = state.totalCompanies ? `Showing ${first}–${last} of ${state.totalCompanies} · page ${state.page}` : "No matching companies";
   $("company-prev").disabled = state.page <= 1;
   $("company-next").disabled = last >= state.totalCompanies;
-  $("company-rows").innerHTML = rows.map((row) => `<button type="button" role="option" data-id="${row.id}" aria-selected="${row.id === state.selectedId}" class="company-row${row.id === state.selectedId ? " selected" : ""}"><span class="company-main"><span class="company-name">${esc(row.company_name)}</span><span class="company-url">${esc(websiteDomain(row.website))}</span></span><span class="company-status"><span class="company-status-label">Priority</span>${pill(row.research_priority)}<span class="company-status-label">Website</span>${pill(row.identity_verification_status)}</span></button>`).join("") || `<div class="no-results" role="status">No companies match the selected filters.</div>`;
-  document.querySelectorAll("#company-rows .company-row[data-id]").forEach((row) => {
-    row.addEventListener("click", () => selectCompany(Number(row.dataset.id)));
-  });
+  $("company-rows").innerHTML = rows.map((row) => `<div role="option" data-option="${row.id}" aria-selected="${row.id === state.selectedId}" class="company-row${row.id === state.selectedId ? " selected" : ""}"><input type="checkbox" aria-label="Select ${esc(row.company_name)} for a campaign" data-select-id="${row.id}" ${state.selectedIds.has(row.id) ? "checked" : ""}><button type="button" data-id="${row.id}" class="company-choice"><span class="company-main"><span class="company-name">${esc(row.company_name)}</span><span class="company-url">${esc(websiteDomain(row.website))}</span></span><span class="company-status"><span class="company-status-label">Priority</span>${pill(row.research_priority)}<span class="company-status-label">Website</span>${pill(row.identity_verification_status)}</span></button></div>`).join("") || `<div class="no-results" role="status">No companies match the selected filters.</div>`;
+  document.querySelectorAll("#company-rows [data-id]").forEach((row) => row.addEventListener("click", () => selectCompany(Number(row.dataset.id))));
+  document.querySelectorAll("#company-rows [data-select-id]").forEach((box) => box.addEventListener("change", () => { const id=Number(box.dataset.selectId); if(box.checked)state.selectedIds.add(id);else state.selectedIds.delete(id); updateSelectedCount(); }));
+  updateSelectedCount();
 }
+function updateSelectedCount(){const host=$("selected-count");if(host)host.textContent=`${state.selectedIds.size} selected`;}
 async function reloadCompanies() {
   const filterKey = JSON.stringify(state.filters);
   const filtersChanged = filterKey !== state.lastFilterKey;
@@ -179,6 +194,14 @@ function recordResponse() {
     addEvent("SIMULATED DECLINED INVITATION", "Fixture action only. No actual company response or human review state is recorded.");
     return;
   }
+  if (response === "OPTED_OUT") {
+    addEvent("SIMULATED OPT-OUT", "Test record only. The real suppression registry and company records were not changed.");
+    return;
+  }
+  if (response === "MORE_INFO") {
+    addEvent("SIMULATED MORE-INFORMATION REQUEST", "Test recipient requested more information. No actual company response or follow-up message exists.");
+    return;
+  }
   addEvent("SIMULATED FORM OPENED", `${state.participationFormUrl || "https://research.example.invalid/participation-interest"}. No external page or network request was opened.`);
   addEvent("SIMULATED INTEREST SUBMITTED", "Demo event only—not a Google Form submission. It records interest in learning more, not research consent or a commitment to participate.");
   const review = document.createElement("button"); review.className = "button outline"; review.textContent = "Review simulated interest submission";
@@ -203,11 +226,16 @@ function wireFilters() {
   $("deliver-button").addEventListener("click", simulateDelivery);
   $("response-button").addEventListener("click", recordResponse);
   $("create-campaign-button").addEventListener("click", createCampaign);
+  $("select-all-matching").addEventListener("change", async (event)=>{if(!event.target.checked){state.selectedIds.clear();await reloadCompanies();return;}const query=new URLSearchParams(state.filters);const result=await api(`/api/companies?${query.toString()}`);result.companies.forEach((company)=>state.selectedIds.add(company.id));await reloadCompanies();});
+  $("add-selected-link").addEventListener("click",()=>{if(state.selectedIds.size){const name=$("campaign-name");if(name)name.value=`Selected companies · ${state.selectedIds.size}`;}});
+  $("form-token-select").addEventListener("change",()=>loadSelectedToken().catch(showError));
+  $("submit-local-interest").addEventListener("click",()=>submitLocalInterest().catch(showError));
 }
 let selectedCampaignId = null;
 let campaignMetricFilter = "all";
 async function loadCampaignWorkspace() {
   const [campaignResult, analytics] = await Promise.all([api("/api/campaigns"), api("/api/campaign-analytics")]);
+  state.campaignSummaries=campaignResult.campaigns;
   $("campaign-analytics").innerHTML = [
     ["Saved campaigns", analytics.campaigns], ["Company history rows", analytics.company_items],
     ["Drafts", analytics.drafts], ["Contact-form review queue", analytics.form_channel_review_queue],
@@ -228,10 +256,48 @@ async function loadCampaignWorkspace() {
   $("campaign-list").innerHTML = campaigns.length ? campaigns.map((campaign) => `<div class="campaign-card${campaign.id === selectedCampaignId ? " selected" : ""}"><button type="button" data-campaign="${esc(campaign.id)}"><strong>${esc(campaign.name)}</strong><small>${esc(campaign.status)} · ${campaign.company_count} companies · ${campaign.simulated_deliveries} simulated deliveries</small></button></div>`).join("") : "<p>No saved campaigns match this metric. Real sends remain disabled.</p>";
   document.querySelectorAll("[data-metric]").forEach((button) => button.addEventListener("click", () => { campaignMetricFilter = button.dataset.metric; loadCampaignWorkspace().catch(showError); }));
   document.querySelectorAll("[data-campaign]").forEach((button) => button.addEventListener("click", () => showCampaign(button.dataset.campaign).catch(showError)));
+  renderRecentActivity(campaignResult.campaigns);
+  await renderResponses(campaignResult.campaigns);
+  renderAnalytics(analytics, campaignResult.campaigns);
+  await renderFormTokens(campaignResult.campaigns);
+}
+async function renderFormTokens(campaigns){const select=$("form-token-select");if(!select)return;const current=select.value;select.replaceChildren(new Option("Select a delivered test invitation",""));const submissions=[];for(const campaign of campaigns){const detail=await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`);detail.items.filter(item=>item.demo_token && item.delivery_status==="SIMULATED_DELIVERED").forEach(item=>{const option=new Option(`${item.company_name} · ${campaign.name}`,JSON.stringify({token:item.demo_token,campaign_id:campaign.id,company_id:item.company_id,company_name:item.company_name,website:item.website}));select.append(option);});detail.interest_submissions.forEach(submission=>submissions.push({company:detail.items.find(item=>item.company_id===submission.company_id)?.company_name || `Company #${submission.company_id}`,interest:submission.interest,status:submission.review_status,at:submission.submitted_at}));}if([...select.options].some(option=>option.value===current))select.value=current;$("form-submission-status").innerHTML=submissions.length?submissions.map(item=>`<div class="activity-row"><div><strong>${esc(item.company)}</strong><small>${esc(compact(item.interest))} · ${esc(item.at)}</small></div><span class="test-label">${esc(compact(item.status))}</span></div>`).join(""):`<div class="response-empty">No test interest submissions recorded.</div>`;}
+async function loadSelectedToken(){const option=$("form-token-select").value;if(!option)return;const token=JSON.parse(option);await apiWrite("/api/demo/form-open",{form_token:token.token});$("local-interest-form").dataset.token=token.token;$("local-interest-form").dataset.company=token.company_name;$("local-interest-form").dataset.website=token.website;$("local-form-status").textContent=`Local form opened for ${token.company_name}. Test event only.`;const name=document.querySelector('[data-interest-field="company_name"]');const website=document.querySelector('[data-interest-field="website"]');name.value=token.company_name;website.value=token.website;}
+async function submitLocalInterest(){const host=$("local-interest-form");const token=host.dataset.token;if(!token){$("local-form-status").textContent="Select a delivered test invitation first.";return;}const values={};host.querySelectorAll("[data-interest-field]").forEach((field)=>values[field.dataset.interestField]=field.value);const result=await apiWrite("/api/demo/interest",{...values,form_token:token});$("local-form-status").textContent=`${result.status} · TEST record saved · formal consent: NO`;await loadCampaignWorkspace();}
+function renderRecentActivity(campaigns) {
+  $("recent-activity").innerHTML = campaigns.slice(0,5).map((campaign) => `<div class="activity-row"><div><strong>${esc(campaign.name)}</strong><small>${esc(campaign.company_count)} companies · ${esc(campaign.status)}</small></div><span class="activity-status">${esc(campaign.simulated_deliveries)} TEST SENT</span></div>`).join("") || `<div class="response-empty">No campaigns created yet. Create one to begin a test workflow.</div>`;
+}
+async function renderResponses(campaigns) {
+  const responses = [];
+  state.campaignDetails = {};
+  for (const campaign of campaigns) {
+    try {
+      const detail = await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`);
+      state.campaignDetails[campaign.id]=detail;
+      detail.items.forEach((item) => {
+        if (item.response_status || item.interest_status || item.delivery_status === "SIMULATED_DELIVERED") responses.push({company:item.company_name,campaign:campaign.name,response:item.response_status || "NO RESPONSE RECORDED",status:item.interest_status || item.delivery_status,time:item.updated_at || "",simulated:true});
+      });
+      detail.interest_submissions.forEach((item) => responses.push({company:detail.items.find((row)=>row.company_id===item.company_id)?.company_name || `Company #${item.company_id}`,campaign:campaign.name,response:item.interest,status:item.review_status,time:item.submitted_at || "",simulated:true}));
+    } catch (error) { console.warn("Could not load campaign response history", error); }
+  }
+  const q = ($("response-search")?.value || "").toLowerCase().trim();
+  const filtered = responses.filter((row) => `${row.company} ${row.campaign} ${row.response}`.toLowerCase().includes(q));
+  $("response-table").innerHTML = filtered.length ? `<div class="response-row head"><div>Company</div><div>Campaign</div><div>Outcome</div><div>Source</div></div>${filtered.map((row)=>`<div class="response-row"><div><strong>${esc(row.company)}</strong><small>${esc(row.time)}</small></div><div>${esc(row.campaign)}</div><div>${esc(compact(row.response))}<small>${esc(compact(row.status))}</small></div><div class="test-label">TEST RECORD</div></div>`).join("")}` : `<div class="response-empty">${q ? "No response records match this search." : "No recorded responses or interest submissions yet. Sent invitations are not counted as responses."}</div>`;
+}
+function renderAnalytics(analytics,campaigns) {
+  const selector=$("analytics-campaign-filter");const selected=selector.value;selector.replaceChildren(new Option("All campaigns",""),...campaigns.map(c=>new Option(c.name,c.id)));selector.value=selected;
+  const scoped=selected?campaigns.filter(c=>c.id===selected):campaigns;
+  let drafts=0,queued=0,deliveries=0,failures=0,responses=0,submissions=0,handoffs=0;
+  scoped.forEach(c=>{const detail=state.campaignDetails[c.id];drafts+=c.draft_count;deliveries+=c.simulated_deliveries;failures+=c.simulated_failures;responses+=c.simulated_response_count;submissions+=c.interest_submission_count;const counts=c.item_counts||{};queued+=counts.DRAFT_REVIEW||0;if(detail)handoffs+=detail.interest_submissions.filter(row=>row.handoff_status&&row.handoff_status!=="NOT_STARTED").length;});
+  $("analytics-detail").innerHTML = [["Drafts",selected?drafts:analytics.drafts], ["Queued invitations",queued], ["Test deliveries",selected?deliveries:analytics.simulated_delivery_events], ["Test delivery failures",selected?failures:analytics.simulated_failure_events], ["Test responses",selected?responses:Object.values(analytics.responses || {}).reduce((sum,value)=>sum+value,0)], ["Interest submissions",selected?submissions:analytics.simulated_submissions], ["Research handoffs",handoffs], ["Real sends",analytics.real_sends]].map(([name,value])=>`<div class="campaign-stat"><strong>${esc(value ?? 0)}</strong><span>${esc(name)}</span></div>`).join("");
+  $("analytics-campaigns").innerHTML = scoped.map((campaign)=>`<div class="campaign-card"><strong>${esc(campaign.name)}</strong><small>${esc(campaign.company_count)} companies · ${esc(campaign.simulated_deliveries)} test deliveries · ${esc(campaign.simulated_response_count)} responses</small></div>`).join("") || `<p class="response-empty">Campaign analytics will appear here when campaigns exist.</p>`;
+  const interested=Object.entries(analytics.responses||{}).filter(([key])=>key.includes("INTERESTED")).reduce((total,[,count])=>total+count,0);const declined=Object.entries(analytics.responses||{}).filter(([key])=>key.includes("DECLINED")).reduce((total,[,count])=>total+count,0);
+  $("overview-campaign-metrics").innerHTML=[["Campaigns created",analytics.campaigns],["Test invitations sent",analytics.simulated_delivery_events],["Test responses",Object.values(analytics.responses||{}).reduce((a,b)=>a+b,0)],["Interested · test",interested],["Declined · test",declined],["Pending company reviews",state.summary?.pending_human_reviews?.companies||0]].map(([label,value])=>`<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
 }
 async function createCampaign() {
   if (!state.totalCompanies) { showError(new Error("No companies match the filters.")); return; }
-  const result = await apiWrite("/api/campaigns", {name:$("campaign-name").value, all_matching:true, filters:state.filters});
+  const payload=state.selectedIds.size?{name:$("campaign-name").value,company_ids:[...state.selectedIds]}:{name:$("campaign-name").value,all_matching:true,filters:state.filters};
+  const result = await apiWrite("/api/campaigns", payload);
   selectedCampaignId = result.id;
   await loadCampaignWorkspace();
   await showCampaign(result.id);
@@ -249,7 +315,7 @@ async function showCampaign(campaignId) {
   const items = campaign.items.map((item) => {
     const draft = item.draft;
     const preview = draft ? `<details><summary>Inspect ${item.channel_type === "CONTACT_FORM" ? "contact-form draft" : "email draft"} · NOT SENT</summary><p><strong>${esc(draft.recipient || item.form_url || "No recipient")}</strong></p><p><strong>${esc(draft.subject || "Contact-form message")}</strong></p><pre>${esc(draft.body || "")}</pre><p>Participation URL: ${esc(item.form_url)} · token expires ${esc(item.token_expires_at || "")}</p><p>Source contact review remains ${esc(item.contact_review_status)}. Campaign approval is DEMO-only.</p></details>` : "";
-    const response = item.delivery_status === "SIMULATED_DELIVERED" ? `<div class="campaign-toolbar"><label>Simulated response<select data-response="${item.company_id}"><option value="INTERESTED">Interested</option><option value="DECLINED">Declined</option><option value="UNANSWERED">No response</option></select></label><button class="button outline" data-record-response="${item.company_id}">Record DEMO response</button></div>` : "";
+    const response = item.delivery_status === "SIMULATED_DELIVERED" ? `<div class="campaign-toolbar"><label>Test response<select data-response="${item.company_id}"><option value="INTERESTED">Interested</option><option value="MORE_INFO">More information requested</option><option value="DECLINED">Declined</option><option value="UNANSWERED">No response</option><option value="OPTED_OUT">Opted out (test only)</option></select></label><button class="button outline" data-record-response="${item.company_id}">Record test response</button></div>` : "";
     const form = item.delivery_status === "SIMULATED_DELIVERED" && item.demo_token ? `<details><summary>Open safe local demo participation form</summary><p>SIMULATED ONLY. Interest is not consent; data stays in the local campaign sidecar. No public form endpoint exists.</p><p>Study description: ${esc(state.formConfiguration.study_description || "Not configured")}<br>Privacy notice: ${esc(state.formConfiguration.privacy_notice || "Not configured")}</p><button class="button outline" data-form-open="${item.company_id}" data-token="${esc(item.demo_token)}">Record SIMULATED form open</button><div class="field-row"><input aria-label="Company name" data-form="company_name" value="${esc(item.company_name)}"><input aria-label="Website" data-form="website" value="${esc(item.website)}"><input aria-label="Contact name" data-form="contact_name" placeholder="Contact name"><input aria-label="Contact role" data-form="contact_role" placeholder="Role"><input aria-label="Business email" data-form="business_email" placeholder="you@company.com"><select aria-label="Interest choice" data-form="interest"><option value="INTERESTED">Interested</option><option value="MORE_INFO">More information</option><option value="NOT_INTERESTED">Not interested</option></select></div><textarea aria-label="Questions" data-form="questions" placeholder="Optional questions"></textarea><button class="button outline" data-submit-interest="${item.company_id}" data-token="${esc(item.demo_token)}">Submit SIMULATED interest</button></details>` : "";
     return `<article class="campaign-item"><div class="campaign-item-head"><strong>${esc(item.company_name)} · #${item.company_id}</strong>${pill(item.delivery_status)}</div><div class="campaign-item-meta">${esc(item.website)} · ${esc(item.channel_type || "No channel")} · ${esc(item.recipient || item.form_url || "")}</div><div class="campaign-item-meta">Queue: ${esc(item.item_status)} · Identity: ${esc(item.identity_status)} · Eligibility: ${esc(item.qualification_status)} · Contact review: ${esc(item.contact_review_status)}</div>${preview}${response}${form}${item.last_error ? `<div class="campaign-event">${esc(item.last_error)}</div>` : ""}</article>`;
   }).join("");
@@ -275,14 +341,29 @@ async function runCampaignAction(campaignId, action) {
   if (action === "stop") await apiWrite(`/api/campaigns/${campaignId}/emergency-stop`, {demo_only:true});
   await loadCampaignWorkspace(); await showCampaign(campaignId);
 }
-function showError(error) { $("result-count").textContent = "DATA LOAD ERROR"; $("result-count").title = error.message; }
+function showError(error) { const host = $("app-error"); host.hidden = false; host.textContent = `Unable to load this view: ${error.message}`; }
+const pages = ["overview","companies","campaigns","interest-form","responses","analytics","settings"];
+function navigate() {
+  const requested = location.hash.slice(1) || "overview";
+  const page = pages.includes(requested) ? requested : "overview";
+  document.querySelectorAll("[data-view]").forEach((view)=>{view.hidden=view.dataset.view!==page;});
+  document.querySelectorAll("[data-page]").forEach((link)=>{const active=link.dataset.page===page;link.classList.toggle("active",active);if(active)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
+  document.title = `${page.replaceAll("-"," ").replace(/\b\w/g,(c)=>c.toUpperCase())} · GEO Research Outreach`;
+  if(page==="responses") renderResponsesFromApi().catch(showError);
+}
+async function renderResponsesFromApi(){const campaigns=(await api("/api/campaigns")).campaigns;await renderResponses(campaigns);}
 async function start() {
   wireFilters();
   const result = await api("/api/summary");
   state.summary = result.summary; state.participationFormUrl = result.simulated_signup_url || "https://research.example.invalid/participation-interest";
   state.formConfiguration = result.participation_form_configuration || {};
+  renderSettings(state.formConfiguration);
   renderSummary({...result.summary, filters: result.filters});
   await reloadCompanies();
   await loadCampaignWorkspace();
+  navigate();
 }
+window.addEventListener("hashchange",navigate);
+$("response-search").addEventListener("input",()=>renderResponsesFromApi().catch(showError));
+$("analytics-campaign-filter").addEventListener("change",()=>api("/api/campaign-analytics").then(result=>renderAnalytics(result,state.campaignSummaries)).catch(showError));
 start().catch(showError);

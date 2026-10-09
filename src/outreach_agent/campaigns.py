@@ -393,8 +393,8 @@ class CampaignStore:
 
     def record_response(self, campaign_id: str, company_id: int, response: str) -> dict[str, Any]:
         response = response.upper()
-        if response not in {"INTERESTED", "DECLINED", "UNANSWERED"}:
-            raise ValueError("Response must be INTERESTED, DECLINED, or UNANSWERED")
+        if response not in {"INTERESTED", "MORE_INFO", "DECLINED", "UNANSWERED", "OPTED_OUT"}:
+            raise ValueError("Response must be INTERESTED, MORE_INFO, DECLINED, UNANSWERED, or OPTED_OUT")
         with self.connect() as db:
             item = db.execute("SELECT id,delivery_status FROM campaign_items WHERE campaign_id=? AND company_id=?", (campaign_id, company_id)).fetchone()
             if not item:
@@ -403,8 +403,8 @@ class CampaignStore:
                 raise ValueError("A simulated response requires a simulated delivery")
             now = _now()
             db.execute("UPDATE campaign_items SET response_status=?,interest_status=?,updated_at=? WHERE id=?",
-                       ("SIMULATED_" + response, "INTEREST_REPORTED" if response == "INTERESTED" else "NO_INTEREST_RECORDED", now, item["id"]))
-            self._audit(db, campaign_id, "SIMULATED_RECIPIENT_RESPONSE", {"response": response, "real_response": False}, int(item["id"]))
+                       ("SIMULATED_" + response, "INTEREST_REPORTED" if response in {"INTERESTED", "MORE_INFO"} else "NO_INTEREST_RECORDED", now, item["id"]))
+            self._audit(db, campaign_id, "SIMULATED_RECIPIENT_RESPONSE", {"response": response, "real_response": False, "suppression_registry_changed": False}, int(item["id"]))
         return self.get(campaign_id)
 
     def submit_demo_interest(self, token: str, values: dict[str, Any]) -> dict[str, Any]:

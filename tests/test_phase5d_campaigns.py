@@ -160,6 +160,20 @@ def test_campaign_pause_resume_preserves_persisted_queue_and_approval(tmp_path):
     assert final["campaign"]["simulated_deliveries"] == 1
 
 
+def test_test_response_statuses_include_more_info_and_opt_out_without_real_suppression(tmp_path):
+    data, _ = cohort_fixture(tmp_path)
+    store = CampaignStore(tmp_path / "campaigns.db")
+    campaign = store.create(data, "Responses TEST", [1])
+    store.approve_demo(campaign["id"])
+    store.simulate_batch(campaign["id"])
+    for outcome in ("MORE_INFO", "OPTED_OUT", "DECLINED", "UNANSWERED"):
+        result = store.record_response(campaign["id"], 1, outcome)
+        assert result["items"][0]["response_status"] == f"SIMULATED_{outcome}"
+        assert store.analytics()["real_sends"] == 0
+    last_event = store.get(campaign["id"])["audit"][-1]
+    assert json.loads(last_event["details_json"])["suppression_registry_changed"] is False
+
+
 def test_interest_form_token_duplicate_validation_review_and_handoff_are_demo_only(tmp_path):
     data, _ = cohort_fixture(tmp_path)
     store = CampaignStore(tmp_path / "campaigns.db")
@@ -281,6 +295,20 @@ def test_dashboard_campaign_ui_uses_same_origin_demo_only_and_separate_review_st
     assert "formal consent: NO" in js
     assert "privacy_notice" in (ROOT / "config/outreach.yaml").read_text(encoding="utf-8")
     assert "localStorage" not in js and "sessionStorage" not in js
+
+
+def test_phase5e_dashboard_has_independent_views_and_safe_test_form_tools():
+    html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    assert 'data-view="overview"' in html and 'data-view="companies"' in html
+    assert all(f'data-view="{page}"' in html for page in ("campaigns", "interest-form", "responses", "analytics", "settings"))
+    assert 'data-page="settings"' in html and 'class="sidebar"' in html
+    assert "window.addEventListener(\"hashchange\",navigate)" in js
+    assert 'id="select-all-matching"' in html and "state.selectedIds" in js
+    assert 'id="form-token-select"' in html and 'id="submit-local-interest"' in html
+    assert 'apiWrite("/api/demo/interest"' in js and 'apiWrite("/api/demo/form-open"' in js
+    assert "TEST RECORD" in js and "real_sends" in js
+    assert "fetch(\"http" not in js and "localStorage" not in js
 
 
 def test_real_cohort_and_frozen_77_database_hashes_survive_campaign_processing(tmp_path):

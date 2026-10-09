@@ -243,6 +243,16 @@ def load_dashboard_data(
         "participation_form_configuration": {
             "study_description": outreach_config.get("research_project_description") or "Not configured",
             "privacy_notice": outreach_config.get("participation_form_privacy_notice") or "Not configured",
+            "researcher_name": outreach_config.get("researcher_name") or "Not configured",
+            "research_team": outreach_config.get("research_team") or "Not configured",
+            "university_affiliation": outreach_config.get("university_affiliation") or "Not configured",
+            "research_contact_email": outreach_config.get("research_contact_email") or "Not configured",
+            "sender_name": outreach_config.get("sender_name") or "Not configured",
+            "sender_email": outreach_config.get("sender_email") or "Not configured",
+            "reply_to": outreach_config.get("reply_to") or "Not configured",
+            "participation_interest_form_url": outreach_config.get("participation_interest_form_url") or "Not configured",
+            "delivery_mode": outreach_config.get("delivery_mode") or "TEST",
+            "daily_limit": outreach_config.get("daily_limit") or "Not configured",
         },
     }
 

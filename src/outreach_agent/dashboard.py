@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -26,6 +27,11 @@ from outreach_agent.gmail_integration import (
 from outreach_agent.mail_merge import (
     DEFAULT_EXPORT_DIR, ExportLedger, assess_company_mail_merge, make_test_mail_merge, safe_file_component, save_export,
 )
+from outreach_agent.candidate_pool import export_candidate_csv
+from outreach_agent.phase6e_screening import PHASE6E_DB, list_phase6e_candidates, phase6e_summary
+from outreach_agent.phase6f import PHASE6F_DB, dashboard_overlays as phase6f_overlays, dashboard_summary as phase6f_summary
+from outreach_agent.phase6g import REVIEW_DB as PHASE6G_REVIEW_DB, review_rows as phase6g_review_rows, csv_text as phase6g_csv_text, record_channel_decision as phase6g_record_channel_decision, record_company_review as phase6g_record_company_review
+from outreach_agent.phase6h import PHASE6H_DB, dashboard_summary as phase6h_summary, dashboard_overlays as phase6h_overlays
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -100,8 +106,78 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     self._json({"error": str(exc)}, 404)
                 return
             if parsed.path == "/api/summary":
-                self._json({"summary": data["summary"], "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
+                summary = dict(data["summary"])
+                summary["phase6h"] = phase6h_summary()
+                self._json({"summary": summary, "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
                             "participation_form_configuration": data["participation_form_configuration"]})
+                return
+            if parsed.path == "/api/candidates":
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                try:
+                    page = max(1, int(params.get("page", "1")))
+                    page_size = max(1, min(100, int(params.get("page_size", "50"))))
+                except ValueError:
+                    self._json({"error": "page and page_size must be integers"}, 400)
+                    return
+                candidate_db = PHASE6H_DB if PHASE6H_DB.exists() else PHASE6E_DB
+                result = list_phase6e_candidates(q=params.get("q", ""), source=params.get("source", ""),
+                                         status=params.get("status", ""), screen_status=params.get("screen_status", ""), page=page, page_size=page_size,
+                                         db_path=candidate_db)
+                result["summary"] = phase6e_summary(candidate_db)
+                result["phase6f"] = phase6f_summary()
+                result["phase6h"] = phase6h_summary()
+                overlays = (phase6h_overlays([row["candidate_id"] for row in result["candidates"]]) if PHASE6H_DB.exists()
+                            else phase6f_overlays([row["candidate_id"] for row in result["candidates"]]))
+                for row in result["candidates"]:
+                    if row["candidate_id"] in overlays:
+                        row["phase6f"] = overlays[row["candidate_id"]]
+                        for field in ("verification_status", "geo_eligibility_status", "geo_opportunity_status", "contact_status", "verification_reason", "last_inspected_at"):
+                            row[field] = overlays[row["candidate_id"]][field]
+                if candidate_db.exists():
+                    with sqlite3.connect(f"file:{candidate_db.resolve()}?mode=ro", uri=True) as candidate_db_connection:
+                        result["filters"] = {
+                            "sources": [r[0] for r in candidate_db_connection.execute("SELECT DISTINCT source_name FROM candidates ORDER BY source_name")],
+                            "statuses": [r[0] for r in candidate_db_connection.execute("SELECT DISTINCT verification_status FROM candidates ORDER BY verification_status")],
+                            "screen_statuses": [r[0] for r in candidate_db_connection.execute("SELECT DISTINCT screen_status FROM phase6e_screening ORDER BY screen_status")],
+                        }
+                else:
+                    result["filters"] = {"sources": [], "statuses": [], "screen_statuses": []}
+                self._json(result)
+                return
+            if parsed.path in {"/api/phase6g/review", "/api/phase6g/review/export.csv"}:
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                review_db = PHASE6H_DB if PHASE6H_DB.exists() else PHASE6F_DB
+                try:
+                    rows = phase6g_review_rows(db_path=review_db, review_path=PHASE6G_REVIEW_DB,
+                                               source=params.get("source", ""), confidence=params.get("confidence", ""), status=params.get("status", ""))
+                except (OSError, sqlite3.Error) as exc:
+                    self._json({"error": f"Phase 6G review queue unavailable: {exc}"}, 503)
+                    return
+                if parsed.path.endswith(".csv"):
+                    self._csv(phase6g_csv_text(rows), "phase6h_contact_review_queue.csv" if PHASE6H_DB.exists() else "phase6g_contact_review_queue.csv")
+                    return
+                sources = sorted({r["source_name"] for r in phase6g_review_rows(db_path=review_db, review_path=PHASE6G_REVIEW_DB)})
+                try:
+                    page = max(1, int(params.get("page", "1")))
+                    page_size = max(1, min(100, int(params.get("page_size", "20"))))
+                except ValueError:
+                    self._json({"error": "page and page_size must be integers"}, 400)
+                    return
+                counts = {value: sum(r["channel_classification"] == value for r in rows) for value in sorted({r["channel_classification"] for r in rows})}
+                self._json({"rows": rows[(page - 1) * page_size:page * page_size], "total": len(rows), "page": page, "page_size": page_size,
+                            "sources": sources, "classification_counts": counts,
+                            "companies": len({r["candidate_id"] for r in rows})})
+                return
+            if parsed.path.startswith("/api/candidates/export/"):
+                kind = parsed.path.rsplit("/", 1)[-1]
+                phase6e_file = Path(__file__).resolve().parents[2] / "data" / kind
+                if phase6e_file.name == kind and kind.startswith("phase6e_") and phase6e_file.exists():
+                    self._csv(phase6e_file.read_text(encoding="utf-8-sig"), kind)
+                    return
+                try:
+                    self._csv(export_candidate_csv(kind), f"{kind}.csv")
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 404)
                 return
             if parsed.path in {"/api/responses", "/api/responses/export.csv"}:
                 if campaign_store is None:
@@ -211,6 +287,17 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if not isinstance(body, dict):
                     raise ValueError("JSON object required")
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/phase6g/review/channel":
+                    phase6g_record_channel_decision(str(body.get("candidate_id") or ""), str(body.get("channel_key") or ""),
+                                                   str(body.get("decision") or ""), str(body.get("note") or ""),
+                                                   db_path=PHASE6H_DB if PHASE6H_DB.exists() else PHASE6F_DB, review_path=PHASE6G_REVIEW_DB)
+                    self._json({"saved": True, "decision": str(body["decision"]).upper(), "scope": "CONTACT_CHANNEL_ONLY_NOT_OUTREACH_AUTHORIZATION"})
+                    return
+                if parsed.path == "/api/phase6g/review/company":
+                    phase6g_record_company_review(str(body.get("candidate_id") or ""), str(body.get("review_status") or ""), str(body.get("note") or ""),
+                                                  db_path=PHASE6H_DB if PHASE6H_DB.exists() else PHASE6F_DB, review_path=PHASE6G_REVIEW_DB)
+                    self._json({"saved": True, "review_status": str(body["review_status"]).upper(), "scope": "COMPANY_RESEARCH_REVIEW_ONLY_NOT_OUTREACH_AUTHORIZATION"})
+                    return
                 if parsed.path in {"/api/mail-merge/assessment", "/api/mail-merge/export"}:
                     if campaign_store is None:
                         self._json({"error": "Campaign records are unavailable"}, 503)

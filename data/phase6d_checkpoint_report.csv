@@ -1,0 +1,5 @@
+target_total,threshold_reached,observed_total_unique,candidate_rows_needed_from_new_layer,additional_records_needed
+1000,True,57664,463,0
+2500,True,57664,1963,0
+4000,True,57664,3463,0
+5000,True,57664,4463,0

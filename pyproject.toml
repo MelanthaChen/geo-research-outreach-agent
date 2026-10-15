@@ -26,6 +26,7 @@ gmail = [
   "google-auth-oauthlib>=1.0,<2",
   "keyring>=25,<27",
 ]
+openstreetmap = ["osmium>=4.0,<5"]
 
 [project.scripts]
 outreach-agent = "outreach_agent.cli:app"

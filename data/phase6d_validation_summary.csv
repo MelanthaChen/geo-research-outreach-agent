@@ -1,0 +1,2 @@
+candidate_total,verification_status,geo_eligibility_status,geo_opportunity_status,contact_status,human_review_status,outreach_ready_status
+57127,"{""ACCESS_BLOCKED"": 1, ""AMBIGUOUS_IDENTITY"": 9, ""DISCOVERED_UNVERIFIED"": 57107, ""FETCH_FAILED"": 3, ""INSUFFICIENT_EVIDENCE"": 1, ""ROBOTS_DENIED"": 1, ""VERIFIED"": 5}","{""ELIGIBLE"": 12, ""NEEDS_REVIEW"": 8, ""UNKNOWN"": 57107}","{""HIGH"": 10, ""MEDIUM"": 2, ""UNKNOWN"": 57115}","{""NOT_DISCOVERED"": 57127}","{""PENDING"": 57127}","{""NOT_READY"": 57127}"

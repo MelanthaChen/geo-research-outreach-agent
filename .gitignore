@@ -6,6 +6,6 @@ __pycache__/
 .env
 data/*.db
 data/*.db-*
+data/raw_sources/
 dist/
 build/
-

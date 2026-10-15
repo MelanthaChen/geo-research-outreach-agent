@@ -27,6 +27,8 @@ from outreach_agent.outreach_pipeline import (
     validate_recipient,
 )
 from outreach_agent.website_identity import verify_company_website
+from outreach_agent.candidate_pool import candidate_summary
+from outreach_agent.phase6e_screening import PHASE6E_DB, phase6e_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / "data/phase6a_experimental.db"
@@ -224,6 +226,36 @@ def load_dashboard_data(
             },
             "outreach": _outreach_counts(connection, delivery_path),
         }
+        pool = phase6e_summary() if PHASE6E_DB.exists() else candidate_summary()
+        email_companies = sum(
+            any(channel["is_suitable_first_party"] and channel.get("channel_type") != "CONTACT_FORM"
+                for channel in detail["contact_channels"])
+            for detail in details.values()
+        )
+        ready = sum(
+            (row.get("pipeline_status") == "READY_FOR_GEO"
+             and row.get("identity_verification_status") == "VERIFIED"
+             and _eligibility(row) == "ELIGIBLE")
+            for row in companies
+        )
+        if PHASE6E_DB.exists():
+            summary["candidate_pool"] = {
+                "total_candidates": pool["candidate_count"],
+                "verified_companies": pool["verified"],
+                "geo_eligible_companies": pool["geo_eligible"],
+                "companies_with_email_contacts": pool["with_email"],
+                "outreach_ready_companies": pool["outreach_ready"],
+                "new_candidate_records": pool["osm_candidate_count"],
+            }
+        else:
+            summary["candidate_pool"] = {
+                "total_candidates": len(companies) + pool["candidate_count"],
+                "verified_companies": (summary["website_verification"].get("VERIFIED", 0) + pool["verified"]),
+                "geo_eligible_companies": (summary["eligibility"].get("ELIGIBLE", 0) + pool["geo_eligible"]),
+                "companies_with_email_contacts": email_companies + pool["with_email"],
+                "outreach_ready_companies": ready + pool["outreach_ready"],
+                "new_candidate_records": pool["candidate_count"],
+            }
         filters = {
             "sources": sorted({source for detail in details.values() for source in detail["discovery_sources"]}),
             "website_verification": sorted({row["identity_verification_status"] for row in companies}),

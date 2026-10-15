@@ -52,7 +52,8 @@ def verify_company_website(company: Company, snapshot: WebsiteSnapshot | None) -
     if snapshot is None:
         return WebsiteIdentityResult("FETCH_FAILED", "No website snapshot was captured", "", False)
     if snapshot.fetch_status == "ROBOTS_DENIED":
-        return WebsiteIdentityResult("ROBOTS_DENIED", "robots.txt disallowed collection; no bypass attempted", "", False)
+        reason = snapshot.error_message if getattr(snapshot, "error_type", None) == "ROBOTS_FILE_RESTRICTED" else "robots.txt disallowed collection; no bypass attempted"
+        return WebsiteIdentityResult("ROBOTS_DENIED", reason, "", False)
     if snapshot.fetch_status == "BLOCKED" or snapshot.http_status in {401, 403, 429}:
         return WebsiteIdentityResult("ACCESS_BLOCKED", "The site denied or rate-limited access; this is not evidence of an identity mismatch", "", False)
     successful_pages = [page for page in snapshot.pages if page.fetch_status in {"SUCCESS", "PARTIAL"}]

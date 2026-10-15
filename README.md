@@ -99,6 +99,72 @@ Run discovery again to confirm idempotency: no new company or identical provenan
 
 `discover-chamber` reads public listing cards from the Greater Dalton Chamber GrowthZone directory. This source was selected to add local services, retailers, healthcare, finance, manufacturing, and nonprofit organizations rather than another internet-startup-only population. It reads business names, public websites, locations, and categories; it does not open email/contact endpoints. Its current robots policy permits the alphabetical listing routes.
 
+## Phase 6D candidate pool (separate from campaigns)
+
+Phase 6D keeps newly acquired candidates in `data/phase6d_candidates.db`; the 537-company active cohort, frozen 77-company database, and campaign sidecar are not imported into or rewritten by this layer. Candidate records begin as `DISCOVERED_UNVERIFIED`, `UNKNOWN` GEO eligibility, `NOT_DISCOVERED` contact status, pending human review, and `NOT_READY` for outreach. They cannot be selected into campaigns. The bulk source is the official Geofabrik OpenStreetMap US Northeast extract, licensed under ODbL 1.0. Attribution to OpenStreetMap contributors is retained in rows and exports. If distributing the derived database publicly, comply with ODbL share-alike requirements; internal-use details and attribution guidance are in the Phase 6D report.
+
+### Phase 6E candidate screening and verification
+
+Phase 6E screens the complete 57,664-domain pool: all 57,127 OSM leads receive a structured-data screen, while the existing 537-company cohort is projected from saved qualification and identity evidence without changing its source database or review decisions. Screening and bounded website verification are stored in the independent `data/phase6e_candidates.db` working copy. The Phase 6D source database remains read-only input. Reproduce the source/category/domain audit and exports with `PYTHONPATH=src uv run python scripts/phase6e_screen.py audit`, `screen`, and `export`. Create the deterministic 140-record, seven-group OSM calibration sample with `sample --per-category 20`; record the documented offline desk-review labels with `review-sample`. The offline screen is a lead-priority heuristic, not proof of operation, identity, SMB status, or eligibility. `priority_basis` distinguishes the existing cohort’s saved score from the Phase 6E screening heuristic; the numeric scores are not directly comparable.
+
+For bounded live verification, run `PYTHONPATH=src uv run python scripts/phase6e_screen.py verify --budget 20 --request-budget 100`. `--budget` caps company sites and `--request-budget` is a hard HTTP-attempt cap including redirects and retries. The existing crawler honors `robots.txt`, uses a 12-second timeout, one retry, a two-page-per-site limit, and a one-second inter-request delay. Re-running resumes only still-unverified rows; completed outcomes are retained. Only identity-verified sites are automatically qualified; ambiguous/blocked/failed sites remain `NEEDS_REVIEW`/`UNKNOWN`. Contact discovery remains a separate task.
+
+Outputs are `data/phase6e_top_5000_candidates.csv`, `phase6e_verified_candidates.csv`, `phase6e_geo_eligible_candidates.csv`, `phase6e_contact_discovery_priority.csv`, `phase6e_exclusion_uncertainty_report.csv`, and `phase6e_website_verification.csv`. Top-5,000 rows remain explicitly marked by screening and identity status; the filename does not imply verification. The dashboard’s Companies page includes source/screen/identity filters and these exports. New OSM leads do not enter campaign selections. Full audit and measured pilot results are in [`docs/phase6e_candidate_quality.md`](docs/phase6e_candidate_quality.md).
+
+### Phase 6F bounded verification and contact evidence pilot
+
+Phase 6F selects 500 still-unverified OSM candidates from the Phase 6E Top 5,000 using likely-fit category, independence/domain flags, descending Phase 6E priority, and stable domain tie-breaking. Previously verified and previously attempted records are excluded. It creates the separate `data/phase6f_candidates.db` backup once and resumes selected pending records without changing Phase 6E or source databases. Run/resume the pilot with `PYTHONPATH=src uv run python scripts/phase6f_pilot.py run --limit 500 --batch-size 20 --request-cap 3000 --time-cap-seconds 10800 --cost-cap-usd 0`; request and time caps are cumulative across invocations. Paid-service cost is hard-capped at $0.00; no paid API or LLM is used. `status` reports progress and database integrity; `export` regenerates stable CSVs. The WebsiteCollector respects robots/access restrictions and does not bypass blocks. Existing identity and qualification logic is reused. Contact evidence is limited to explicit public same-domain channels on verified GEO-eligible companies, remains pending human review, and is never submitted or outreach-approved.
+
+Outputs include `data/phase6f_selected_500.csv`, `data/phase6f_verified_companies.csv`, `data/phase6f_geo_eligible_companies.csv`, `data/phase6f_contact_candidates.csv`, `data/phase6f_validation_failures.csv`, and `data/phase6f_pilot_report.md`. The Companies candidate panel shows processed, verified, GEO-eligible, contact, pending, and review-required counts when the Phase 6F database exists.
+
+### Phase 6G contact quality audit and review
+
+Run `PYTHONPATH=src uv run python scripts/phase6g_audit.py audit` to classify and deduplicate saved Phase 6F channels offline and generate `data/phase6g_contact_quality_audit.csv`, `data/phase6g_contact_review_queue.csv`, `data/phase6g_verification_failure_analysis.csv`, and `data/phase6g_optimization_report.md`. The raw Phase 6F channel evidence is not modified. The Companies page includes a paginated human review queue with evidence/provenance, source/confidence/review filters, per-channel approve/reject, company further-review marking, and filtered export. Those decisions live in `data/phase6g_contact_review.db` and cannot authorize research participation, campaign inclusion, or sending.
+
+One bounded comparison sample of 15 transient fetch failures (DNS/TLS/timeout/connection) and 15 ambiguous identities can be run/resumed with `PYTHONPATH=src uv run python scripts/phase6g_audit.py evaluate --batch-size 10 --request-cap 90 --time-cap-seconds 600`. It uses the existing verifier and qualification rules in the isolated `data/phase6g_evaluation.db`; blocked and robots-denied sites are excluded. Rerun `... phase6g_audit.py report` (or `audit`) to refresh the report/exports. No network call is made by audit/export/report. All channels remain pending until reviewed, and no outreach or forms are sent/submitted.
+
+### Phase 6H remaining-shortlist verification and contact discovery
+
+Before requesting any websites, reconcile the frozen Phase 6E Top 5,000 against Phase 6E outcomes and the Phase 6F selection:
+
+```bash
+PYTHONPATH=src uv run python scripts/phase6h_scale.py preflight
+PYTHONPATH=src uv run python scripts/phase6h_scale.py prepare
+```
+
+Phase 6H creates `data/phase6h_candidates.db` as a one-time SQLite backup of Phase 6F and persists the exact never-attempted candidate IDs in a stable worklist. Phase 6E and Phase 6F databases remain read-only. Run or resume 250-candidate selected batches with request/time caps (caps are cumulative across saved runs):
+
+```bash
+PYTHONPATH=src uv run python scripts/phase6h_scale.py run --batch-size 250 --request-cap 3000 --time-cap-seconds 7200 --chunk-request-budget 500
+PYTHONPATH=src uv run python scripts/phase6h_scale.py status
+PYTHONPATH=src uv run python scripts/phase6h_scale.py export
+```
+
+The website collector uses bounded retries, timeout and request budgets, serial per-domain processing, robots/access checks, and the existing identity/qualification rules. It does not bypass bot protection, submit forms, send email, or create approvals. If a cap interrupts a batch, completed candidate checkpoints are reused and only records still marked `DISCOVERED_UNVERIFIED` are retried. Each full configured batch is checked against a documented 50%-of-Phase-6F verification/eligibility yield floor; a low-yield batch pauses for inspection. The existing Companies page shows overall Top-5,000 processed/verified/GEO/contact-review metrics, and its Phase 6G review queue reads Phase 6H evidence while preserving the existing `data/phase6g_contact_review.db` decisions.
+
+Phase 6H writes `data/phase6h_verified_companies.csv`, `phase6h_geo_eligible_companies.csv`, `phase6h_business_email_contacts.csv`, `phase6h_official_contact_forms.csv`, `phase6h_contact_review_queue.csv`, `phase6h_execution_metrics.csv`, and `phase6h_final_report.md`. The company/contact exports cover the full Top 5,000 snapshot; the execution metrics cover Phase 6H runs. Verification is not human review, and discovered channels remain pending until reviewed.
+
+To acquire the dated extract, install the optional parser and run the reproducible import. The PBF is intentionally ignored by Git and should remain in `data/raw_sources/`:
+
+```bash
+mkdir -p data/raw_sources
+curl -L --fail --retry 2 https://download.geofabrik.de/north-america/us-northeast-261014.osm.pbf -o data/raw_sources/us-northeast-261014.osm.pbf
+uv sync --extra dev --extra openstreetmap --extra gmail
+PYTHONPATH=src uv run python scripts/phase6d_candidates.py acquire-import
+PYTHONPATH=src uv run python scripts/phase6d_candidates.py status
+```
+
+The import filters named commercial OSM objects for HTTP(S) websites, excludes common profile/directory hosts and explicit inactive tags, and deduplicates on the existing canonical-domain normalizer against all 537 active domains. Each OSM element is retained in `candidate_provenance`; every candidate is still an unverified lead until first-party identity evidence is inspected. The script reports actual source yield and writes threshold checkpoints only when the real combined total reaches them.
+
+Website identity and existing GEO qualification can be run in resumable, sequential batches of up to 100 (25 is the safe default). This makes bounded homepage and one additional page inspections, respects robots rules, and never stores contact evidence or changes human review:
+
+```bash
+PYTHONPATH=src uv run python scripts/phase6d_candidates.py verify-batch --limit 25
+PYTHONPATH=src uv run python scripts/phase6d_candidates.py export
+```
+
+The exports `data/all_candidates.csv`, `data/verified_companies.csv`, `data/geo_eligible_companies.csv`, and `data/contact_candidates.csv` contain the preserved active cohort plus the isolated candidate layer, with source, permission note, and status columns. The read-only Companies page shows the new pool separately from campaign selection. Contact discovery and outreach are not run as part of candidate acquisition.
+
 `inspect-websites` checks `/robots.txt` before crawling, probes `/sitemap.xml` conservatively, fetches the homepage, and follows at most the configured number of high-value same-domain links. It never recursively crawls a site. Use `--refresh` to deliberately replace fresh cache use with a new snapshot.
 
 Collection settings in `config/settings.yaml` control timeout, one-second request delay, retry count, page/company caps, response-size cap, User-Agent, and cache TTL.

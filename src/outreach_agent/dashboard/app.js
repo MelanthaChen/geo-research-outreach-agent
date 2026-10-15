@@ -1,4 +1,4 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25 };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25 };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
@@ -47,11 +47,14 @@ function renderSummary(summary) {
   const coverage = summary.contact_channel_coverage;
   const reviews = summary.pending_human_reviews;
   const outreach = summary.outreach;
+  const pool = summary.candidate_pool || {};
+  const scale = summary.phase6h || {};
   const metrics = [
-    ["Companies discovered", summary.total_companies, "companies in the research cohort"],
-    ["Verified company websites", summary.website_verification.VERIFIED || 0, "based on saved evidence"],
-    ["GEO-eligible companies", summary.eligibility.ELIGIBLE || 0, "current qualification results"],
-    ["Suitable contact channels", coverage.with_suitable_first_party_channel, "saved first-party email or form"],
+    ["Total candidates", pool.total_candidates ?? summary.total_companies, "existing cohort + separate discovery pool"],
+    ["Verified companies", pool.verified_companies ?? summary.website_verification.VERIFIED ?? 0, "based on identity evidence"],
+    ["GEO-eligible companies", pool.geo_eligible_companies ?? summary.eligibility.ELIGIBLE ?? 0, "existing qualification rules"],
+    ["Companies with suitable contact channels", pool.companies_with_email_contacts ?? 0, "saved first-party email or form"],
+    ["Outreach-ready companies", pool.outreach_ready_companies ?? 0, "human approval and readiness required"],
   ];
   $("metrics").innerHTML = metrics.map(([label,value,note]) => `<div class="metric"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div><div class="metric-note">${esc(note)}</div></div>`).join("");
   $("secondary-metrics").innerHTML = [
@@ -63,6 +66,17 @@ function renderSummary(summary) {
     ["Test research handoffs", outreach.simulated_handoff_events],
     ["Live outreach records", outreach.real_outreach_records],
   ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
+  $("candidate-scale-metrics").innerHTML = [
+    ["Total candidate pool", pool.total_candidates ?? "—"],
+    ["Top 5,000 shortlist", scale.shortlist ?? 0],
+    ["Processed in shortlist", scale.processed ?? 0],
+    ["Verified identities", scale.verified ?? 0],
+    ["GEO eligible", scale.geo_eligible ?? 0],
+    ["Companies with business emails", scale.companies_with_business_emails ?? 0],
+    ["Companies with confirmed forms", scale.companies_with_contact_forms ?? 0],
+    ["Pending contact reviews", scale.pending_contact_reviews ?? 0],
+    ["Outreach ready", scale.outreach_ready ?? 0],
+  ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(Number(value).toLocaleString())}</strong></div>`).join("");
   const distributionHTML = [
     distCard("WEBSITE IDENTITY", summary.website_verification, summary.total_companies),
     distCard("ELIGIBILITY", summary.eligibility, summary.total_companies),
@@ -84,6 +98,50 @@ function renderSummary(summary) {
   const requiredFormConfig=["study_description","privacy_notice","research_contact_email","participation_interest_form_url"];
   const missingFormConfig=requiredFormConfig.filter((key)=>!state.formConfiguration[key]||state.formConfiguration[key]==="Not configured");
   $("form-config-status").textContent = `${missingFormConfig.length ? `${missingFormConfig.length} form configuration item(s) incomplete` : "Form configuration complete"}. Study description: ${state.formConfiguration.study_description || "Not configured"} · Research contact: ${state.formConfiguration.research_contact_email || "Not configured"}`;
+}
+function candidateQuery() {
+  const query = new URLSearchParams({page:String(state.candidatePage),page_size:String(state.candidatePageSize)});
+  Object.entries(state.candidateFilters).forEach(([key,value])=>{if(value)query.set(key,value);});
+  return query;
+}
+async function reloadCandidates() {
+  const result = await api(`/api/candidates?${candidateQuery()}`);
+  const p=result.summary||{};
+  const screened=Object.values(p.screen_statuses||{}).reduce((sum,count)=>sum+Number(count||0),0);
+  const sixf=result.phase6f||{};
+  const sixfProgress=sixf.selected?` · Phase 6F ${sixf.processed}/${sixf.selected} processed · ${sixf.verified} verified · ${sixf.geo_eligible} GEO eligible · ${sixf.contact_channels_found} channels · ${sixf.pending_verification} pending · ${sixf.review_required} review`:"";
+  const sixh=result.phase6h||{};
+  $("candidate-total").textContent=`${Number(p.candidate_count||0).toLocaleString()} candidates · top 5,000: ${Number(sixh.processed||0).toLocaleString()} processed, ${Number(sixh.remaining||0).toLocaleString()} pending · ${Number(sixh.verified||0).toLocaleString()} verified · ${Number(sixh.geo_eligible||0).toLocaleString()} GEO eligible`;
+  setOptions("candidate-source", result.filters?.sources||[]);
+  setOptions("candidate-status", result.filters?.statuses||[]);
+  setOptions("candidate-screen-status", result.filters?.screen_statuses||[]);
+  $("candidate-list").innerHTML=result.candidates.length?result.candidates.map(row=>`<article class="candidate-row"><div class="candidate-main"><strong>${esc(row.company_name)}</strong><span>${esc(row.canonical_domain)}</span></div><div class="candidate-badges"><span class="status-pill">${esc(compact(row.screen_status))}</span><span class="status-pill ${pillClass(row.verification_status)}">Identity ${esc(compact(row.verification_status))}</span><span class="candidate-source-label">${esc(row.category_group)} · ${esc(compact(row.chain_location_concern))} · ${esc(compact(row.website_domain_concern))}</span></div><a class="candidate-website" href="${esc(row.website)}" target="_blank" rel="noreferrer">Website ↗</a></article>`).join(""):`<p class="empty-state">No candidates match these filters.</p>`;
+  const maxPage=Math.max(1,Math.ceil(result.total/result.page_size));
+  $("candidate-page").textContent=`Page ${result.page} of ${maxPage} · ${result.total.toLocaleString()} matching records`;
+  $("candidate-prev").disabled=result.page<=1;
+  $("candidate-next").disabled=result.page>=maxPage;
+  await reloadPhase6gReview();
+}
+function phase6gQuery(){const query=new URLSearchParams({page:String(state.phase6gPage),page_size:String(state.phase6gPageSize)});Object.entries(state.phase6gFilters).forEach(([key,value])=>{if(value)query.set(key,value);});return query;}
+async function reloadPhase6gReview(){
+  const result=await api(`/api/phase6g/review?${phase6gQuery()}`);
+  const currentSource=$("phase6g-source").value;setOptions("phase6g-source",result.sources||[]);if((result.sources||[]).includes(currentSource))$("phase6g-source").value=currentSource;
+  const filterKey=new URLSearchParams(Object.entries(state.phase6gFilters).filter(([,v])=>v)).toString();
+  $("phase6g-export").href=`/api/phase6g/review/export.csv?${filterKey}`;
+  $("phase6g-review-total").textContent=`${Number(result.companies||0).toLocaleString()} companies · ${Number(result.total||0).toLocaleString()} channels`;
+  $("phase6g-review-list").innerHTML=result.rows.length?result.rows.map(row=>{
+    const destination=row.email?`<a href="mailto:${esc(row.email)}">${esc(row.email)}</a>`:`<a href="${esc(row.channel_url)}" target="_blank" rel="noreferrer">${esc(websiteDomain(row.channel_url))} · inspect evidence ↗</a>`;
+    const proof=String(row.evidence||row.purpose||"No captured channel excerpt.").slice(0,1600);
+    const identity=row.verification_status==="VERIFIED"?"Company identity verified":"Company identity needs review";
+    const approveLabel=row.channel_classification==="OFFICIAL_CONTACT_PAGE_NO_CONFIRMED_METHOD"?"Confirm official contact page":"Approve channel evidence";
+    const channelActions=row.channel_classification.startsWith("INVALID")?`<span class="status-pill bad">Unsupported · approval blocked</span><button class="button outline" data-contact-review="REJECTED" data-candidate="${esc(row.candidate_id)}" data-channel="${esc(row.channel_key)}">Reject evidence</button>`:`<button class="button outline" data-contact-review="APPROVED" data-candidate="${esc(row.candidate_id)}" data-channel="${esc(row.channel_key)}">${approveLabel}</button><button class="button outline" data-contact-review="REJECTED" data-candidate="${esc(row.candidate_id)}" data-channel="${esc(row.channel_key)}">Reject evidence</button>`;
+    return `<article class="candidate-row review-contact-row"><div class="candidate-main"><strong>${esc(row.company_name)}</strong><span>${esc(row.canonical_domain)} · ${esc(row.source_name)}</span><span>${esc(identity)} · GEO ${esc(compact(row.geo_eligibility_status))} / ${esc(compact(row.geo_opportunity_status))}</span></div><div class="candidate-badges"><span class="status-pill ${pillClass(row.confidence)}">${esc(row.confidence)} confidence</span><span class="status-pill">${esc(compact(row.channel_classification))}</span><span class="status-pill ${pillClass(row.review_status)}">Channel ${esc(compact(row.review_status))}</span><span class="status-pill ${pillClass(row.company_review_status)}">Company ${esc(compact(row.company_review_status))}</span></div><div class="review-contact-destination">${destination}<small>${esc(row.purpose_suitability)} · Evidence ${esc(row.evidence_freshness||"unknown")}</small></div><details class="review-evidence"><summary>Evidence, provenance & review controls</summary><p><strong>Company source:</strong> <a href="${esc(row.source_url)}" target="_blank" rel="noreferrer">${esc(row.source_name)} record ↗</a> · <strong>Contact evidence:</strong> <a href="${esc(row.evidence_url)}" target="_blank" rel="noreferrer">${esc(row.evidence_url)} ↗</a></p><p><strong>Identity-page evidence:</strong> ${esc(row.identity_evidence||"No saved page metadata.")} · <strong>Qualification rationale:</strong> ${esc(row.qualification_evidence||"Not available in saved record.")}</p><p><strong>First party:</strong> ${esc(row.first_party_provenance)} · <strong>Identity:</strong> ${esc(row.company_identity_match)} · <strong>Contact excerpt:</strong> ${esc(proof)}</p><p><strong>All source excerpts for this deduplicated channel:</strong> ${esc(row.duplicate_evidence||"[]")}</p><p><strong>Assessment:</strong> ${esc(row.confidence_reasons)} · <strong>Repeated source entries merged:</strong> ${Number(row.duplicate_count||0)}</p><label class="review-note-label">Reviewer note<textarea data-review-note maxlength="1000" placeholder="Optional note about the evidence or follow-up">${esc(row.review_reason||row.company_review_note||"")}</textarea></label><div class="review-actions">${channelActions}<button class="button outline" data-company-review="FURTHER_REVIEW" data-candidate="${esc(row.candidate_id)}">Mark company for further review</button><span class="section-help">Channel decisions never approve outreach.</span></div><p class="inline-status">${esc(row.review_reason||row.company_review_note||"No reviewer note saved.")}</p></details></article>`;
+  }).join(""):`<p class="empty-state">No contact channels match these review filters.</p>`;
+  const maxPage=Math.max(1,Math.ceil(result.total/result.page_size));
+  $("phase6g-page").textContent=`Page ${result.page} of ${maxPage} · ${Number(result.total||0).toLocaleString()} matching channels`;
+  $("phase6g-prev").disabled=result.page<=1;$("phase6g-next").disabled=result.page>=maxPage;
+  $("phase6g-review-list").querySelectorAll("[data-contact-review]").forEach(button=>button.addEventListener("click",async()=>{const note=button.closest(".review-evidence").querySelector("[data-review-note]").value;await apiWrite("/api/phase6g/review/channel",{candidate_id:button.dataset.candidate,channel_key:button.dataset.channel,decision:button.dataset.contactReview,note});await reloadPhase6gReview();}));
+  $("phase6g-review-list").querySelectorAll("[data-company-review]").forEach(button=>button.addEventListener("click",async()=>{const note=button.closest(".review-evidence").querySelector("[data-review-note]").value;await apiWrite("/api/phase6g/review/company",{candidate_id:button.dataset.candidate,review_status:button.dataset.companyReview,note});await reloadPhase6gReview();}));
 }
 function renderSettings(config) {
   const fields = [["Researcher name",config.researcher_name],["Research team",config.research_team],["University affiliation",config.university_affiliation],["Research contact email",config.research_contact_email],["Sender name",config.sender_name],["Sender email",config.sender_email],["Unified interest form URL",config.participation_interest_form_url],["Delivery mode",config.delivery_mode || "TEST"],["Sending limit",config.daily_limit],["Reply-to",config.reply_to]];
@@ -205,6 +263,7 @@ async function selectCompany(id) {
   if (suitable.length && company.eligibility === "ELIGIBLE" && company.identity_verification_status === "VERIFIED") $("preview-button").textContent = "Generate draft preview →";
   if (!suitable.length) $("preview-button").textContent = "No usable contact channel";
   await reloadCompanies();
+  await reloadCandidates();
 }
 function resetSimulation() {
   state.draft = null; state.delivered = false; state.responseRecorded = false;
@@ -518,6 +577,14 @@ $("response-next").addEventListener("click",()=>{state.responsePage+=1;renderRes
 $("response-export").addEventListener("click",()=>{const query=new URLSearchParams();Object.entries(responseFilters()).forEach(([key,value])=>{if(value)query.set(key,value);});window.location.href=`/api/responses/export.csv?${query.toString()}`;});
 $("export-all-companies").addEventListener("click",()=>downloadCompanyCsv(false));
 $("export-filtered-companies").addEventListener("click",()=>downloadCompanyCsv(true));
+let candidateSearchTimer;
+$("candidate-search").addEventListener("input",()=>{clearTimeout(candidateSearchTimer);candidateSearchTimer=setTimeout(()=>{state.candidateFilters.q=$("candidate-search").value;state.candidatePage=1;reloadCandidates().catch(showError);},200);});
+["candidate-source","candidate-status","candidate-screen-status"].forEach((id)=>$(id).addEventListener("change",()=>{state.candidateFilters[id==="candidate-source"?"source":id==="candidate-screen-status"?"screen_status":"status"]=$(id).value;state.candidatePage=1;reloadCandidates().catch(showError);}));
+$("candidate-prev").addEventListener("click",()=>{state.candidatePage=Math.max(1,state.candidatePage-1);reloadCandidates().catch(showError);});
+$("candidate-next").addEventListener("click",()=>{state.candidatePage+=1;reloadCandidates().catch(showError);});
+["phase6g-source","phase6g-confidence","phase6g-status"].forEach((id)=>$(id).addEventListener("change",()=>{state.phase6gFilters[id==="phase6g-source"?"source":id==="phase6g-confidence"?"confidence":"status"]=$(id).value;state.phase6gPage=1;reloadPhase6gReview().catch(showError);}));
+$("phase6g-prev").addEventListener("click",()=>{state.phase6gPage=Math.max(1,state.phase6gPage-1);reloadPhase6gReview().catch(showError);});
+$("phase6g-next").addEventListener("click",()=>{state.phase6gPage+=1;reloadPhase6gReview().catch(showError);});
 $("test-email-recipient").addEventListener("change",()=>loadTestEmailPreview().catch(showError));
 $("refresh-test-email-preview").addEventListener("click",()=>loadTestEmailPreview().catch(showError));
 $("test-email-confirm").addEventListener("change",updateTestEmailSendButton);

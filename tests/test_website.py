@@ -2,11 +2,12 @@ import json
 import gzip
 
 import httpx
+import pytest
 from sqlalchemy import func, select
 
 from outreach_agent.config import WebsiteSettings
 from outreach_agent.models import Company, CompanyStatus, WebsiteSnapshot
-from outreach_agent.website import WebsiteCollector, collect_websites, extract_page
+from outreach_agent.website import RequestBudgetExceeded, WebsiteCollector, collect_websites, extract_page
 
 
 HOME = """
@@ -170,6 +171,25 @@ def test_robots_denial_is_recorded(session):
     assert snapshot.error_type == "ROBOTS_DENIED"
 
 
+def test_restricted_robots_endpoint_stops_without_fetching_site_pages(session):
+    company = Company(company_name="Restricted robots", normalized_name="restricted robots",
+                      website="https://restricted.test", normalized_domain="restricted.test")
+    session.add(company)
+    session.commit()
+    requested = []
+    def handler(request):
+        requested.append(request.url.path)
+        return httpx.Response(403, text="Access denied", headers={"content-type": "text/plain"})
+    collector = make_collector(handler)
+    summary = collect_websites(session, collector.settings, collector=collector)
+    snapshot = session.scalar(select(WebsiteSnapshot))
+    assert summary.failed == 1
+    assert snapshot.fetch_status == "ROBOTS_DENIED"
+    assert snapshot.error_type == "ROBOTS_FILE_RESTRICTED"
+    assert snapshot.http_status == 403
+    assert requested == ["/robots.txt"]
+
+
 def test_blocked_site_does_not_crash_run(session):
     company = Company(
         company_name="Blocked", normalized_name="blocked", website="https://blocked.test",
@@ -224,3 +244,56 @@ def test_streamed_compressed_body_is_decoded_once():
     response = collector._request("https://example.test")
     assert "Example Products" in response.text
     assert "content-encoding" not in response.headers
+
+
+def test_deterministic_size_limit_failure_is_not_retried():
+    calls = []
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, content=b"x" * 100, headers={"content-type": "text/html"})
+    settings = WebsiteSettings(delay_between_requests_seconds=0, retry_count=1, max_response_bytes=20)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    collector = WebsiteCollector(settings, client=client, sleep=lambda _: None)
+    try:
+        with pytest.raises(ValueError, match="response exceeded configured size limit"):
+            collector._request("https://example.test")
+        assert len(calls) == 1
+        assert collector.retry_attempts == 0
+    finally:
+        client.close()
+
+
+def test_hard_request_budget_counts_redirect_hops_before_sending():
+    calls=[]
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(302,headers={"location":"/next"})
+    settings=WebsiteSettings(delay_between_requests_seconds=0,retry_count=1,max_response_bytes=1000)
+    client=httpx.Client(transport=httpx.MockTransport(handler),follow_redirects=False)
+    collector=WebsiteCollector(settings,client=client,sleep=lambda _:None,request_budget=1)
+    try:
+        try:
+            collector._request("https://example.test/start")
+            assert False, "request budget should stop before the redirect target"
+        except RequestBudgetExceeded:
+            pass
+        assert calls==["https://example.test/start"]
+        assert collector.website_requests_attempted==1
+        assert collector.request_budget_exhausted is True
+    finally:
+        client.close()
+
+
+def test_bounded_max_redirect_is_counted_once_as_terminal_response():
+    def handler(request):
+        return httpx.Response(302, headers={"location": "/again"})
+    settings = WebsiteSettings(delay_between_requests_seconds=0, retry_count=0, max_response_bytes=1000)
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+    collector = WebsiteCollector(settings, client=client, sleep=lambda _: None, request_budget=6)
+    try:
+        response = collector._request("https://example.test/start")
+        assert response.status_code == 302
+        assert collector.website_requests_attempted == 6
+        assert collector.website_requests_succeeded + collector.website_requests_failed == 6
+    finally:
+        client.close()

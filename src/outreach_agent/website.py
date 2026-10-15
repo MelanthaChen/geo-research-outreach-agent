@@ -47,6 +47,10 @@ class CollectionSummary:
     total_batch_runtime_seconds: float = 0.0
 
 
+class RequestBudgetExceeded(ValueError):
+    """Raised before issuing an HTTP request after the explicit budget is spent."""
+
+
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
@@ -117,7 +121,8 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
 
 
 class WebsiteCollector:
-    def __init__(self, settings: WebsiteSettings, client: httpx.Client | None = None, sleep=time.sleep):
+    def __init__(self, settings: WebsiteSettings, client: httpx.Client | None = None, sleep=time.sleep,
+                 request_budget: int | None = None):
         self.settings = settings
         self.sleep = sleep
         self._owns_client = client is None
@@ -134,12 +139,16 @@ class WebsiteCollector:
         self.website_requests_succeeded = 0
         self.website_requests_failed = 0
         self.retry_attempts = 0
+        self.request_budget = request_budget
+        self.request_budget_exhausted = False
 
     def close(self) -> None:
         if self._owns_client:
             self.client.close()
 
     def _request(self, url: str) -> httpx.Response:
+        if self.request_budget is not None:
+            return self._request_bounded(url)
         last_error: Exception | None = None
         for attempt in range(self.settings.retry_count + 1):
             self.website_requests_attempted += 1
@@ -190,8 +199,72 @@ class WebsiteCollector:
             except (httpx.RequestError, ValueError) as exc:
                 self.website_requests_failed += 1
                 last_error = exc
-                if attempt < self.settings.retry_count:
+                # Content-size/decoding ValueErrors are deterministic; retry only
+                # transport failures so large pages do not consume duplicate requests.
+                if attempt < self.settings.retry_count and isinstance(exc, httpx.RequestError):
                     self.sleep(self.settings.delay_between_requests_seconds)
+                else:
+                    raise
+        assert last_error is not None
+        raise last_error
+
+    def _request_bounded(self, url: str) -> httpx.Response:
+        """Count every actual HTTP hop, including redirects, against a hard cap."""
+        last_error: Exception | None = None
+        for attempt in range(self.settings.retry_count + 1):
+            if attempt:
+                self.retry_attempts += 1
+            current = url
+            for redirect_count in range(6):
+                if self.website_requests_attempted >= (self.request_budget or 0):
+                    self.request_budget_exhausted = True
+                    raise RequestBudgetExceeded("Configured HTTP request budget exhausted")
+                self.website_requests_attempted += 1
+                try:
+                    with self.client.stream("GET", current, follow_redirects=False) as response:
+                        status = response.status_code
+                        location = response.headers.get("location")
+                        if status in {301, 302, 303, 307, 308} and location:
+                            current = urljoin(str(response.url), location)
+                            if redirect_count < 5:
+                                if status < 400:
+                                    self.website_requests_succeeded += 1
+                                else:
+                                    self.website_requests_failed += 1
+                                continue
+                        body = bytearray()
+                        chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
+                        for chunk in chunks:
+                            body.extend(chunk)
+                            if len(body) > self.settings.max_response_bytes:
+                                raise ValueError("response exceeded configured size limit")
+                        raw = bytes(body)
+                        encoding = response.headers.get("content-encoding", "").lower()
+                        try:
+                            if encoding == "gzip":
+                                raw = gzip.decompress(raw)
+                            elif encoding == "deflate":
+                                raw = zlib.decompress(raw)
+                        except (gzip.BadGzipFile, zlib.error, EOFError):
+                            pass
+                        if len(raw) > self.settings.max_response_bytes:
+                            raise ValueError("decoded response exceeded configured size limit")
+                        headers = dict(response.headers)
+                        headers.pop("content-encoding", None)
+                        headers.pop("content-length", None)
+                        self.website_requests_succeeded += int(status < 400)
+                        self.website_requests_failed += int(status >= 400)
+                        return httpx.Response(status, headers=headers, content=raw,
+                                              request=response.request, extensions=response.extensions)
+                except (httpx.RequestError, ValueError) as exc:
+                    if isinstance(exc, RequestBudgetExceeded):
+                        raise
+                    self.website_requests_failed += 1
+                    last_error = exc
+                    if attempt < self.settings.retry_count and isinstance(exc, httpx.RequestError):
+                        self.sleep(self.settings.delay_between_requests_seconds)
+                        break
+                    raise
         assert last_error is not None
         raise last_error
 
@@ -208,6 +281,15 @@ class WebsiteCollector:
         try:
             robots = self._request(robots_url)
             robots_present = robots.status_code == 200
+            if robots.status_code in {401, 403, 429}:
+                # A denied/rate-limited robots endpoint is not treated as an
+                # invitation to crawl: stop conservatively without probing pages.
+                return WebsiteSnapshot(
+                    company_id=company.id, requested_url=requested, fetch_status="ROBOTS_DENIED",
+                    robots_present=False, sitemap_present=False, error_type="ROBOTS_FILE_RESTRICTED",
+                    error_message=f"robots.txt returned HTTP {robots.status_code}; stopped without fetching company pages",
+                    http_status=robots.status_code,
+                )
             if robots_present:
                 parser.parse(robots.text.splitlines())
                 if not parser.can_fetch(self.settings.user_agent, requested):
@@ -216,12 +298,16 @@ class WebsiteCollector:
                         robots_present=True, sitemap_present=False, error_type="ROBOTS_DENIED",
                         error_message="robots.txt disallows the requested homepage",
                     )
+        except RequestBudgetExceeded:
+            raise
         except (httpx.RequestError, ValueError):
             pass
         self.sleep(self.settings.delay_between_requests_seconds)
         try:
             sitemap = self._request(sitemap_url)
             sitemap_present = sitemap.status_code == 200 and ("xml" in sitemap.headers.get("content-type", "").lower() or sitemap.text.lstrip().startswith("<"))
+        except RequestBudgetExceeded:
+            raise
         except (httpx.RequestError, ValueError):
             pass
 
@@ -265,6 +351,8 @@ class WebsiteCollector:
                 if len(snapshot.pages) == 1:
                     homepage_links = links
                     queue.extend(links[: max(0, self.settings.max_pages_per_company - 1)])
+            except RequestBudgetExceeded:
+                raise
             except (httpx.RequestError, httpx.HTTPStatusError, ValueError, UnicodeError) as exc:
                 snapshot.error_type = type(exc).__name__
                 snapshot.error_message = str(exc)[:1000]

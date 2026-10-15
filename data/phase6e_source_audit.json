@@ -1,0 +1,3179 @@
+{
+  "categories": [
+    {
+      "count": 14693,
+      "industry": "amenity=restaurant"
+    },
+    {
+      "count": 2321,
+      "industry": "amenity=cafe"
+    },
+    {
+      "count": 1819,
+      "industry": "amenity=fast_food"
+    },
+    {
+      "count": 1449,
+      "industry": "tourism=museum"
+    },
+    {
+      "count": 1396,
+      "industry": "shop=hairdresser"
+    },
+    {
+      "count": 1315,
+      "industry": "amenity=bar"
+    },
+    {
+      "count": 1293,
+      "industry": "shop=clothes"
+    },
+    {
+      "count": 1257,
+      "industry": "amenity=dentist"
+    },
+    {
+      "count": 1214,
+      "industry": "shop=car"
+    },
+    {
+      "count": 1148,
+      "industry": "shop=car_repair"
+    },
+    {
+      "count": 1026,
+      "industry": "shop=beauty"
+    },
+    {
+      "count": 1007,
+      "industry": "office=company"
+    },
+    {
+      "count": 977,
+      "industry": "tourism=hotel"
+    },
+    {
+      "count": 915,
+      "industry": "amenity=pub"
+    },
+    {
+      "count": 697,
+      "industry": "amenity=doctors"
+    },
+    {
+      "count": 667,
+      "industry": "office=lawyer"
+    },
+    {
+      "count": 635,
+      "industry": "shop=bakery"
+    },
+    {
+      "count": 613,
+      "industry": "amenity=clinic"
+    },
+    {
+      "count": 606,
+      "industry": "office=estate_agent"
+    },
+    {
+      "count": 600,
+      "industry": "amenity=bank"
+    },
+    {
+      "count": 592,
+      "industry": "shop=supermarket"
+    },
+    {
+      "count": 556,
+      "industry": "amenity=veterinary"
+    },
+    {
+      "count": 517,
+      "industry": "shop=alcohol"
+    },
+    {
+      "count": 470,
+      "industry": "amenity=theatre"
+    },
+    {
+      "count": 453,
+      "industry": "shop=gift"
+    },
+    {
+      "count": 445,
+      "industry": "office=insurance"
+    },
+    {
+      "count": 435,
+      "industry": "shop=florist"
+    },
+    {
+      "count": 429,
+      "industry": "shop=jewelry"
+    },
+    {
+      "count": 389,
+      "industry": "shop=books"
+    },
+    {
+      "count": 375,
+      "industry": "shop=bicycle"
+    },
+    {
+      "count": 348,
+      "industry": "amenity=hospital"
+    },
+    {
+      "count": 341,
+      "industry": "shop=funeral_directors"
+    },
+    {
+      "count": 340,
+      "industry": "shop=furniture"
+    },
+    {
+      "count": 323,
+      "industry": "shop=convenience"
+    },
+    {
+      "count": 297,
+      "industry": "craft=brewery"
+    },
+    {
+      "count": 296,
+      "industry": "shop=cannabis"
+    },
+    {
+      "count": 270,
+      "industry": "shop=optician"
+    },
+    {
+      "count": 265,
+      "industry": "office=educational_institution"
+    },
+    {
+      "count": 264,
+      "industry": "amenity=cinema"
+    },
+    {
+      "count": 258,
+      "industry": "tourism=guest_house"
+    },
+    {
+      "count": 256,
+      "industry": "shop=deli"
+    },
+    {
+      "count": 249,
+      "industry": "amenity=childcare"
+    },
+    {
+      "count": 243,
+      "industry": "shop=farm"
+    },
+    {
+      "count": 240,
+      "industry": "shop=hardware"
+    },
+    {
+      "count": 238,
+      "industry": "tourism=attraction"
+    },
+    {
+      "count": 232,
+      "industry": "amenity=university"
+    },
+    {
+      "count": 226,
+      "industry": "amenity=pharmacy"
+    },
+    {
+      "count": 225,
+      "industry": "shop=tattoo"
+    },
+    {
+      "count": 216,
+      "industry": "shop=pet"
+    },
+    {
+      "count": 215,
+      "industry": "shop=sports"
+    },
+    {
+      "count": 210,
+      "industry": "shop=yes"
+    },
+    {
+      "count": 203,
+      "industry": "amenity=college"
+    },
+    {
+      "count": 202,
+      "industry": "shop=storage_rental"
+    },
+    {
+      "count": 197,
+      "industry": "shop=massage"
+    },
+    {
+      "count": 187,
+      "industry": "shop=garden_centre"
+    },
+    {
+      "count": 185,
+      "industry": "shop=laundry"
+    },
+    {
+      "count": 172,
+      "industry": "shop=dry_cleaning"
+    },
+    {
+      "count": 172,
+      "industry": "amenity=car_wash"
+    },
+    {
+      "count": 166,
+      "industry": "shop=antiques"
+    },
+    {
+      "count": 159,
+      "industry": "office=accountant"
+    },
+    {
+      "count": 155,
+      "industry": "shop=shoes"
+    },
+    {
+      "count": 153,
+      "industry": "shop=pastry"
+    },
+    {
+      "count": 153,
+      "industry": "amenity=marketplace"
+    },
+    {
+      "count": 150,
+      "industry": "shop=pet_grooming"
+    },
+    {
+      "count": 145,
+      "industry": "craft=hvac"
+    },
+    {
+      "count": 142,
+      "industry": "shop=trade"
+    },
+    {
+      "count": 141,
+      "industry": "shop=art"
+    },
+    {
+      "count": 140,
+      "industry": "office=it"
+    },
+    {
+      "count": 140,
+      "industry": "craft=plumber"
+    },
+    {
+      "count": 138,
+      "industry": "shop=second_hand"
+    },
+    {
+      "count": 137,
+      "industry": "shop=interior_decoration"
+    },
+    {
+      "count": 131,
+      "industry": "shop=music"
+    },
+    {
+      "count": 131,
+      "industry": "shop=kitchen"
+    },
+    {
+      "count": 130,
+      "industry": "office=financial"
+    },
+    {
+      "count": 124,
+      "industry": "shop=confectionery"
+    },
+    {
+      "count": 118,
+      "industry": "shop=tobacco"
+    },
+    {
+      "count": 118,
+      "industry": "shop=copyshop"
+    },
+    {
+      "count": 116,
+      "industry": "shop=musical_instrument"
+    },
+    {
+      "count": 116,
+      "industry": "shop=doityourself"
+    },
+    {
+      "count": 112,
+      "industry": "shop=wine"
+    },
+    {
+      "count": 111,
+      "industry": "shop=car_parts"
+    },
+    {
+      "count": 110,
+      "industry": "office=advertising_agency"
+    },
+    {
+      "count": 106,
+      "industry": "shop=butcher"
+    },
+    {
+      "count": 105,
+      "industry": "craft=winery"
+    },
+    {
+      "count": 103,
+      "industry": "craft=roofer"
+    },
+    {
+      "count": 102,
+      "industry": "craft=photographer"
+    },
+    {
+      "count": 101,
+      "industry": "shop=houseware"
+    },
+    {
+      "count": 96,
+      "industry": "shop=mall"
+    },
+    {
+      "count": 96,
+      "industry": "shop=computer"
+    },
+    {
+      "count": 95,
+      "industry": "shop=outdoor"
+    },
+    {
+      "count": 94,
+      "industry": "craft=gardener"
+    },
+    {
+      "count": 93,
+      "industry": "shop=toys"
+    },
+    {
+      "count": 91,
+      "industry": "shop=tyres"
+    },
+    {
+      "count": 87,
+      "industry": "shop=chemist"
+    },
+    {
+      "count": 87,
+      "industry": "craft=cleaning"
+    },
+    {
+      "count": 86,
+      "industry": "craft=electronics_repair"
+    },
+    {
+      "count": 86,
+      "industry": "craft=electrician"
+    },
+    {
+      "count": 85,
+      "industry": "shop=craft"
+    },
+    {
+      "count": 85,
+      "industry": "amenity=fuel"
+    },
+    {
+      "count": 82,
+      "industry": "shop=charity"
+    },
+    {
+      "count": 80,
+      "industry": "shop=seafood"
+    },
+    {
+      "count": 79,
+      "industry": "shop=swimming_pool"
+    },
+    {
+      "count": 79,
+      "industry": "shop=general"
+    },
+    {
+      "count": 79,
+      "industry": "shop=chocolate"
+    },
+    {
+      "count": 78,
+      "industry": "shop=coffee"
+    },
+    {
+      "count": 76,
+      "industry": "shop=beverages"
+    },
+    {
+      "count": 76,
+      "industry": "shop=appliance"
+    },
+    {
+      "count": 73,
+      "industry": "shop=motorcycle"
+    },
+    {
+      "count": 72,
+      "industry": "shop=carpet"
+    },
+    {
+      "count": 72,
+      "industry": "office=tax_advisor"
+    },
+    {
+      "count": 70,
+      "industry": "shop=frame"
+    },
+    {
+      "count": 69,
+      "industry": "shop=collector"
+    },
+    {
+      "count": 66,
+      "industry": "shop=electronics"
+    },
+    {
+      "count": 66,
+      "industry": "shop=cosmetics"
+    },
+    {
+      "count": 66,
+      "industry": "craft=caterer"
+    },
+    {
+      "count": 65,
+      "industry": "shop=greengrocer"
+    },
+    {
+      "count": 64,
+      "industry": "shop=department_store"
+    },
+    {
+      "count": 63,
+      "industry": "shop=mobile_phone"
+    },
+    {
+      "count": 63,
+      "industry": "craft=metal_construction"
+    },
+    {
+      "count": 62,
+      "industry": "shop=variety_store"
+    },
+    {
+      "count": 62,
+      "industry": "shop=rental"
+    },
+    {
+      "count": 61,
+      "industry": "shop=flooring"
+    },
+    {
+      "count": 60,
+      "industry": "shop=games"
+    },
+    {
+      "count": 59,
+      "industry": "shop=weapons"
+    },
+    {
+      "count": 54,
+      "industry": "shop=travel_agency"
+    },
+    {
+      "count": 54,
+      "industry": "shop=locksmith"
+    },
+    {
+      "count": 54,
+      "industry": "office=employment_agency"
+    },
+    {
+      "count": 51,
+      "industry": "shop=photo"
+    },
+    {
+      "count": 50,
+      "industry": "shop=medical_supply"
+    },
+    {
+      "count": 50,
+      "industry": "shop=bed"
+    },
+    {
+      "count": 50,
+      "industry": "craft=window_construction"
+    },
+    {
+      "count": 48,
+      "industry": "shop=tailor"
+    },
+    {
+      "count": 48,
+      "industry": "shop=fabric"
+    },
+    {
+      "count": 47,
+      "industry": "shop=e-cigarette"
+    },
+    {
+      "count": 47,
+      "industry": "craft=painter"
+    },
+    {
+      "count": 45,
+      "industry": "craft=carpenter"
+    },
+    {
+      "count": 44,
+      "industry": "shop=wholesale"
+    },
+    {
+      "count": 43,
+      "industry": "shop=stationery"
+    },
+    {
+      "count": 42,
+      "industry": "shop=agrarian"
+    },
+    {
+      "count": 40,
+      "industry": "shop=paint"
+    },
+    {
+      "count": 40,
+      "industry": "shop=grocery"
+    },
+    {
+      "count": 40,
+      "industry": "shop=fireplace"
+    },
+    {
+      "count": 39,
+      "industry": "shop=boat"
+    },
+    {
+      "count": 39,
+      "industry": "craft=distillery"
+    },
+    {
+      "count": 39,
+      "industry": "craft=builder"
+    },
+    {
+      "count": 37,
+      "industry": "shop=party"
+    },
+    {
+      "count": 37,
+      "industry": "shop=health_food"
+    },
+    {
+      "count": 37,
+      "industry": "craft=signmaker"
+    },
+    {
+      "count": 36,
+      "industry": "shop=tea"
+    },
+    {
+      "count": 35,
+      "industry": "shop=repair"
+    },
+    {
+      "count": 35,
+      "industry": "craft=stonemason"
+    },
+    {
+      "count": 34,
+      "industry": "shop=lighting"
+    },
+    {
+      "count": 34,
+      "industry": "shop=cheese"
+    },
+    {
+      "count": 33,
+      "industry": "shop=pawnbroker"
+    },
+    {
+      "count": 33,
+      "industry": "craft=pottery"
+    },
+    {
+      "count": 31,
+      "industry": "shop=printing"
+    },
+    {
+      "count": 29,
+      "industry": "shop=sewing"
+    },
+    {
+      "count": 29,
+      "industry": "shop=erotic"
+    },
+    {
+      "count": 28,
+      "industry": "shop=ticket"
+    },
+    {
+      "count": 28,
+      "industry": "craft=floorer"
+    },
+    {
+      "count": 27,
+      "industry": "shop=nutrition_supplements"
+    },
+    {
+      "count": 27,
+      "industry": "shop=fuel"
+    },
+    {
+      "count": 26,
+      "industry": "shop=perfumery"
+    },
+    {
+      "count": 25,
+      "industry": "shop=hearing_aids"
+    },
+    {
+      "count": 25,
+      "industry": "shop=groundskeeping"
+    },
+    {
+      "count": 25,
+      "industry": "shop=fashion_accessories"
+    },
+    {
+      "count": 25,
+      "industry": "craft=glaziery"
+    },
+    {
+      "count": 24,
+      "industry": "shop=tiles"
+    },
+    {
+      "count": 24,
+      "industry": "shop=shipping"
+    },
+    {
+      "count": 24,
+      "industry": "shop=hifi"
+    },
+    {
+      "count": 23,
+      "industry": "shop=fishing"
+    },
+    {
+      "count": 22,
+      "industry": "shop=window_blind"
+    },
+    {
+      "count": 22,
+      "industry": "shop=vacuum_cleaner"
+    },
+    {
+      "count": 22,
+      "industry": "shop=money_lender"
+    },
+    {
+      "count": 22,
+      "industry": "amenity=language_school"
+    },
+    {
+      "count": 21,
+      "industry": "shop=estate_agent"
+    },
+    {
+      "count": 21,
+      "industry": "shop=electrical"
+    },
+    {
+      "count": 21,
+      "industry": "shop=doors"
+    },
+    {
+      "count": 21,
+      "industry": "craft=printer"
+    },
+    {
+      "count": 20,
+      "industry": "shop=video_games"
+    },
+    {
+      "count": 20,
+      "industry": "shop=herbalist"
+    },
+    {
+      "count": 20,
+      "industry": "shop=bag"
+    },
+    {
+      "count": 20,
+      "industry": "amenity=coworking_space"
+    },
+    {
+      "count": 19,
+      "industry": "shop=pottery"
+    },
+    {
+      "count": 19,
+      "industry": "shop=leather"
+    },
+    {
+      "count": 19,
+      "industry": "shop=bathroom_furnishing"
+    },
+    {
+      "count": 17,
+      "industry": "shop=watches"
+    },
+    {
+      "count": 17,
+      "industry": "shop=gas"
+    },
+    {
+      "count": 17,
+      "industry": "craft=sawmill"
+    },
+    {
+      "count": 16,
+      "industry": "shop=baby_goods"
+    },
+    {
+      "count": 15,
+      "industry": "shop=psychic"
+    },
+    {
+      "count": 15,
+      "industry": "shop=candles"
+    },
+    {
+      "count": 15,
+      "industry": "shop=camera"
+    },
+    {
+      "count": 14,
+      "industry": "shop=religion"
+    },
+    {
+      "count": 14,
+      "industry": "shop=esoteric"
+    },
+    {
+      "count": 14,
+      "industry": "craft=chimney_sweeper"
+    },
+    {
+      "count": 13,
+      "industry": "shop=shoe_repair"
+    },
+    {
+      "count": 13,
+      "industry": "shop=model"
+    },
+    {
+      "count": 13,
+      "industry": "shop=dairy"
+    },
+    {
+      "count": 13,
+      "industry": "shop=caravan"
+    },
+    {
+      "count": 13,
+      "industry": "craft=photographic_laboratory"
+    },
+    {
+      "count": 12,
+      "industry": "shop=pest_control"
+    },
+    {
+      "count": 12,
+      "industry": "shop=pasta"
+    },
+    {
+      "count": 12,
+      "industry": "craft=upholsterer"
+    },
+    {
+      "count": 12,
+      "industry": "craft=pest_control"
+    },
+    {
+      "count": 12,
+      "industry": "craft=locksmith"
+    },
+    {
+      "count": 12,
+      "industry": "craft=cabinet_maker"
+    },
+    {
+      "count": 11,
+      "industry": "shop=pyrotechnics"
+    },
+    {
+      "count": 11,
+      "industry": "shop=motorcycle_repair"
+    },
+    {
+      "count": 11,
+      "industry": "shop=ice_cream"
+    },
+    {
+      "count": 11,
+      "industry": "shop=boutique"
+    },
+    {
+      "count": 10,
+      "industry": "shop=tool_hire"
+    },
+    {
+      "count": 10,
+      "industry": "shop=spices"
+    },
+    {
+      "count": 10,
+      "industry": "shop=printer_ink"
+    },
+    {
+      "count": 10,
+      "industry": "shop=glaziery"
+    },
+    {
+      "count": 10,
+      "industry": "shop=food"
+    },
+    {
+      "count": 10,
+      "industry": "shop=candy"
+    },
+    {
+      "count": 10,
+      "industry": "amenity=arts_centre"
+    },
+    {
+      "count": 9,
+      "industry": "shop=telecommunication"
+    },
+    {
+      "count": 9,
+      "industry": "shop=security"
+    },
+    {
+      "count": 9,
+      "industry": "shop=kiosk"
+    },
+    {
+      "count": 9,
+      "industry": "shop=curtain"
+    },
+    {
+      "count": 9,
+      "industry": "shop=country_store"
+    },
+    {
+      "count": 9,
+      "industry": "office=yes"
+    },
+    {
+      "count": 9,
+      "industry": "office=travel_agent"
+    },
+    {
+      "count": 9,
+      "industry": "craft=yes"
+    },
+    {
+      "count": 8,
+      "industry": "shop=water"
+    },
+    {
+      "count": 8,
+      "industry": "shop=truck_repair"
+    },
+    {
+      "count": 8,
+      "industry": "shop=truck"
+    },
+    {
+      "count": 8,
+      "industry": "shop=scuba_diving"
+    },
+    {
+      "count": 8,
+      "industry": "shop=piercing"
+    },
+    {
+      "count": 8,
+      "industry": "shop=military_surplus"
+    },
+    {
+      "count": 8,
+      "industry": "craft=handicraft"
+    },
+    {
+      "count": 8,
+      "industry": "craft=fence_maker"
+    },
+    {
+      "count": 8,
+      "industry": "craft=agricultural_engines"
+    },
+    {
+      "count": 8,
+      "industry": "amenity=library"
+    },
+    {
+      "count": 7,
+      "industry": "shop=wool"
+    },
+    {
+      "count": 7,
+      "industry": "shop=household_linen"
+    },
+    {
+      "count": 7,
+      "industry": "shop=hairdresser_supply"
+    },
+    {
+      "count": 7,
+      "industry": "shop=building_materials"
+    },
+    {
+      "count": 7,
+      "industry": "craft=paver"
+    },
+    {
+      "count": 7,
+      "industry": "craft=jeweller"
+    },
+    {
+      "count": 7,
+      "industry": "craft=confectionery"
+    },
+    {
+      "count": 7,
+      "industry": "craft=boatbuilder"
+    },
+    {
+      "count": 6,
+      "industry": "shop=plant_hire"
+    },
+    {
+      "count": 6,
+      "industry": "shop=hunting"
+    },
+    {
+      "count": 6,
+      "industry": "shop=gun"
+    },
+    {
+      "count": 6,
+      "industry": "shop=bridal"
+    },
+    {
+      "count": 6,
+      "industry": "shop=brewing_supplies"
+    },
+    {
+      "count": 6,
+      "industry": "craft=tailor"
+    },
+    {
+      "count": 6,
+      "industry": "craft=construction"
+    },
+    {
+      "count": 6,
+      "industry": "craft=bakery"
+    },
+    {
+      "count": 5,
+      "industry": "shop=trophy"
+    },
+    {
+      "count": 5,
+      "industry": "shop=ski"
+    },
+    {
+      "count": 5,
+      "industry": "shop=radiotechnics"
+    },
+    {
+      "count": 5,
+      "industry": "shop=motorsports"
+    },
+    {
+      "count": 5,
+      "industry": "shop=honey"
+    },
+    {
+      "count": 5,
+      "industry": "shop=gold_buyer"
+    },
+    {
+      "count": 5,
+      "industry": "shop=beer"
+    },
+    {
+      "count": 5,
+      "industry": "shop=barber"
+    },
+    {
+      "count": 5,
+      "industry": "office=marketing"
+    },
+    {
+      "count": 5,
+      "industry": "craft=tiler"
+    },
+    {
+      "count": 5,
+      "industry": "craft=shoemaker"
+    },
+    {
+      "count": 5,
+      "industry": "craft=sculptor"
+    },
+    {
+      "count": 5,
+      "industry": "craft=insulation"
+    },
+    {
+      "count": 5,
+      "industry": "craft=atelier"
+    },
+    {
+      "count": 5,
+      "industry": "amenity=place_of_worship"
+    },
+    {
+      "count": 4,
+      "industry": "shop=yarn"
+    },
+    {
+      "count": 4,
+      "industry": "shop=video"
+    },
+    {
+      "count": 4,
+      "industry": "shop=trailer"
+    },
+    {
+      "count": 4,
+      "industry": "shop=tractor"
+    },
+    {
+      "count": 4,
+      "industry": "shop=skate"
+    },
+    {
+      "count": 4,
+      "industry": "shop=outpost"
+    },
+    {
+      "count": 4,
+      "industry": "shop=hobby"
+    },
+    {
+      "count": 4,
+      "industry": "shop=garden_furniture"
+    },
+    {
+      "count": 4,
+      "industry": "shop=auction_house"
+    },
+    {
+      "count": 4,
+      "industry": "shop=auction"
+    },
+    {
+      "count": 4,
+      "industry": "shop=anime"
+    },
+    {
+      "count": 4,
+      "industry": "office=construction"
+    },
+    {
+      "count": 4,
+      "industry": "office=association"
+    },
+    {
+      "count": 4,
+      "industry": "craft=welder"
+    },
+    {
+      "count": 4,
+      "industry": "craft=watchmaker"
+    },
+    {
+      "count": 4,
+      "industry": "craft=joiner"
+    },
+    {
+      "count": 3,
+      "industry": "shop=wigs"
+    },
+    {
+      "count": 3,
+      "industry": "shop=water_sports"
+    },
+    {
+      "count": 3,
+      "industry": "shop=water_filter"
+    },
+    {
+      "count": 3,
+      "industry": "shop=vacant"
+    },
+    {
+      "count": 3,
+      "industry": "shop=towing"
+    },
+    {
+      "count": 3,
+      "industry": "shop=surf"
+    },
+    {
+      "count": 3,
+      "industry": "shop=smoke_shop"
+    },
+    {
+      "count": 3,
+      "industry": "shop=safety_equipment"
+    },
+    {
+      "count": 3,
+      "industry": "shop=newsagent"
+    },
+    {
+      "count": 3,
+      "industry": "shop=new_age"
+    },
+    {
+      "count": 3,
+      "industry": "shop=hvac"
+    },
+    {
+      "count": 3,
+      "industry": "shop=golf"
+    },
+    {
+      "count": 3,
+      "industry": "shop=garden_machinery"
+    },
+    {
+      "count": 3,
+      "industry": "shop=compost"
+    },
+    {
+      "count": 3,
+      "industry": "shop=canoe_hire"
+    },
+    {
+      "count": 3,
+      "industry": "shop=bbq"
+    },
+    {
+      "count": 3,
+      "industry": "craft=saddler"
+    },
+    {
+      "count": 3,
+      "industry": "craft=restoration"
+    },
+    {
+      "count": 3,
+      "industry": "craft=print_shop"
+    },
+    {
+      "count": 3,
+      "industry": "craft=organ_builder"
+    },
+    {
+      "count": 3,
+      "industry": "craft=landscaper"
+    },
+    {
+      "count": 3,
+      "industry": "craft=interior_decorator"
+    },
+    {
+      "count": 3,
+      "industry": "craft=door_construction"
+    },
+    {
+      "count": 3,
+      "industry": "craft=contractor"
+    },
+    {
+      "count": 3,
+      "industry": "craft=coffee_roaster"
+    },
+    {
+      "count": 3,
+      "industry": "craft=carpet_layer"
+    },
+    {
+      "count": 3,
+      "industry": "craft=carpet_cleaner"
+    },
+    {
+      "count": 3,
+      "industry": "amenity=brewery"
+    },
+    {
+      "count": 2,
+      "industry": "shop=windows"
+    },
+    {
+      "count": 2,
+      "industry": "shop=window_tinting"
+    },
+    {
+      "count": 2,
+      "industry": "shop=truck_parts"
+    },
+    {
+      "count": 2,
+      "industry": "shop=tombstone"
+    },
+    {
+      "count": 2,
+      "industry": "shop=surplus"
+    },
+    {
+      "count": 2,
+      "industry": "shop=stone"
+    },
+    {
+      "count": 2,
+      "industry": "shop=soap"
+    },
+    {
+      "count": 2,
+      "industry": "shop=smoke"
+    },
+    {
+      "count": 2,
+      "industry": "shop=signs"
+    },
+    {
+      "count": 2,
+      "industry": "shop=shed"
+    },
+    {
+      "count": 2,
+      "industry": "shop=salon"
+    },
+    {
+      "count": 2,
+      "industry": "shop=restaurant_supply"
+    },
+    {
+      "count": 2,
+      "industry": "shop=power_equipment"
+    },
+    {
+      "count": 2,
+      "industry": "shop=pool"
+    },
+    {
+      "count": 2,
+      "industry": "shop=plumbing"
+    },
+    {
+      "count": 2,
+      "industry": "shop=photo_studio"
+    },
+    {
+      "count": 2,
+      "industry": "shop=olive_oil"
+    },
+    {
+      "count": 2,
+      "industry": "shop=occult"
+    },
+    {
+      "count": 2,
+      "industry": "shop=motorcycle_parts"
+    },
+    {
+      "count": 2,
+      "industry": "shop=mortgage"
+    },
+    {
+      "count": 2,
+      "industry": "shop=mobile_home"
+    },
+    {
+      "count": 2,
+      "industry": "shop=knives"
+    },
+    {
+      "count": 2,
+      "industry": "shop=kayak"
+    },
+    {
+      "count": 2,
+      "industry": "shop=hot_tub"
+    },
+    {
+      "count": 2,
+      "industry": "shop=hairdresser;beauty"
+    },
+    {
+      "count": 2,
+      "industry": "shop=haberdashery"
+    },
+    {
+      "count": 2,
+      "industry": "shop=golf_cart"
+    },
+    {
+      "count": 2,
+      "industry": "shop=glass"
+    },
+    {
+      "count": 2,
+      "industry": "shop=flag"
+    },
+    {
+      "count": 2,
+      "industry": "shop=financial_services"
+    },
+    {
+      "count": 2,
+      "industry": "shop=fencing"
+    },
+    {
+      "count": 2,
+      "industry": "shop=fence"
+    },
+    {
+      "count": 2,
+      "industry": "shop=farm_equipment"
+    },
+    {
+      "count": 2,
+      "industry": "shop=e-bike"
+    },
+    {
+      "count": 2,
+      "industry": "shop=costume"
+    },
+    {
+      "count": 2,
+      "industry": "shop=construction"
+    },
+    {
+      "count": 2,
+      "industry": "shop=comics"
+    },
+    {
+      "count": 2,
+      "industry": "shop=coffee_roasting"
+    },
+    {
+      "count": 2,
+      "industry": "shop=coffee;tea"
+    },
+    {
+      "count": 2,
+      "industry": "shop=car_rental"
+    },
+    {
+      "count": 2,
+      "industry": "shop=camp"
+    },
+    {
+      "count": 2,
+      "industry": "shop=bookmaker"
+    },
+    {
+      "count": 2,
+      "industry": "shop=atv"
+    },
+    {
+      "count": 2,
+      "industry": "office=graphic_design"
+    },
+    {
+      "count": 2,
+      "industry": "office=government"
+    },
+    {
+      "count": 2,
+      "industry": "office=financial_advisor"
+    },
+    {
+      "count": 2,
+      "industry": "office=coworking"
+    },
+    {
+      "count": 2,
+      "industry": "craft=welding"
+    },
+    {
+      "count": 2,
+      "industry": "craft=taxidermy"
+    },
+    {
+      "count": 2,
+      "industry": "craft=plumber;hvac"
+    },
+    {
+      "count": 2,
+      "industry": "craft=piano_tuner"
+    },
+    {
+      "count": 2,
+      "industry": "craft=key_cutter"
+    },
+    {
+      "count": 2,
+      "industry": "craft=glassblower"
+    },
+    {
+      "count": 2,
+      "industry": "craft=furniture"
+    },
+    {
+      "count": 2,
+      "industry": "craft=embroiderer"
+    },
+    {
+      "count": 2,
+      "industry": "craft=dressmaker"
+    },
+    {
+      "count": 2,
+      "industry": "craft=blacksmith"
+    },
+    {
+      "count": 2,
+      "industry": "craft=artist"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=workshop"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=studio"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=planetarium"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=ferry_terminal"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=events_venue"
+    },
+    {
+      "count": 2,
+      "industry": "amenity=casino"
+    },
+    {
+      "count": 1,
+      "industry": "shop=yes;mobile_home"
+    },
+    {
+      "count": 1,
+      "industry": "shop=www.evansonthecommon.com"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wood_stove"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wood"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wine;cheese"
+    },
+    {
+      "count": 1,
+      "industry": "shop=window_treatments"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wellness_center"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wellness"
+    },
+    {
+      "count": 1,
+      "industry": "shop=wedding_registry"
+    },
+    {
+      "count": 1,
+      "industry": "shop=water_filtration;pressure_washer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=watch_repair,_clock_repair,_watches,_clocks,_gold,_silver,_buying,_tiffany_lock_repair"
+    },
+    {
+      "count": 1,
+      "industry": "shop=waste_collection"
+    },
+    {
+      "count": 1,
+      "industry": "shop=vinyl"
+    },
+    {
+      "count": 1,
+      "industry": "shop=vintage_decor"
+    },
+    {
+      "count": 1,
+      "industry": "shop=video;books"
+    },
+    {
+      "count": 1,
+      "industry": "shop=vending_machine"
+    },
+    {
+      "count": 1,
+      "industry": "shop=typewriter"
+    },
+    {
+      "count": 1,
+      "industry": "shop=tools"
+    },
+    {
+      "count": 1,
+      "industry": "shop=tofu"
+    },
+    {
+      "count": 1,
+      "industry": "shop=tile"
+    },
+    {
+      "count": 1,
+      "industry": "shop=textile_printing"
+    },
+    {
+      "count": 1,
+      "industry": "shop=tanning"
+    },
+    {
+      "count": 1,
+      "industry": "shop=t-shirts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=surplus_equipment"
+    },
+    {
+      "count": 1,
+      "industry": "shop=supplements"
+    },
+    {
+      "count": 1,
+      "industry": "shop=stationery;gift"
+    },
+    {
+      "count": 1,
+      "industry": "shop=sports_cards"
+    },
+    {
+      "count": 1,
+      "industry": "shop=spa"
+    },
+    {
+      "count": 1,
+      "industry": "shop=souvenir"
+    },
+    {
+      "count": 1,
+      "industry": "shop=soup"
+    },
+    {
+      "count": 1,
+      "industry": "shop=software"
+    },
+    {
+      "count": 1,
+      "industry": "shop=snowmobile"
+    },
+    {
+      "count": 1,
+      "industry": "shop=smoking"
+    },
+    {
+      "count": 1,
+      "industry": "shop=small_engine_repair"
+    },
+    {
+      "count": 1,
+      "industry": "shop=sign"
+    },
+    {
+      "count": 1,
+      "industry": "shop=shopping_centre"
+    },
+    {
+      "count": 1,
+      "industry": "shop=sheds"
+    },
+    {
+      "count": 1,
+      "industry": "shop=sewing_machine"
+    },
+    {
+      "count": 1,
+      "industry": "shop=service_company,_generators"
+    },
+    {
+      "count": 1,
+      "industry": "shop=scooter"
+    },
+    {
+      "count": 1,
+      "industry": "shop=salad"
+    },
+    {
+      "count": 1,
+      "industry": "shop=rubberbands"
+    },
+    {
+      "count": 1,
+      "industry": "shop=rocks"
+    },
+    {
+      "count": 1,
+      "industry": "shop=retail"
+    },
+    {
+      "count": 1,
+      "industry": "shop=restaurant_supplies"
+    },
+    {
+      "count": 1,
+      "industry": "shop=remote_control_vehicle"
+    },
+    {
+      "count": 1,
+      "industry": "shop=refill"
+    },
+    {
+      "count": 1,
+      "industry": "shop=quilts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=purification"
+    },
+    {
+      "count": 1,
+      "industry": "shop=promotional_products"
+    },
+    {
+      "count": 1,
+      "industry": "shop=printshop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=printing-press-folder-parts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=printer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=print_shop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=print"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pressure_washer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=preserves"
+    },
+    {
+      "count": 1,
+      "industry": "shop=prepared_food"
+    },
+    {
+      "count": 1,
+      "industry": "shop=power_tools"
+    },
+    {
+      "count": 1,
+      "industry": "shop=popcorn"
+    },
+    {
+      "count": 1,
+      "industry": "shop=plumbing_heating"
+    },
+    {
+      "count": 1,
+      "industry": "shop=plumber"
+    },
+    {
+      "count": 1,
+      "industry": "shop=playground_equipment_supplier"
+    },
+    {
+      "count": 1,
+      "industry": "shop=plants"
+    },
+    {
+      "count": 1,
+      "industry": "shop=picture_frame"
+    },
+    {
+      "count": 1,
+      "industry": "shop=piano"
+    },
+    {
+      "count": 1,
+      "industry": "shop=photography"
+    },
+    {
+      "count": 1,
+      "industry": "shop=photographer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pharmacy"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pet_supplies"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pet_services"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pet_grooming; pet_care"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pedicure_supply"
+    },
+    {
+      "count": 1,
+      "industry": "shop=pavers"
+    },
+    {
+      "count": 1,
+      "industry": "shop=parts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=packaging"
+    },
+    {
+      "count": 1,
+      "industry": "shop=office supply"
+    },
+    {
+      "count": 1,
+      "industry": "shop=nuts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=numismatics"
+    },
+    {
+      "count": 1,
+      "industry": "shop=novelty"
+    },
+    {
+      "count": 1,
+      "industry": "shop=neon_signs"
+    },
+    {
+      "count": 1,
+      "industry": "shop=moving"
+    },
+    {
+      "count": 1,
+      "industry": "shop=monument_maker"
+    },
+    {
+      "count": 1,
+      "industry": "shop=mobile_industrial_equipment"
+    },
+    {
+      "count": 1,
+      "industry": "shop=mobile_homes"
+    },
+    {
+      "count": 1,
+      "industry": "shop=millinery"
+    },
+    {
+      "count": 1,
+      "industry": "shop=metaphysical_supply_store"
+    },
+    {
+      "count": 1,
+      "industry": "shop=metaphysical"
+    },
+    {
+      "count": 1,
+      "industry": "shop=market"
+    },
+    {
+      "count": 1,
+      "industry": "shop=marine"
+    },
+    {
+      "count": 1,
+      "industry": "shop=magic"
+    },
+    {
+      "count": 1,
+      "industry": "shop=magazine_shop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=machining_services"
+    },
+    {
+      "count": 1,
+      "industry": "shop=machining"
+    },
+    {
+      "count": 1,
+      "industry": "shop=lumber"
+    },
+    {
+      "count": 1,
+      "industry": "shop=luggage_storage"
+    },
+    {
+      "count": 1,
+      "industry": "shop=lottery"
+    },
+    {
+      "count": 1,
+      "industry": "shop=liquidation"
+    },
+    {
+      "count": 1,
+      "industry": "shop=limousine_rental"
+    },
+    {
+      "count": 1,
+      "industry": "shop=leatherworking"
+    },
+    {
+      "count": 1,
+      "industry": "shop=lawnmower"
+    },
+    {
+      "count": 1,
+      "industry": "shop=landscape_supplies"
+    },
+    {
+      "count": 1,
+      "industry": "shop=landscape"
+    },
+    {
+      "count": 1,
+      "industry": "shop=kombucha"
+    },
+    {
+      "count": 1,
+      "industry": "shop=kitchenware"
+    },
+    {
+      "count": 1,
+      "industry": "shop=kids"
+    },
+    {
+      "count": 1,
+      "industry": "shop=junk_yard"
+    },
+    {
+      "count": 1,
+      "industry": "shop=jewelry;wine"
+    },
+    {
+      "count": 1,
+      "industry": "shop=jerky"
+    },
+    {
+      "count": 1,
+      "industry": "shop=irrigation"
+    },
+    {
+      "count": 1,
+      "industry": "shop=insurance"
+    },
+    {
+      "count": 1,
+      "industry": "shop=ice_skate"
+    },
+    {
+      "count": 1,
+      "industry": "shop=ice_cream;chocolate;eclectic"
+    },
+    {
+      "count": 1,
+      "industry": "shop=hydroponics"
+    },
+    {
+      "count": 1,
+      "industry": "shop=hydraulics"
+    },
+    {
+      "count": 1,
+      "industry": "shop=houseware;jewelry"
+    },
+    {
+      "count": 1,
+      "industry": "shop=house"
+    },
+    {
+      "count": 1,
+      "industry": "shop=home_improvement"
+    },
+    {
+      "count": 1,
+      "industry": "shop=home_design"
+    },
+    {
+      "count": 1,
+      "industry": "shop=heating"
+    },
+    {
+      "count": 1,
+      "industry": "shop=health"
+    },
+    {
+      "count": 1,
+      "industry": "shop=headshop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=hardscape"
+    },
+    {
+      "count": 1,
+      "industry": "shop=hairdresser;Salon;Barbershop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=grocery;greengrocer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=graffiti"
+    },
+    {
+      "count": 1,
+      "industry": "shop=generators"
+    },
+    {
+      "count": 1,
+      "industry": "shop=general_store"
+    },
+    {
+      "count": 1,
+      "industry": "shop=gardener"
+    },
+    {
+      "count": 1,
+      "industry": "shop=garbage_truck"
+    },
+    {
+      "count": 1,
+      "industry": "shop=furs"
+    },
+    {
+      "count": 1,
+      "industry": "shop=furniture;rugs"
+    },
+    {
+      "count": 1,
+      "industry": "shop=frozen_food"
+    },
+    {
+      "count": 1,
+      "industry": "shop=food_service"
+    },
+    {
+      "count": 1,
+      "industry": "shop=flooring;carpet"
+    },
+    {
+      "count": 1,
+      "industry": "shop=floor_covering"
+    },
+    {
+      "count": 1,
+      "industry": "shop=flags"
+    },
+    {
+      "count": 1,
+      "industry": "shop=fishmonger"
+    },
+    {
+      "count": 1,
+      "industry": "shop=firearms"
+    },
+    {
+      "count": 1,
+      "industry": "shop=farmstand"
+    },
+    {
+      "count": 1,
+      "industry": "shop=farmers_market"
+    },
+    {
+      "count": 1,
+      "industry": "shop=farm;florist"
+    },
+    {
+      "count": 1,
+      "industry": "shop=exterior_remodeler"
+    },
+    {
+      "count": 1,
+      "industry": "shop=equipment"
+    },
+    {
+      "count": 1,
+      "industry": "shop=equestrian"
+    },
+    {
+      "count": 1,
+      "industry": "shop=engraving"
+    },
+    {
+      "count": 1,
+      "industry": "shop=energy"
+    },
+    {
+      "count": 1,
+      "industry": "shop=emergency_equipment"
+    },
+    {
+      "count": 1,
+      "industry": "shop=education"
+    },
+    {
+      "count": 1,
+      "industry": "shop=dried_meat"
+    },
+    {
+      "count": 1,
+      "industry": "shop=draoery and blinds"
+    },
+    {
+      "count": 1,
+      "industry": "shop=doityourself;paint"
+    },
+    {
+      "count": 1,
+      "industry": "shop=discount"
+    },
+    {
+      "count": 1,
+      "industry": "shop=dessert"
+    },
+    {
+      "count": 1,
+      "industry": "shop=dentures"
+    },
+    {
+      "count": 1,
+      "industry": "shop=demolition"
+    },
+    {
+      "count": 1,
+      "industry": "shop=deli;convenience"
+    },
+    {
+      "count": 1,
+      "industry": "shop=deli;cheese;alcohol"
+    },
+    {
+      "count": 1,
+      "industry": "shop=decoration"
+    },
+    {
+      "count": 1,
+      "industry": "shop=dance"
+    },
+    {
+      "count": 1,
+      "industry": "shop=crystal"
+    },
+    {
+      "count": 1,
+      "industry": "shop=countertops"
+    },
+    {
+      "count": 1,
+      "industry": "shop=countertop"
+    },
+    {
+      "count": 1,
+      "industry": "shop=cooking_oils;condiments"
+    },
+    {
+      "count": 1,
+      "industry": "shop=construction_vehicles"
+    },
+    {
+      "count": 1,
+      "industry": "shop=confectionery;tobacco"
+    },
+    {
+      "count": 1,
+      "industry": "shop=confectionery;gift"
+    },
+    {
+      "count": 1,
+      "industry": "shop=computer_repair"
+    },
+    {
+      "count": 1,
+      "industry": "shop=coin_store"
+    },
+    {
+      "count": 1,
+      "industry": "shop=coffee;tea;wine;cheese"
+    },
+    {
+      "count": 1,
+      "industry": "shop=coffee;cards;chocolate;tobacco;tea;magazines"
+    },
+    {
+      "count": 1,
+      "industry": "shop=clothes;water_sports"
+    },
+    {
+      "count": 1,
+      "industry": "shop=clothes;toys;books;games"
+    },
+    {
+      "count": 1,
+      "industry": "shop=clothes;toys"
+    },
+    {
+      "count": 1,
+      "industry": "shop=clocks"
+    },
+    {
+      "count": 1,
+      "industry": "shop=cleaning_supplies"
+    },
+    {
+      "count": 1,
+      "industry": "shop=cleaning"
+    },
+    {
+      "count": 1,
+      "industry": "shop=classic_media"
+    },
+    {
+      "count": 1,
+      "industry": "shop=cigars"
+    },
+    {
+      "count": 1,
+      "industry": "shop=christmas_trees"
+    },
+    {
+      "count": 1,
+      "industry": "shop=chimney"
+    },
+    {
+      "count": 1,
+      "industry": "shop=chemicals"
+    },
+    {
+      "count": 1,
+      "industry": "shop=ceramics;houseware"
+    },
+    {
+      "count": 1,
+      "industry": "shop=carriges"
+    },
+    {
+      "count": 1,
+      "industry": "shop=carpet_cleaning"
+    },
+    {
+      "count": 1,
+      "industry": "shop=car_licence_plate"
+    },
+    {
+      "count": 1,
+      "industry": "shop=car_detail"
+    },
+    {
+      "count": 1,
+      "industry": "shop=car_accessories"
+    },
+    {
+      "count": 1,
+      "industry": "shop=cannabis;e-cigarette;tobacco"
+    },
+    {
+      "count": 1,
+      "industry": "shop=bus_repair"
+    },
+    {
+      "count": 1,
+      "industry": "shop=building"
+    },
+    {
+      "count": 1,
+      "industry": "shop=brewing"
+    },
+    {
+      "count": 1,
+      "industry": "shop=books;toys"
+    },
+    {
+      "count": 1,
+      "industry": "shop=books;music"
+    },
+    {
+      "count": 1,
+      "industry": "shop=books;comic"
+    },
+    {
+      "count": 1,
+      "industry": "shop=books, plush, figures"
+    },
+    {
+      "count": 1,
+      "industry": "shop=boat_repair"
+    },
+    {
+      "count": 1,
+      "industry": "shop=bicycle;ski"
+    },
+    {
+      "count": 1,
+      "industry": "shop=beauty_supply"
+    },
+    {
+      "count": 1,
+      "industry": "shop=beauty;hairdresser"
+    },
+    {
+      "count": 1,
+      "industry": "shop=batteries"
+    },
+    {
+      "count": 1,
+      "industry": "shop=bathroom"
+    },
+    {
+      "count": 1,
+      "industry": "shop=barrel"
+    },
+    {
+      "count": 1,
+      "industry": "shop=awnings"
+    },
+    {
+      "count": 1,
+      "industry": "shop=auctioneer"
+    },
+    {
+      "count": 1,
+      "industry": "shop=atv;snowmobile"
+    },
+    {
+      "count": 1,
+      "industry": "shop=artisan_gallery;gifts;healing"
+    },
+    {
+      "count": 1,
+      "industry": "shop=art_studio"
+    },
+    {
+      "count": 1,
+      "industry": "shop=arcade"
+    },
+    {
+      "count": 1,
+      "industry": "shop=arborist_supply"
+    },
+    {
+      "count": 1,
+      "industry": "shop=appraiser"
+    },
+    {
+      "count": 1,
+      "industry": "shop=appliance_parts"
+    },
+    {
+      "count": 1,
+      "industry": "shop=antiques;books"
+    },
+    {
+      "count": 1,
+      "industry": "shop=andy"
+    },
+    {
+      "count": 1,
+      "industry": "shop=alcohol;wine"
+    },
+    {
+      "count": 1,
+      "industry": "shop=agrarian;tractor"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Shower Door"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Shipping Service"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Printing Company"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Powder_Coating"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Popcorn_Store"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Ice Cream"
+    },
+    {
+      "count": 1,
+      "industry": "shop=Grocery"
+    },
+    {
+      "count": 1,
+      "industry": "shop=DNEC"
+    },
+    {
+      "count": 1,
+      "industry": "shop=*"
+    },
+    {
+      "count": 1,
+      "industry": "office=therapist"
+    },
+    {
+      "count": 1,
+      "industry": "office=research"
+    },
+    {
+      "count": 1,
+      "industry": "office=ngo"
+    },
+    {
+      "count": 1,
+      "industry": "office=international_organization"
+    },
+    {
+      "count": 1,
+      "industry": "office=coworking_space"
+    },
+    {
+      "count": 1,
+      "industry": "office=construction_company"
+    },
+    {
+      "count": 1,
+      "industry": "office=bistro"
+    },
+    {
+      "count": 1,
+      "industry": "office=The Pennsylvania State University: Altoona"
+    },
+    {
+      "count": 1,
+      "industry": "office=New England Historic Genealogical Society"
+    },
+    {
+      "count": 1,
+      "industry": "craft=window_tinting"
+    },
+    {
+      "count": 1,
+      "industry": "craft=tool_sharpening"
+    },
+    {
+      "count": 1,
+      "industry": "craft=tinsmith"
+    },
+    {
+      "count": 1,
+      "industry": "craft=textile_printing"
+    },
+    {
+      "count": 1,
+      "industry": "craft=tank_repair"
+    },
+    {
+      "count": 1,
+      "industry": "craft=tank_construction"
+    },
+    {
+      "count": 1,
+      "industry": "craft=swimming_pool"
+    },
+    {
+      "count": 1,
+      "industry": "craft=snow_removal"
+    },
+    {
+      "count": 1,
+      "industry": "craft=shelter_builder"
+    },
+    {
+      "count": 1,
+      "industry": "craft=sewing"
+    },
+    {
+      "count": 1,
+      "industry": "craft=screen_printer"
+    },
+    {
+      "count": 1,
+      "industry": "craft=scaffolder"
+    },
+    {
+      "count": 1,
+      "industry": "craft=sailmaker"
+    },
+    {
+      "count": 1,
+      "industry": "craft=rigger"
+    },
+    {
+      "count": 1,
+      "industry": "craft=repair"
+    },
+    {
+      "count": 1,
+      "industry": "craft=quilter"
+    },
+    {
+      "count": 1,
+      "industry": "craft=psychic"
+    },
+    {
+      "count": 1,
+      "industry": "craft=printmaker"
+    },
+    {
+      "count": 1,
+      "industry": "craft=power_washing"
+    },
+    {
+      "count": 1,
+      "industry": "craft=pool_installation"
+    },
+    {
+      "count": 1,
+      "industry": "craft=pool_builder"
+    },
+    {
+      "count": 1,
+      "industry": "craft=plumber;hvac;electrician"
+    },
+    {
+      "count": 1,
+      "industry": "craft=playsets"
+    },
+    {
+      "count": 1,
+      "industry": "craft=mobile_crane"
+    },
+    {
+      "count": 1,
+      "industry": "craft=masonry"
+    },
+    {
+      "count": 1,
+      "industry": "craft=marble"
+    },
+    {
+      "count": 1,
+      "industry": "craft=maple_syrup"
+    },
+    {
+      "count": 1,
+      "industry": "craft=machine_tooling"
+    },
+    {
+      "count": 1,
+      "industry": "craft=lighting"
+    },
+    {
+      "count": 1,
+      "industry": "craft=kitchen"
+    },
+    {
+      "count": 1,
+      "industry": "craft=junk_removal"
+    },
+    {
+      "count": 1,
+      "industry": "craft=interior_work"
+    },
+    {
+      "count": 1,
+      "industry": "craft=hvac;plumber"
+    },
+    {
+      "count": 1,
+      "industry": "craft=hvac;electrician"
+    },
+    {
+      "count": 1,
+      "industry": "craft=hedstones"
+    },
+    {
+      "count": 1,
+      "industry": "craft=hayride_wagons"
+    },
+    {
+      "count": 1,
+      "industry": "craft=guttering"
+    },
+    {
+      "count": 1,
+      "industry": "craft=garage_door"
+    },
+    {
+      "count": 1,
+      "industry": "craft=fencing"
+    },
+    {
+      "count": 1,
+      "industry": "craft=excavation"
+    },
+    {
+      "count": 1,
+      "industry": "craft=engraver"
+    },
+    {
+      "count": 1,
+      "industry": "craft=embroidery"
+    },
+    {
+      "count": 1,
+      "industry": "craft=electronics_assembly"
+    },
+    {
+      "count": 1,
+      "industry": "craft=disaster_cleanup"
+    },
+    {
+      "count": 1,
+      "industry": "craft=department_of_public_works"
+    },
+    {
+      "count": 1,
+      "industry": "craft=dental_technician"
+    },
+    {
+      "count": 1,
+      "industry": "craft=deckbuilder"
+    },
+    {
+      "count": 1,
+      "industry": "craft=custom_furniture"
+    },
+    {
+      "count": 1,
+      "industry": "craft=concrete_contractor"
+    },
+    {
+      "count": 1,
+      "industry": "craft=coffee"
+    },
+    {
+      "count": 1,
+      "industry": "craft=clockmaker"
+    },
+    {
+      "count": 1,
+      "industry": "craft=cleaner"
+    },
+    {
+      "count": 1,
+      "industry": "craft=calligraphy"
+    },
+    {
+      "count": 1,
+      "industry": "craft=bookbinder"
+    },
+    {
+      "count": 1,
+      "industry": "craft=boiler_repair"
+    },
+    {
+      "count": 1,
+      "industry": "craft=bells"
+    },
+    {
+      "count": 1,
+      "industry": "craft=bathroom_remodel"
+    },
+    {
+      "count": 1,
+      "industry": "craft=asphalt_paver"
+    },
+    {
+      "count": 1,
+      "industry": "craft=art_parties"
+    },
+    {
+      "count": 1,
+      "industry": "craft=archival_storage"
+    },
+    {
+      "count": 1,
+      "industry": "craft=aquarium"
+    },
+    {
+      "count": 1,
+      "industry": "craft=aborist"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=warehouse"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=vending_machine"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=training"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=school"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=public_building"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=nightclub"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=lodge;cabin;rv site"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=ice_cream"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=hotel"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=gallery"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=electrical contractor"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=conference_centre"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=community_centre"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=cafe;events_venue"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=boat_rental"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=bench"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=architectural_metalwork"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=Taylor"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=Landscaper"
+    },
+    {
+      "count": 1,
+      "industry": "amenity=Excavation Contractors"
+    }
+  ],
+  "domains_over_40_chars": 97,
+  "duplicate_company_names_across_domains": 1371,
+  "geography_top_100": [
+    {
+      "count": 2092,
+      "location": "New York, NY"
+    },
+    {
+      "count": 994,
+      "location": "Brooklyn, NY"
+    },
+    {
+      "count": 962,
+      "location": "Philadelphia, PA"
+    },
+    {
+      "count": 817,
+      "location": "Boston, MA"
+    },
+    {
+      "count": 643,
+      "location": "Pittsburgh, PA"
+    },
+    {
+      "count": 592,
+      "location": "Buffalo, NY"
+    },
+    {
+      "count": 411,
+      "location": "Rochester, NY"
+    },
+    {
+      "count": 324,
+      "location": "Allentown, PA"
+    },
+    {
+      "count": 318,
+      "location": "New York"
+    },
+    {
+      "count": 282,
+      "location": "Cambridge, MA"
+    },
+    {
+      "count": 272,
+      "location": "New York, NY, US"
+    },
+    {
+      "count": 269,
+      "location": "Montclair, NJ"
+    },
+    {
+      "count": 248,
+      "location": "Albany, NY"
+    },
+    {
+      "count": 245,
+      "location": "Lancaster, PA"
+    },
+    {
+      "count": 244,
+      "location": "West Chester, PA"
+    },
+    {
+      "count": 223,
+      "location": "Nashua, NH"
+    },
+    {
+      "count": 219,
+      "location": "Portland, ME"
+    },
+    {
+      "count": 214,
+      "location": "State College, PA"
+    },
+    {
+      "count": 195,
+      "location": "Syracuse, NY"
+    },
+    {
+      "count": 189,
+      "location": "Nashua"
+    },
+    {
+      "count": 186,
+      "location": "Syracuse, NY, US"
+    },
+    {
+      "count": 178,
+      "location": "Saratoga Springs, NY"
+    },
+    {
+      "count": 171,
+      "location": "Philadelphia"
+    },
+    {
+      "count": 167,
+      "location": "Ithaca, NY"
+    },
+    {
+      "count": 165,
+      "location": "Manchester"
+    },
+    {
+      "count": 163,
+      "location": "State College, PA, US"
+    },
+    {
+      "count": 157,
+      "location": "Providence, RI"
+    },
+    {
+      "count": 156,
+      "location": "Somerville, MA"
+    },
+    {
+      "count": 155,
+      "location": "Staten Island, NY"
+    },
+    {
+      "count": 145,
+      "location": "Harrisburg, PA"
+    },
+    {
+      "count": 140,
+      "location": "Glastonbury, CT"
+    },
+    {
+      "count": 136,
+      "location": "Manchester, NH"
+    },
+    {
+      "count": 130,
+      "location": "Bronx, NY"
+    },
+    {
+      "count": 129,
+      "location": "Provincetown, MA"
+    },
+    {
+      "count": 128,
+      "location": "Pottstown, PA"
+    },
+    {
+      "count": 128,
+      "location": "Norwich, CT"
+    },
+    {
+      "count": 118,
+      "location": "Burlington, VT"
+    },
+    {
+      "count": 117,
+      "location": "Salem, MA"
+    },
+    {
+      "count": 112,
+      "location": "Gettysburg, PA"
+    },
+    {
+      "count": 111,
+      "location": "Burlington, VT, US"
+    },
+    {
+      "count": 108,
+      "location": "Kingston, NY"
+    },
+    {
+      "count": 104,
+      "location": "Phoenixville, PA"
+    },
+    {
+      "count": 98,
+      "location": "Jersey City, NJ"
+    },
+    {
+      "count": 97,
+      "location": "NY"
+    },
+    {
+      "count": 97,
+      "location": "Middletown, NY"
+    },
+    {
+      "count": 96,
+      "location": "Emmaus, PA"
+    },
+    {
+      "count": 95,
+      "location": "York, PA"
+    },
+    {
+      "count": 94,
+      "location": "Hartford, CT"
+    },
+    {
+      "count": 91,
+      "location": "New Haven, CT"
+    },
+    {
+      "count": 88,
+      "location": "Wakefield, MA"
+    },
+    {
+      "count": 88,
+      "location": "Ephrata, PA"
+    },
+    {
+      "count": 88,
+      "location": "Bethlehem, PA"
+    },
+    {
+      "count": 87,
+      "location": "Ridgewood, NY"
+    },
+    {
+      "count": 87,
+      "location": "Jamaica, NY"
+    },
+    {
+      "count": 86,
+      "location": "Hanover, NH"
+    },
+    {
+      "count": 86,
+      "location": "Allston, MA"
+    },
+    {
+      "count": 85,
+      "location": "Erie, PA"
+    },
+    {
+      "count": 84,
+      "location": "Wayne, PA"
+    },
+    {
+      "count": 84,
+      "location": "Lebanon, NH"
+    },
+    {
+      "count": 84,
+      "location": "Astoria, NY"
+    },
+    {
+      "count": 83,
+      "location": "Doylestown, PA"
+    },
+    {
+      "count": 83,
+      "location": "Danville, PA"
+    },
+    {
+      "count": 82,
+      "location": "Long Island City, NY"
+    },
+    {
+      "count": 81,
+      "location": "Whitehall, PA"
+    },
+    {
+      "count": 81,
+      "location": "Troy, NY"
+    },
+    {
+      "count": 80,
+      "location": "Newark, NJ"
+    },
+    {
+      "count": 80,
+      "location": "Liverpool, NY"
+    },
+    {
+      "count": 77,
+      "location": "Brooklyn"
+    },
+    {
+      "count": 76,
+      "location": "Bloomfield, NJ"
+    },
+    {
+      "count": 75,
+      "location": "Willimantic, CT"
+    },
+    {
+      "count": 75,
+      "location": "Derry"
+    },
+    {
+      "count": 74,
+      "location": "East Greenwich, RI, US"
+    },
+    {
+      "count": 74,
+      "location": "Brunswick, ME"
+    },
+    {
+      "count": 73,
+      "location": "Edison, NJ"
+    },
+    {
+      "count": 73,
+      "location": "Easton, PA"
+    },
+    {
+      "count": 72,
+      "location": "Mechanicsburg, PA"
+    },
+    {
+      "count": 72,
+      "location": "Exton, PA"
+    },
+    {
+      "count": 72,
+      "location": "Brooklyn, NY, US"
+    },
+    {
+      "count": 71,
+      "location": "White River Junction, VT"
+    },
+    {
+      "count": 70,
+      "location": "MA"
+    },
+    {
+      "count": 70,
+      "location": "Londonderry"
+    },
+    {
+      "count": 70,
+      "location": "Downingtown, PA"
+    },
+    {
+      "count": 70,
+      "location": "Chambersburg, PA"
+    },
+    {
+      "count": 70,
+      "location": "Ballston Spa, NY"
+    },
+    {
+      "count": 69,
+      "location": "Brookline, MA"
+    },
+    {
+      "count": 67,
+      "location": "Malden, MA"
+    },
+    {
+      "count": 66,
+      "location": "Lititz, PA"
+    },
+    {
+      "count": 66,
+      "location": "Corning, NY"
+    },
+    {
+      "count": 66,
+      "location": "Bethlehem, PA, US"
+    },
+    {
+      "count": 65,
+      "location": "Malvern, PA"
+    },
+    {
+      "count": 65,
+      "location": "Hudson"
+    },
+    {
+      "count": 65,
+      "location": "Hoboken, NJ"
+    },
+    {
+      "count": 62,
+      "location": "Derry, NH"
+    },
+    {
+      "count": 61,
+      "location": "Reading, MA"
+    },
+    {
+      "count": 60,
+      "location": "Woodstock, NY"
+    },
+    {
+      "count": 60,
+      "location": "Woburn"
+    },
+    {
+      "count": 60,
+      "location": "Norwalk, CT"
+    },
+    {
+      "count": 60,
+      "location": "Arlington, MA"
+    },
+    {
+      "count": 60,
+      "location": "Amherst, NY"
+    },
+    {
+      "count": 59,
+      "location": "West Chester"
+    }
+  ],
+  "hosted_platform_domains": 650,
+  "multiple_osm_provenance_objects": 5378,
+  "previously_verified": 5,
+  "punycode_domains": 1,
+  "total_candidates": 57127,
+  "with_location": 41933,
+  "with_org_or_gov_suffix": 3703
+}

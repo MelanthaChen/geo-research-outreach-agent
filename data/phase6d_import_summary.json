@@ -1,0 +1,22 @@
+{
+  "active_cohort_duplicate_source_objects": 7,
+  "commercial_website_objects": 109874,
+  "duplicate_domain_source_objects": 52740,
+  "extract_bytes": 1804277099,
+  "extract_version": "us-northeast-261014",
+  "final_combined_candidate_pool": 57664,
+  "imported_at": "2026-10-15T17:19:05.143874+00:00",
+  "inactive_tag_objects_excluded": 38,
+  "license_or_permission": "OpenStreetMap contributors; ODbL 1.0; attribution required; share-alike on public distribution",
+  "named_objects_examined": 2968327,
+  "named_objects_without_acceptable_website": 2785459,
+  "new_unique_candidates_imported": 57127,
+  "preserved_source_provenance_rows": 109867,
+  "source_downloaded_at": "2026-10-15T17:08:23.520175+00:00",
+  "source_name": "OpenStreetMap (Geofabrik US Northeast extract)",
+  "source_sha256": "7a57875e39ab0dd4e16183c2ff5c2bb23b8b1a124b308017f5db440ae8a896c3",
+  "source_url": "https://download.geofabrik.de/north-america/us-northeast-261014.osm.pbf",
+  "starting_active_companies": 537,
+  "unique_website_domains_before_active_cohort_dedup": 57134,
+  "website_bearing_objects_outside_commercial_filter": 72956
+}

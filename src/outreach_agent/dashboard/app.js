@@ -26,6 +26,14 @@ async function apiWrite(path, payload) {
   if (!response.ok) throw new Error(result.error || `Dashboard request failed (${response.status})`);
   return result;
 }
+async function apiDownload(path, payload) {
+  const response = await fetch(path, {method:"POST", headers:{"Accept":"text/csv, application/json","Content-Type":"application/json"}, body:JSON.stringify(payload), cache:"no-store"});
+  if (!response.ok) { const result=await response.json(); const error=new Error(result.error || `Export failed (${response.status})`); error.exportResult=result; throw error; }
+  const blob=await response.blob();
+  const filename=response.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1] || "mail-merge.csv";
+  const link=document.createElement("a"); link.href=URL.createObjectURL(blob); link.download=filename; link.click(); URL.revokeObjectURL(link.href);
+  return {filename};
+}
 function setOptions(id, values) {
   const select = $(id), first = select.options[0];
   select.replaceChildren(first);
@@ -281,12 +289,19 @@ function wireFilters() {
   $("add-selected-link").addEventListener("click",()=>{if(state.selectedIds.size){const name=$("campaign-name");if(name)name.value=`Selected companies · ${state.selectedIds.size}`;}});
   $("form-token-select").addEventListener("change",()=>loadSelectedToken().catch(showError));
   $("submit-local-interest").addEventListener("click",()=>submitLocalInterest().catch(showError));
+  $("preview-mail-merge").addEventListener("click",()=>previewMailMerge().catch(showMailMergeError));
+  $("export-test-mail-merge").addEventListener("click",()=>exportTestMailMerge().catch(showMailMergeError));
+  $("export-selected-mail-merge").addEventListener("click",()=>exportSelectedMailMerge().catch(showMailMergeError));
 }
 let selectedCampaignId = null;
 let campaignMetricFilter = "all";
 async function loadCampaignWorkspace() {
   const [campaignResult, analytics] = await Promise.all([api("/api/campaigns"), api("/api/campaign-analytics")]);
   state.campaignSummaries=campaignResult.campaigns;
+  const mergeSelect=$("mail-merge-campaign");
+  const priorMergeCampaign=mergeSelect.value || selectedCampaignId || "";
+  mergeSelect.replaceChildren(new Option("Select a campaign",""), ...campaignResult.campaigns.map((campaign)=>new Option(displayCampaignName(campaign.name),campaign.id)));
+  if(campaignResult.campaigns.some((campaign)=>campaign.id===priorMergeCampaign)) mergeSelect.value=priorMergeCampaign;
   $("campaign-analytics").innerHTML = [
     ["Saved campaigns", analytics.campaigns], ["Company history rows", analytics.company_items],
     ["Drafts", analytics.drafts], ["Contact-form review queue", analytics.form_channel_review_queue],
@@ -309,6 +324,36 @@ async function loadCampaignWorkspace() {
   document.querySelectorAll("[data-campaign]").forEach((button) => button.addEventListener("click", () => showCampaign(button.dataset.campaign).catch(showError)));
   renderRecentActivity(campaignResult.campaigns);
   renderAnalytics(analytics, campaignResult.campaigns);
+}
+function mailMergeRequest(){return {campaign_id:$("mail-merge-campaign").value,company_ids:[...state.selectedIds].sort((a,b)=>a-b)};}
+function renderMailMergeAssessment(result){
+  const reasons=Object.entries(result.exclusion_counts||{}).map(([reason,count])=>`<span class="mail-merge-reason"><strong>${esc(count)}</strong> ${esc(compact(reason))}</span>`).join("") || "<span>No selected companies are excluded.</span>";
+  $("mail-merge-status").innerHTML=`<strong>${esc(result.included_count)} included · ${esc(result.excluded_count)} excluded</strong><div class="mail-merge-reasons">${reasons}</div>`;
+  $("mail-merge-preview").innerHTML=(result.preview_rows||[]).map((row)=>`<details class="mail-merge-email"><summary>${esc(row.company_name)} · ${esc(row.recipient_email)} · ${esc(row.review_status)}</summary><p><strong>Subject:</strong> ${esc(row.email_subject)}</p><pre>${esc(row.email_body)}</pre><p><strong>Form:</strong> ${esc(row.participation_form_url)}</p></details>`).join("") || `<p class="section-help">No selected real-company email passed every preparation gate. No ready-to-send file is available.</p>`;
+}
+async function previewMailMerge(){
+  const request=mailMergeRequest();
+  if(!request.campaign_id){throw new Error("Select a campaign first.");}
+  if(!request.company_ids.length){throw new Error("Select real companies on the Companies page first.");}
+  const response=await fetch("/api/mail-merge/assessment",{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},body:JSON.stringify(request),cache:"no-store"});
+  const result=await response.json(); if(!response.ok)throw new Error(result.error||"Could not assess mail merge.");
+  renderMailMergeAssessment(result);
+}
+async function exportTestMailMerge(){
+  const request=mailMergeRequest(); request.mode="TEST";
+  const result=await apiDownload("/api/mail-merge/export",request);
+  $("mail-merge-status").textContent=`Downloaded ${result.filename} · exactly two synthetic test rows · no messages sent.`;
+}
+async function exportSelectedMailMerge(){
+  const request=mailMergeRequest(); request.mode="SELECTED";
+  if(!request.campaign_id)throw new Error("Select a campaign first.");
+  if(!request.company_ids.length)throw new Error("Select real companies on the Companies page first.");
+  const result=await apiDownload("/api/mail-merge/export",request);
+  $("mail-merge-status").textContent=`Downloaded ${result.filename} · prepared only · no messages sent.`;
+}
+function showMailMergeError(error){
+  if(error.exportResult){const result=error.exportResult;$("mail-merge-status").innerHTML=`<strong>${esc(error.message)}</strong><div class="mail-merge-reasons">${Object.entries(result.exclusion_counts||{}).map(([reason,count])=>`<span class="mail-merge-reason"><strong>${esc(count)}</strong> ${esc(compact(reason))}</span>`).join("")}</div>`;}
+  else $("mail-merge-status").textContent=error.message;
 }
 async function renderFormTokens(campaigns){const select=$("form-token-select");if(!select)return;const current=select.value;select.replaceChildren(new Option("Select a delivered test invitation",""));const submissions=[];for(const campaign of campaigns){const detail=await api(`/api/campaigns/${encodeURIComponent(campaign.id)}`);detail.items.filter(item=>item.demo_token && item.delivery_status==="SIMULATED_DELIVERED").forEach(item=>{const option=new Option(`${item.company_name} · ${displayCampaignName(campaign.name)}`,JSON.stringify({token:item.demo_token,campaign_id:campaign.id,company_id:item.company_id,company_name:item.company_name,website:item.website}));select.append(option);});detail.interest_submissions.forEach(submission=>submissions.push({company:detail.items.find((row)=>row.company_id===submission.company_id)?.company_name || `Company #${submission.company_id}`,interest:submission.interest,status:submission.review_status,at:submission.submitted_at}));}if([...select.options].some(option=>option.value===current))select.value=current;$("form-submission-status").innerHTML=submissions.length?submissions.map(item=>`<div class="activity-row"><div><strong>${esc(item.company)}</strong><small>${esc(compact(item.interest))} · ${esc(item.at)}</small></div><span class="test-label">Test · ${esc(displayStatus(item.status))}</span></div>`).join(""):`<div class="response-empty">No test interest submissions recorded.</div>`;}
 async function loadSelectedToken(){const option=$("form-token-select").value;if(!option)return;const token=JSON.parse(option);await apiWrite("/api/demo/form-open",{form_token:token.token});$("local-interest-form").dataset.token=token.token;$("local-interest-form").dataset.company=token.company_name;$("local-interest-form").dataset.website=token.website;$("local-form-status").textContent=`Local form opened for ${token.company_name}. Test event only.`;const name=document.querySelector('[data-interest-field="company_name"]');const website=document.querySelector('[data-interest-field="website"]');name.value=token.company_name;website.value=token.website;}
@@ -405,6 +450,8 @@ function campaignCounts(campaign) {
 }
 async function showCampaign(campaignId) {
   selectedCampaignId = campaignId;
+  const mergeCampaign=$("mail-merge-campaign");
+  if(mergeCampaign && [...mergeCampaign.options].some((option)=>option.value===campaignId)) mergeCampaign.value=campaignId;
   const campaign = await api(`/api/campaigns/${encodeURIComponent(campaignId)}`);
   await loadCampaignWorkspace();
   const active = ["DEMO_APPROVED","RUNNING"].includes(campaign.status);

@@ -272,6 +272,16 @@ Run `uv run python scripts/phase5b_dashboard.py --host 127.0.0.1 --port 8765` an
 
 The Companies page also offers “Download all companies CSV” and “Download filtered CSV”. Exports are server-generated, stable, one row per company, and include stored provenance, qualification, available contact evidence, and isolated test campaign status; multiple values use sorted ` | `-separated cells. Formula-like cells are escaped. Phase 6B's full export validation and real-email blockers are documented in [`docs/phase6b_email_and_company_export.md`](docs/phase6b_email_and_company_export.md). Real delivery remains disabled because no authorized provider/OAuth configuration or public HTTPS participant form is present; no message was sent.
 
+### Phase 6C CSV and mail-merge preparation
+
+Regenerate the complete active-cohort CSV, the two-row synthetic test mail-merge CSV, and the real-company campaign eligibility report:
+
+```sh
+uv run python scripts/phase6c_generate_exports.py
+```
+
+Outputs are written under `exports/`. The eligibility report covers the full active 537-company cohort and records every blocking reason. The Campaigns page also supports previewing currently selected company contacts and exporting selected rows only when website identity, GEO eligibility, both human reviews, first-party email evidence, suppression/opt-out checks, campaign deduplication, a validated HTTPS form URL, and a private company-specific invitation token all pass. Test rows use synthetic company identities and the exact two authorized test addresses; they are not imported into the cohort. Exports are marked prepared in a separate local ledger, never Sent. The current cohort has pending human reviews and no live HTTPS participation form or live invitation-token set, so no real-company mail-merge CSV is produced. No email or form is sent/submitted by this export workflow.
+
 Phase 6B.2 replaces the prior Microsoft Graph configuration with a Gmail API test workflow. The preferred sender and two exact Outlook test recipients are in `config/test_email.yaml`; Settings supports explicit Gmail OAuth connection and Campaigns shows a full message preview before any confirmed send. Gmail tokens are stored only in the OS keyring, and test sends are hard-allowlisted and recorded separately from company campaign history. Sending is currently blocked until the desktop OAuth client is configured, the correct Gmail account is authorized, and a verified public HTTPS test form endpoint is deployed. See [`docs/phase6b2_gmail_test_workflow.md`](docs/phase6b2_gmail_test_workflow.md). The earlier Phase 6B.1 note is historical.
 
 ## Qualification and review

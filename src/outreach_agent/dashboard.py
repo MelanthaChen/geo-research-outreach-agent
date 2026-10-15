@@ -23,6 +23,9 @@ from outreach_agent.email_test_settings import load_test_email_settings, test_em
 from outreach_agent.gmail_integration import (
     EmailEventStore, GmailProviderError, GmailSetupError, authorize_gmail, send_gmail_message,
 )
+from outreach_agent.mail_merge import (
+    DEFAULT_EXPORT_DIR, ExportLedger, assess_company_mail_merge, make_test_mail_merge, safe_file_component, save_export,
+)
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -208,6 +211,67 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if not isinstance(body, dict):
                     raise ValueError("JSON object required")
                 parsed = urlparse(self.path)
+                if parsed.path in {"/api/mail-merge/assessment", "/api/mail-merge/export"}:
+                    if campaign_store is None:
+                        self._json({"error": "Campaign records are unavailable"}, 503)
+                        return
+                    mode = str(body.get("mode") or "").upper()
+                    campaign_id = str(body.get("campaign_id") or "TEST-ONLY")
+                    if len(campaign_id) > 160:
+                        self._json({"error": "Invalid campaign identifier"}, 400)
+                        return
+                    if mode != "TEST":
+                        try:
+                            campaign_store.get(campaign_id)
+                        except KeyError:
+                            self._json({"error": "Select an existing campaign"}, 404)
+                            return
+                    company_ids = body.get("company_ids") or []
+                    if not isinstance(company_ids, list) or len(company_ids) > 5000:
+                        self._json({"error": "company_ids must be a list of at most 5,000 selected companies"}, 400)
+                        return
+                    if parsed.path.endswith("assessment"):
+                        result = assess_company_mail_merge(data, campaign_id, company_ids, campaign_store.path)
+                        result.pop("rows", None)
+                        result.pop("eligibility_rows", None)
+                        self._json(result)
+                        return
+                    if mode == "TEST":
+                        csv_text = make_test_mail_merge(campaign_id)
+                        row_count = 2
+                        exclusions = {}
+                        filename = "phase6c_test_mail_merge.csv"
+                    elif mode == "SELECTED":
+                        if not company_ids:
+                            self._json({"error": "Select companies on the Companies page before exporting", "included_count": 0}, 409)
+                            return
+                        result = assess_company_mail_merge(data, campaign_id, company_ids, campaign_store.path)
+                        if not result["rows"]:
+                            self._json({"error": "No selected company passed all live-preparation gates; no mail-merge CSV was created.",
+                                        "included_count": 0, "selected_count": result["selected_count"],
+                                        "excluded_count": result["excluded_count"],
+                                        "exclusion_counts": result["exclusion_counts"]}, 409)
+                            return
+                        from outreach_agent.mail_merge import MAIL_MERGE_COLUMNS
+                        import csv, io
+                        output = io.StringIO(newline="")
+                        writer = csv.DictWriter(output, fieldnames=MAIL_MERGE_COLUMNS, lineterminator="\r\n")
+                        writer.writeheader()
+                        for row in result["rows"]:
+                            from outreach_agent.dashboard_data import _spreadsheet_safe
+                            writer.writerow({key: _spreadsheet_safe(row.get(key)) for key in MAIL_MERGE_COLUMNS})
+                        csv_text = output.getvalue()
+                        row_count = len(result["rows"])
+                        exclusions = result["exclusion_counts"]
+                        filename = f"phase6c_mail_merge_{safe_file_component(campaign_id)}.csv"
+                    else:
+                        self._json({"error": "mode must be TEST or SELECTED"}, 400)
+                        return
+                    saved_path, file_id = save_export(DEFAULT_EXPORT_DIR, filename, csv_text)
+                    ExportLedger().record(campaign_id=campaign_id, mode=mode, rows=row_count,
+                                          exclusions=exclusions, file_id=file_id)
+                    self._csv(csv_text, saved_path.name)
+                    return
                 if parsed.path == "/api/test-email/send":
                     try:
                         validate_test_recipient(body.get("recipient"))

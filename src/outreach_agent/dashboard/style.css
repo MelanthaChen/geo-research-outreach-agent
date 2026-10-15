@@ -190,6 +190,17 @@ main { width: 95%; max-width: 2560px; margin: 0 auto; }
 .campaign-card button { border: 0; background: transparent; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
 .campaign-card small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
 .campaign-detail { border-top: 1px solid var(--line); padding-top: 15px; }
+.mail-merge-panel { margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfb; }
+.mail-merge-panel .section-head { padding: 0; }
+.mail-merge-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 14px 0; }
+.mail-merge-controls label { display: grid; gap: 6px; min-width: min(260px,100%); color: var(--muted); font-size: 12px; }
+.mail-merge-controls select { min-height: 42px; border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; font: inherit; color: var(--ink); background: white; }
+.mail-merge-status { margin: 12px 0; padding: 12px; border-radius: 6px; background: #f2f7f3; color: var(--ink); overflow-wrap: anywhere; }
+.mail-merge-reasons { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.mail-merge-reason { padding: 5px 8px; border: 1px solid var(--line); border-radius: 99px; background: white; color: var(--muted); font-size: 11px; }
+.mail-merge-email { border-top: 1px solid var(--line); padding: 10px 4px; }
+.mail-merge-email summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
+.mail-merge-email pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--sans); }
 .campaign-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
 .campaign-toolbar .button, .campaign-item .button { min-height: 38px; padding: 8px 12px; }
 .campaign-counts { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }

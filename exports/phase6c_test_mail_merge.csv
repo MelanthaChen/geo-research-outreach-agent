@@ -1,0 +1,27 @@
+﻿company_id,company_name,recipient_email,email_subject,email_body,participation_form_url,campaign_id,contact_channel,contact_evidence_url,eligibility_status,review_status
+SYNTHETIC-001,Synthetic Test Company 1,yuxaun.chen.1031@outlook.com,[OFFLINE TEST] Invitation formatting preview,"OFFLINE TEST DRAFT — SYNTHETIC COMPANY DATA — NOT SENT
+
+Hello Synthetic Test Company 1 Team,
+
+We are testing the formatting of a university research invitation about Generative Engine Optimization (GEO).
+
+Synthetic participation link (not active): DEMO PLACEHOLDER ONLY — NOT A WORKING FORM: https://research.example.invalid/participation-interest
+
+This test message is not a real invitation, and expressing interest is not formal research consent. For questions only, use [RESEARCH CONTACT EMAIL NOT CONFIGURED].
+
+[RESEARCHER NAME NOT CONFIGURED]
+[RESEARCH TEAM NOT CONFIGURED]
+[UNIVERSITY AFFILIATION NOT CONFIGURED]",DEMO PLACEHOLDER ONLY — NOT A WORKING FORM: https://research.example.invalid/participation-interest,TEST-ONLY,SYNTHETIC_TEST_ONLY,,SYNTHETIC_TEST_ONLY,NOT_APPLICABLE_TEST_ONLY
+SYNTHETIC-002,Synthetic Test Company 2,yuxuan.chen.1031@outlook.com,[OFFLINE TEST] Invitation formatting preview,"OFFLINE TEST DRAFT — SYNTHETIC COMPANY DATA — NOT SENT
+
+Hello Synthetic Test Company 2 Team,
+
+We are testing the formatting of a university research invitation about Generative Engine Optimization (GEO).
+
+Synthetic participation link (not active): DEMO PLACEHOLDER ONLY — NOT A WORKING FORM: https://research.example.invalid/participation-interest
+
+This test message is not a real invitation, and expressing interest is not formal research consent. For questions only, use [RESEARCH CONTACT EMAIL NOT CONFIGURED].
+
+[RESEARCHER NAME NOT CONFIGURED]
+[RESEARCH TEAM NOT CONFIGURED]
+[UNIVERSITY AFFILIATION NOT CONFIGURED]",DEMO PLACEHOLDER ONLY — NOT A WORKING FORM: https://research.example.invalid/participation-interest,TEST-ONLY,SYNTHETIC_TEST_ONLY,,SYNTHETIC_TEST_ONLY,NOT_APPLICABLE_TEST_ONLY

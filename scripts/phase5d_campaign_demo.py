@@ -1,8 +1,9 @@
-"""Seed/resume the local Phase 5D DEMO campaign and export its saved state."""
+"""Seed/resume a local test campaign and export its saved state."""
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -15,19 +16,24 @@ from outreach_agent.dashboard_data import DEFAULT_DB, DEFAULT_DELIVERY, DEFAULT_
 from outreach_agent.wikidata import write_csv_atomic  # noqa: E402
 
 SUMMARY_FIELDS = [
-    "demo_label", "campaign_id", "campaign_name", "campaign_status", "company_count", "draft_count",
-    "email_draft_count", "contact_form_review_count", "excluded_count", "simulated_deliveries",
-    "simulated_failures", "simulated_responses", "simulated_interest_submissions", "demo_reviewed_submissions",
+    "record_source", "campaign_id", "campaign_name", "campaign_status", "company_count", "draft_count",
+    "email_draft_count", "contact_form_review_count", "excluded_count", "test_deliveries",
+    "test_failures", "test_responses", "test_interest_submissions", "test_reviewed_submissions",
     "eligible_count", "ineligible_count", "unresolved_count",
-    "simulated_followups_started", "real_sends", "real_form_submissions", "formal_consents",
+    "test_followups_started", "live_sends", "live_form_submissions", "formal_consents",
 ]
 STATUS_FIELDS = [
-    "demo_label", "campaign_id", "company_id", "company_name", "website", "qualification_status",
+    "record_source", "campaign_id", "company_id", "company_name", "website", "qualification_status",
     "identity_status", "channel_type", "recipient_or_form_url", "evidence_url", "contact_review_status",
-    "item_status", "delivery_status", "delivery_attempts", "simulated_response", "interest_status",
+    "item_status", "delivery_status", "delivery_attempts", "test_response", "interest_status",
     "form_opened_at", "token_expires_at", "submission_status", "research_team_review_status",
-    "simulated_handoff_status", "provider", "last_error", "source_data_mutated",
+    "test_handoff_status", "provider", "last_error", "source_data_mutated",
 ]
+
+
+def display_campaign_name(value: str) -> str:
+    name = re.sub(r"\s*(?:[—–-]\s*)?(?:DEMO(?:\s+ONLY)?|TEST)$", "", str(value or "")).strip()
+    return "Research Outreach Campaign" if name.casefold() == "professor walkthrough" or not name else name
 
 
 def export(store: CampaignStore, output_dir: Path) -> tuple[Path, Path]:
@@ -38,36 +44,36 @@ def export(store: CampaignStore, output_dir: Path) -> tuple[Path, Path]:
         submission_by_item = {r["item_id"]: r for r in campaign["interest_submissions"]}
         items = campaign["items"]
         summary_rows.append({
-            "demo_label": "DEMO ONLY — SYNTHETIC EVENTS; NO REAL OUTREACH",
-            "campaign_id": campaign["id"], "campaign_name": campaign["name"],
+            "record_source": "TEST — LOCAL GENERATED EVENTS; NO LIVE OUTREACH",
+            "campaign_id": campaign["id"], "campaign_name": display_campaign_name(campaign["name"]),
             "campaign_status": campaign["status"], "company_count": campaign["company_count"],
             "draft_count": campaign["draft_count"],
             "email_draft_count": sum(bool(item["draft"]) and item["channel_type"] != "CONTACT_FORM" for item in items),
             "contact_form_review_count": campaign["contact_form_review_count"],
             "excluded_count": campaign["excluded_count"], "eligible_count": campaign["eligible_count"],
             "ineligible_count": campaign["ineligible_count"], "unresolved_count": campaign["unresolved_count"],
-            "simulated_deliveries": campaign["simulated_deliveries"], "simulated_failures": campaign["simulated_failures"],
-            "simulated_responses": sum(bool(item["response_status"]) for item in items),
-            "simulated_interest_submissions": len(campaign["interest_submissions"]),
-            "demo_reviewed_submissions": sum(item["review_status"] == "DEMO_RESEARCH_TEAM_REVIEWED" for item in campaign["interest_submissions"]),
-            "simulated_followups_started": sum(item["handoff_status"] == "SIMULATED_FOLLOWUP_STARTED" for item in campaign["interest_submissions"]),
-            "real_sends": 0, "real_form_submissions": 0, "formal_consents": 0,
+            "test_deliveries": campaign["simulated_deliveries"], "test_failures": campaign["simulated_failures"],
+            "test_responses": sum(bool(item["response_status"]) for item in items),
+            "test_interest_submissions": len(campaign["interest_submissions"]),
+            "test_reviewed_submissions": sum(item["review_status"] == "DEMO_RESEARCH_TEAM_REVIEWED" for item in campaign["interest_submissions"]),
+            "test_followups_started": sum(item["handoff_status"] == "SIMULATED_FOLLOWUP_STARTED" for item in campaign["interest_submissions"]),
+            "live_sends": 0, "live_form_submissions": 0, "formal_consents": 0,
         })
         for item in items:
             submission = submission_by_item.get(item["id"], {})
             status_rows.append({
-                "demo_label": "DEMO ONLY — SYNTHETIC EVENTS; NO REAL OUTREACH",
+                "record_source": "TEST — LOCAL GENERATED EVENTS; NO LIVE OUTREACH",
                 "campaign_id": campaign["id"], "company_id": item["company_id"], "company_name": item["company_name"],
                 "website": item["website"], "qualification_status": item["qualification_status"],
                 "identity_status": item["identity_status"], "channel_type": item["channel_type"],
                 "recipient_or_form_url": item["recipient"] or item["form_url"], "evidence_url": item["evidence_url"],
                 "contact_review_status": item["contact_review_status"], "item_status": item["item_status"],
                 "delivery_status": item["delivery_status"], "delivery_attempts": item["delivery_attempts"],
-                "simulated_response": item["response_status"], "interest_status": item["interest_status"],
+                "test_response": item["response_status"], "interest_status": item["interest_status"],
                 "form_opened_at": item["form_opened_at"], "token_expires_at": item["token_expires_at"],
                 "submission_status": "SIMULATED_SUBMISSION" if submission else "",
                 "research_team_review_status": submission.get("review_status", ""),
-                "simulated_handoff_status": submission.get("handoff_status", ""),
+                "test_handoff_status": submission.get("handoff_status", ""),
                 "provider": item["provider"], "last_error": item["last_error"], "source_data_mutated": "NO",
             })
     summary_path = output_dir / "phase5d_demo_campaign_summary.csv"
@@ -78,8 +84,10 @@ def export(store: CampaignStore, output_dir: Path) -> tuple[Path, Path]:
 
 
 def seed(store: CampaignStore, data: dict, count: int = 20) -> dict:
-    campaign_name = "Professor Walkthrough — DEMO ONLY"
-    existing = next((c for c in store.list() if c["name"] == campaign_name), None)
+    campaign_name = "Research Outreach Campaign"
+    legacy_names = {"professor walkthrough — demo only", "professor walkthrough — test"}
+    existing = next((c for c in store.list()
+                     if c["name"] == campaign_name or c["name"].casefold() in legacy_names), None)
     campaign = store.get(existing["id"]) if existing else store.seed_demo_campaign(data, count=count, name=campaign_name)
     campaign_id = campaign["id"]
     if campaign["status"] == "DRAFT":
@@ -112,9 +120,9 @@ def seed(store: CampaignStore, data: dict, count: int = 20) -> dict:
         if interested:
             submission = store.submit_demo_interest(interested["demo_token"], {
                 "company_name": interested["company_name"], "website": interested["website"],
-                "contact_name": "SIMULATED DEMO RESPONDENT", "contact_role": "Synthetic walkthrough fixture",
+                "contact_name": "Test Respondent", "contact_role": "Test workflow fixture",
                 "business_email": "demo-participant@example.invalid", "interest": "INTERESTED",
-                "questions": "Synthetic fixture: requests more study information.",
+                "questions": "Test fixture: requests more study information.",
             })
             store.review_demo_submission(int(submission["submission_id"]))
             store.begin_demo_handoff(int(submission["submission_id"]))
@@ -123,26 +131,34 @@ def seed(store: CampaignStore, data: dict, count: int = 20) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("seed", "export", "reset"))
+    parser.add_argument("action", choices=("seed", "export", "reset", "rename"))
     parser.add_argument("--database", type=Path, default=DEFAULT_CAMPAIGN_DB)
     parser.add_argument("--company-database", type=Path, default=DEFAULT_DB)
     parser.add_argument("--verification", type=Path, default=DEFAULT_VERIFICATION)
     parser.add_argument("--delivery-events", type=Path, default=DEFAULT_DELIVERY)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--count", type=int, default=20)
-    parser.add_argument("--campaign-id", default="", help="Required target for reset; reset removes only one DEMO sidecar campaign")
+    parser.add_argument("--campaign-id", default="", help="Target campaign for reset or rename")
+    parser.add_argument("--name", default="", help="New name required for the explicit rename action")
     args = parser.parse_args()
     store = CampaignStore(args.database)
     if args.action == "reset":
         if not args.campaign_id:
             parser.error("reset requires --campaign-id")
         store.reset_demo_campaign(args.campaign_id)
-        print(f"Reset DEMO campaign {args.campaign_id}; company and human-review data were not touched.")
+        print(f"Reset test campaign {args.campaign_id}; company and human-review data were not touched.")
+        return
+    if args.action == "rename":
+        if not args.campaign_id or not args.name:
+            parser.error("rename requires --campaign-id and --name")
+        campaign = store.rename_campaign(args.campaign_id, args.name)
+        print(f"Renamed campaign {campaign['id']} to {campaign['name']}; items, submissions, and form tokens were preserved.")
         return
     if args.action == "seed":
         data = load_dashboard_data(args.company_database, args.verification, args.delivery_events)
         campaign = seed(store, data, args.count)
-        print(f"campaign={campaign['id']} status={campaign['status']} companies={campaign['company_count']} drafts={campaign['draft_count']} simulated_deliveries={campaign['simulated_deliveries']} simulated_failures={campaign['simulated_failures']} simulated_submissions={len(campaign['interest_submissions'])} real_sends=0 real_form_submissions=0 formal_consents=0")
+        campaign_status = "APPROVED" if campaign["status"] == "DEMO_APPROVED" else campaign["status"]
+        print(f"campaign={campaign['id']} status={campaign_status} companies={campaign['company_count']} drafts={campaign['draft_count']} test_deliveries={campaign['simulated_deliveries']} test_failures={campaign['simulated_failures']} test_submissions={len(campaign['interest_submissions'])} live_sends=0 live_form_submissions=0 formal_consents=0")
     paths = export(store, args.output_dir)
     print("exports=" + ",".join(str(path) for path in paths))
 

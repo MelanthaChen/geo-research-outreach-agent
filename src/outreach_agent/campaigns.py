@@ -9,6 +9,8 @@ SIMULATED and only changes this isolated demo store.
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
 import secrets
 import sqlite3
@@ -16,6 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from outreach_agent.dashboard_data import make_draft_preview
 from outreach_agent.outreach_pipeline import SuppressionRegistry, validate_recipient
@@ -206,7 +209,7 @@ class CampaignStore:
                     if draft is not None and chosen is not None:
                         form_url = f"https://participation.example.invalid/demo/{token}"
                         old_form_url = draft["participation_interest_form_url"]
-                        draft["participation_interest_form_url"] = f"DEMO ONLY — SIMULATED FORM: {form_url}"
+                        draft["participation_interest_form_url"] = f"TEST LINK — NOT ACTIVE: {form_url}"
                         draft["body"] = draft["body"].replace(old_form_url, draft["participation_interest_form_url"])
                         draft["demo_form_token"] = token  # retained only inside this isolated local demo draft
                         token_hash = _token_hash(token)
@@ -254,6 +257,7 @@ class CampaignStore:
                 "contact_form_review_count": counts.get("CONTACT_FORM_REVIEW", 0),
                 "simulated_response_count": int(db.execute("SELECT COUNT(*) FROM campaign_items WHERE campaign_id=? AND response_status<>''", (row["id"],)).fetchone()[0]),
                 "interest_submission_count": int(db.execute("SELECT COUNT(*) FROM demo_interest_submissions WHERE campaign_id=?", (row["id"],)).fetchone()[0]),
+                "simulated_followup_count": int(db.execute("SELECT COUNT(*) FROM demo_interest_submissions WHERE campaign_id=? AND handoff_status<>'NOT_STARTED'", (row["id"],)).fetchone()[0]),
                 "simulated_deliveries": deliveries.get("SIMULATED_DELIVERED", 0),
                 "simulated_failures": int(db.execute("SELECT COUNT(*) FROM campaign_audit WHERE campaign_id=? AND event_type='SIMULATED_DELIVERY_RESULT' AND details_json LIKE '%FAILED%'", (row["id"],)).fetchone()[0]),
                 "outstanding_failed_items": deliveries.get("SIMULATED_FAILED", 0)}
@@ -284,11 +288,11 @@ class CampaignStore:
             if not row:
                 raise KeyError(campaign_id)
             if db.execute("SELECT emergency_stopped FROM demo_control WHERE id=1").fetchone()[0]:
-                raise ValueError("Global DEMO emergency stop is active")
+                raise ValueError("Global test pause is active")
             if row["emergency_stopped"]:
-                raise ValueError("Campaign DEMO emergency stop is active")
+                raise ValueError("Campaign test pause is active")
             if row["status"] not in {"DRAFT", "DEMO_APPROVED", "PAUSED"}:
-                raise ValueError("Only a draft or paused DEMO campaign can be approved")
+                raise ValueError("Only a draft or paused campaign can be approved for test processing")
             now = _now()
             db.execute("UPDATE campaigns SET status='DEMO_APPROVED',approved_at=?,updated_at=? WHERE id=?", (now, now, campaign_id))
             self._audit(db, campaign_id, "DEMO_CAMPAIGN_APPROVED", {"scope": "DEMO_ONLY", "source_reviews_changed": False})
@@ -309,11 +313,11 @@ class CampaignStore:
             if target == "RESUMED" and current != "PAUSED":
                 raise ValueError("Only a paused campaign can resume")
             if target == "RESUMED" and not row["approved_at"]:
-                raise ValueError("Explicit DEMO campaign approval is required before resuming")
+                raise ValueError("Explicit approval for test processing is required before resuming")
             if target == "RESUMED" and row["emergency_stopped"]:
                 raise ValueError("Clear the campaign emergency stop before resuming")
             if target == "RESUMED" and db.execute("SELECT emergency_stopped FROM demo_control WHERE id=1").fetchone()[0]:
-                raise ValueError("Clear the global DEMO emergency stop before resuming")
+                raise ValueError("Clear the global test pause before resuming")
             if target == "CANCELLED" and current == "CANCELLED":
                 return self.get(campaign_id)
             mapped = {"PAUSED": "PAUSED", "RESUMED": "RUNNING", "CANCELLED": "CANCELLED"}[target]
@@ -360,15 +364,15 @@ class CampaignStore:
                 raise KeyError(campaign_id)
             global_stop = db.execute("SELECT emergency_stopped FROM demo_control WHERE id=1").fetchone()[0]
             if global_stop or campaign["emergency_stopped"] or campaign["status"] in {"PAUSED", "CANCELLED"}:
-                raise ValueError("Campaign is paused, cancelled, or emergency-stopped")
+                raise ValueError("Campaign is paused, cancelled, or stopped")
             if campaign["status"] not in {"DEMO_APPROVED", "RUNNING"}:
-                raise ValueError("Explicit DEMO campaign approval is required before simulated delivery")
+                raise ValueError("Campaign approval is required before test processing")
             if not campaign["approved_at"]:
-                raise ValueError("Explicit DEMO campaign approval is required before simulated delivery")
+                raise ValueError("Campaign approval is required before test processing")
             today_attempts = int(db.execute("SELECT COUNT(*) FROM campaign_audit WHERE campaign_id=? AND event_type='SIMULATED_DELIVERY_RESULT' AND substr(created_at,1,10)=substr(?,1,10)", (campaign_id, _now())).fetchone()[0])
             daily_budget = int(campaign["daily_cap"]) - today_attempts
             if daily_budget <= 0:
-                raise ValueError("The campaign's local DEMO daily event cap has been reached")
+                raise ValueError("The campaign's local test-event limit has been reached")
             items = db.execute(
                 "SELECT * FROM campaign_items WHERE campaign_id=? AND item_status='DRAFT_REVIEW' AND delivery_attempts<2 AND delivery_status IN ('NOT_SENT','SIMULATED_FAILED') ORDER BY id LIMIT ?",
                 (campaign_id, min(batch_size, int(campaign["batch_size"]), daily_budget)),
@@ -400,7 +404,7 @@ class CampaignStore:
             if not item:
                 raise KeyError(f"company {company_id} not found in campaign")
             if item["delivery_status"] != "SIMULATED_DELIVERED":
-                raise ValueError("A simulated response requires a simulated delivery")
+                raise ValueError("A test response requires a recorded test delivery")
             now = _now()
             db.execute("UPDATE campaign_items SET response_status=?,interest_status=?,updated_at=? WHERE id=?",
                        ("SIMULATED_" + response, "INTEREST_REPORTED" if response in {"INTERESTED", "MORE_INFO"} else "NO_INTEREST_RECORDED", now, item["id"]))
@@ -410,7 +414,7 @@ class CampaignStore:
     def submit_demo_interest(self, token: str, values: dict[str, Any]) -> dict[str, Any]:
         token = str(token or "").strip()
         if not 32 <= len(token) <= 160:
-            raise ValueError("Invalid or expired local demo form token")
+            raise ValueError("Invalid or expired local test-form token")
         interest = str(values.get("interest") or "").upper()
         if interest not in FORM_CHOICES:
             raise ValueError("Choose Interested, More information, or Not interested")
@@ -426,13 +430,13 @@ class CampaignStore:
         with self.connect() as db:
             item = db.execute("SELECT * FROM campaign_items WHERE token_hash=?", (_token_hash(token),)).fetchone()
             if not item or item["token_revoked"] or not item["token_expires_at"] or item["token_expires_at"] < _now():
-                raise ValueError("Invalid, revoked, or expired local demo form token")
+                raise ValueError("Invalid, revoked, or expired local test-form token")
             if item["delivery_status"] != "SIMULATED_DELIVERED":
-                raise ValueError("This simulated form token is not associated with a delivered demo invitation")
+                raise ValueError("This test-form token is not associated with a recorded test delivery")
             prior = db.execute("SELECT id FROM demo_interest_submissions WHERE item_id=?", (item["id"],)).fetchone()
             if prior:
                 return {"status": "DUPLICATE_IGNORED", "submission_id": int(prior["id"]), "simulated": True,
-                        "company_id": item["company_id"], "message": "A local demo submission already exists; no duplicate was stored."}
+                        "company_id": item["company_id"], "message": "A local test submission already exists; no duplicate was stored."}
             now = _now()
             cursor = db.execute(
                 "INSERT INTO demo_interest_submissions(item_id,company_id,campaign_id,interest,form_data_json,submitted_at) VALUES(?,?,?,?,?,?)",
@@ -446,18 +450,18 @@ class CampaignStore:
 
     def open_demo_form(self, token: str) -> dict[str, Any]:
         if not 32 <= len(str(token or "")) <= 160:
-            raise ValueError("Invalid or expired local demo form token")
+            raise ValueError("Invalid or expired local test-form token")
         with self.connect() as db:
             item = db.execute("SELECT * FROM campaign_items WHERE token_hash=?", (_token_hash(token),)).fetchone()
             if not item or item["token_revoked"] or not item["token_expires_at"] or item["token_expires_at"] < _now():
-                raise ValueError("Invalid, revoked, or expired local demo form token")
+                raise ValueError("Invalid, revoked, or expired local test-form token")
             if item["delivery_status"] != "SIMULATED_DELIVERED":
-                raise ValueError("This simulated form is not associated with a delivered demo invitation")
+                raise ValueError("This test form is not associated with a recorded test delivery")
             now = _now()
             db.execute("UPDATE campaign_items SET form_opened_at=?,updated_at=? WHERE id=?", (now, now, item["id"]))
             self._audit(db, item["campaign_id"], "SIMULATED_FORM_OPENED", {"external_request": False}, int(item["id"]))
             return {"status": "SIMULATED_FORM_OPENED", "company_id": item["company_id"], "simulated": True,
-                    "message": "Local demonstration only; no external form opened."}
+                    "message": "Local test event only; no external form opened."}
 
     def review_demo_submission(self, submission_id: int) -> dict[str, Any]:
         with self.connect() as db:
@@ -475,9 +479,9 @@ class CampaignStore:
             if not submission:
                 raise KeyError(submission_id)
             if submission["review_status"] != "DEMO_RESEARCH_TEAM_REVIEWED":
-                raise ValueError("Record a demo research-team review before follow-up handoff")
+                raise ValueError("Research-team review is required before follow-up")
             if submission["interest"] == "NOT_INTERESTED":
-                raise ValueError("Not-interested demo submissions cannot start follow-up")
+                raise ValueError("A not-interested submission cannot continue the handoff")
             db.execute("UPDATE demo_interest_submissions SET handoff_status='SIMULATED_FOLLOWUP_STARTED' WHERE id=?", (submission_id,))
             self._audit(db, submission["campaign_id"], "SIMULATED_FOLLOWUP_RESEARCH_PROCESS_STARTED", {"submission_id": submission_id, "message_sent": False, "formal_consent": False})
             return {"status": "SIMULATED_FOLLOWUP_STARTED", "message_sent": False, "formal_consent": False, "simulated": True}
@@ -489,6 +493,178 @@ class CampaignStore:
                 (company_id,),
             )]
 
+    @staticmethod
+    def _response_cte() -> str:
+        return """
+            WITH response_events AS (
+                SELECT 'OUTCOME-' || i.id AS record_id, i.id AS item_id, i.company_id,
+                       i.company_name, i.website, i.campaign_id, c.name AS campaign_name,
+                       i.channel_type, i.recipient AS contact_email,
+                       CASE upper(replace(i.response_status,'SIMULATED_',''))
+                           WHEN 'INTERESTED' THEN 'INTERESTED'
+                           WHEN 'MORE_INFO' THEN 'MORE_INFO'
+                           WHEN 'DECLINED' THEN 'DECLINED'
+                           WHEN 'OPTED_OUT' THEN 'OPTED_OUT'
+                           ELSE 'UNKNOWN'
+                       END AS status,
+                       'TEST_RECIPIENT_OUTCOME' AS response_source, i.evidence_url AS source_evidence_url,
+                       (SELECT a.created_at FROM campaign_audit a
+                        WHERE a.item_id=i.id AND a.event_type='SIMULATED_RECIPIENT_RESPONSE'
+                        ORDER BY a.id DESC LIMIT 1) AS activity_at,
+                       'TEST' AS environment, i.response_status AS original_answer,
+                       '' AS review_status, 0 AS formal_consent
+                FROM campaign_items i JOIN campaigns c ON c.id=i.campaign_id
+                WHERE i.delivery_status='SIMULATED_DELIVERED'
+                  AND i.response_status NOT IN ('','SIMULATED_UNANSWERED')
+                UNION ALL
+                SELECT 'FORM-' || s.id, i.id, i.company_id, i.company_name, i.website,
+                       i.campaign_id, c.name, i.channel_type,
+                       COALESCE(json_extract(s.form_data_json,'$.business_email'),i.recipient),
+                       CASE
+                           WHEN s.review_status='PENDING_RESEARCH_TEAM_REVIEW' THEN 'PENDING_VERIFICATION'
+                           WHEN upper(s.interest)='INTERESTED' THEN 'INTERESTED'
+                           WHEN upper(s.interest)='MORE_INFO' THEN 'MORE_INFO'
+                           WHEN upper(s.interest)='NOT_INTERESTED' THEN 'DECLINED'
+                           ELSE 'UNKNOWN'
+                       END,
+                       'PARTICIPATION_INTEREST_FORM', i.evidence_url, s.submitted_at, 'TEST',
+                       s.interest, s.review_status, 0
+                FROM demo_interest_submissions s
+                JOIN campaign_items i ON i.id=s.item_id
+                JOIN campaigns c ON c.id=s.campaign_id
+                WHERE s.is_simulated=1
+                UNION ALL
+                SELECT 'NO-RESPONSE-' || i.id, i.id, i.company_id, i.company_name, i.website,
+                       i.campaign_id, c.name, i.channel_type, i.recipient,
+                       'NO_RESPONSE', '', i.evidence_url,
+                       COALESCE(
+                         (SELECT a.created_at FROM campaign_audit a
+                          WHERE a.item_id=i.id AND a.event_type='SIMULATED_DELIVERY_RESULT'
+                            AND a.details_json LIKE '%DELIVERED%'
+                          ORDER BY a.id DESC LIMIT 1), i.updated_at, i.created_at),
+                       'TEST', i.response_status, '', 0
+                FROM campaign_items i JOIN campaigns c ON c.id=i.campaign_id
+                WHERE i.delivery_status='SIMULATED_DELIVERED'
+                  AND i.response_status IN ('','SIMULATED_UNANSWERED')
+                  AND NOT EXISTS (SELECT 1 FROM demo_interest_submissions s WHERE s.item_id=i.id)
+            )
+        """
+
+    @staticmethod
+    def _response_conditions(filters: dict[str, Any], *, include_status: bool = True) -> tuple[str, list[Any]]:
+        clauses = ["1=1"]
+        values: list[Any] = []
+        status = str(filters.get("status") or "").upper()
+        if include_status and status:
+            if status == "NEEDS_FOLLOW_UP":
+                clauses.append("status IN ('INTERESTED','MORE_INFO','PENDING_VERIFICATION')")
+            else:
+                clauses.append("status=?")
+                values.append(status)
+        if filters.get("campaign_id"):
+            clauses.append("campaign_id=?")
+            values.append(str(filters["campaign_id"]))
+        if filters.get("source"):
+            clauses.append("response_source=?")
+            values.append(str(filters["source"]))
+        environment = str(filters.get("environment") or "").upper()
+        if environment:
+            clauses.append("environment=?")
+            values.append(environment)
+        search = " ".join(str(filters.get("q") or "").split())
+        if search:
+            clauses.append("(instr(lower(company_name),lower(?))>0 OR instr(lower(website),lower(?))>0 OR instr(lower(contact_email),lower(?))>0)")
+            values.extend((search, search, search))
+        for key, operator in (("date_from", ">="), ("date_to", "<=")):
+            date_value = str(filters.get(key) or "")
+            if date_value:
+                clauses.append(f"date(activity_at) {operator} date(?)")
+                values.append(date_value)
+        return " AND ".join(clauses), values
+
+    @staticmethod
+    def _response_order(sort: str) -> str:
+        return {
+            "oldest": "activity_at ASC, company_name COLLATE NOCASE ASC, record_id ASC",
+            "company": "company_name COLLATE NOCASE ASC, activity_at DESC, record_id ASC",
+            "status": "status ASC, activity_at DESC, company_name COLLATE NOCASE ASC, record_id ASC",
+        }.get(sort, "activity_at DESC, company_name COLLATE NOCASE ASC, record_id ASC")
+
+    def _response_counts(self, db: sqlite3.Connection, filters: dict[str, Any]) -> dict[str, int]:
+        where, params = self._response_conditions(filters, include_status=False)
+        counts = {row["status"]: int(row["n"]) for row in db.execute(
+            f"{self._response_cte()} SELECT status,COUNT(*) n FROM response_events WHERE {where} GROUP BY status", params
+        )}
+        return {
+            "INTERESTED": counts.get("INTERESTED", 0),
+            "DECLINED": counts.get("DECLINED", 0),
+            "NEEDS_FOLLOW_UP": sum(counts.get(status, 0) for status in ("INTERESTED", "MORE_INFO", "PENDING_VERIFICATION")),
+            "NO_RESPONSE": counts.get("NO_RESPONSE", 0),
+            **counts,
+        }
+
+    def response_page(self, filters: dict[str, Any] | None = None, *, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+        filters = filters or {}
+        page = max(1, int(page))
+        page_size = max(1, min(100, int(page_size)))
+        where, params = self._response_conditions(filters)
+        order = self._response_order(str(filters.get("sort") or "recent"))
+        with self.connect() as db:
+            total = int(db.execute(f"{self._response_cte()} SELECT COUNT(*) FROM response_events WHERE {where}", params).fetchone()[0])
+            rows = db.execute(
+                f"{self._response_cte()} SELECT record_id,item_id,company_id,company_name,website,campaign_id,campaign_name,channel_type,status,response_source,source_evidence_url,activity_at,environment,original_answer,review_status,formal_consent FROM response_events WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+            counts = self._response_counts(db, filters)
+            sources = [row[0] for row in db.execute(
+                f"{self._response_cte()} SELECT DISTINCT response_source FROM response_events WHERE response_source<>'' ORDER BY response_source"
+            )]
+            environments = [row[0] for row in db.execute(
+                f"{self._response_cte()} SELECT DISTINCT environment FROM response_events ORDER BY environment"
+            )]
+        return {"records": [dict(row) for row in rows], "total": total, "page": page,
+                "page_size": page_size, "counts": counts, "sources": sources,
+                "environments": environments}
+
+    def response_detail(self, record_id: str) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute(
+                f"{self._response_cte()} SELECT record_id,item_id,company_id,company_name,website,campaign_id,campaign_name,channel_type,status,response_source,source_evidence_url,activity_at,environment,original_answer,review_status,formal_consent FROM response_events WHERE record_id=?",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(record_id)
+            result = dict(row)
+        result["company_history"] = self.outreach_history(int(result["company_id"]))
+        return result
+
+    def export_responses_csv(self, filters: dict[str, Any] | None = None) -> str:
+        filters = filters or {}
+        where, params = self._response_conditions(filters)
+        order = self._response_order(str(filters.get("sort") or "recent"))
+        fields = ["record_id", "company_id", "company_name", "company_domain", "campaign_id", "campaign_name",
+                  "contact_channel", "response_status", "response_source", "source_evidence_url", "activity_at", "environment",
+                  "source_answer", "review_status", "formal_consent"]
+        with self.connect() as db:
+            rows = db.execute(
+                f"{self._response_cte()} SELECT record_id,company_id,company_name,website,campaign_id,campaign_name,channel_type,status,response_source,source_evidence_url,activity_at,environment,original_answer,review_status,formal_consent FROM response_events WHERE {where} ORDER BY {order}",
+                params,
+            ).fetchall()
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            item = dict(row)
+            host = urlparse(item.pop("website") or "").hostname or ""
+            item["company_domain"] = host.casefold().removeprefix("www.")
+            item["contact_channel"] = item.pop("channel_type")
+            item["response_status"] = item.pop("status")
+            item["source_answer"] = item.pop("original_answer")
+            item = {key: ("'" + value if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")) else value)
+                    for key, value in item.items()}
+            writer.writerow(item)
+        return output.getvalue()
+
     def company_states(self) -> dict[int, str]:
         """One grouped query for Explorer campaign-state filtering."""
         with self.connect() as db:
@@ -499,6 +675,39 @@ class CampaignStore:
                 FROM campaign_items GROUP BY company_id"""):
                 states[int(row["company_id"])] = {0: "NO_CAMPAIGN_HISTORY", 1: "DEMO_CAMPAIGNED", 2: "SIMULATED_DELIVERED"}[int(row["rank"])]
             return states
+
+    def company_export_states(self) -> dict[int, dict[str, str]]:
+        """Read-only campaign summary keyed by company for cohort exports."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT i.company_id, c.name campaign_name,
+                          MAX(CASE WHEN i.delivery_status='SIMULATED_DELIVERED' THEN
+                              (SELECT MAX(a.created_at) FROM campaign_audit a
+                               WHERE a.item_id=i.id AND a.event_type='SIMULATED_DELIVERY_RESULT')
+                              ELSE '' END) last_delivery_at,
+                          MAX(CASE WHEN i.delivery_status='SIMULATED_DELIVERED'
+                                   THEN i.delivery_status ELSE '' END) delivery_status,
+                          MAX(i.response_status) response_status,
+                          MAX(i.interest_status) interest_status
+                   FROM campaign_items i JOIN campaigns c ON c.id=i.campaign_id
+                   GROUP BY i.company_id,c.id ORDER BY i.company_id,c.name COLLATE NOCASE"""
+            ).fetchall()
+        grouped: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            item = grouped.setdefault(int(row["company_id"]), {"campaigns": [], "dates": [], "statuses": [], "responses": [], "interests": []})
+            item["campaigns"].append(str(row["campaign_name"]))
+            if row["last_delivery_at"]:
+                item["dates"].append(str(row["last_delivery_at"]))
+            for column, key in (("delivery_status", "statuses"), ("response_status", "responses"), ("interest_status", "interests")):
+                if row[column]:
+                    item[key].append(str(row[column]))
+        return {company_id: {
+            "campaign_membership": " | ".join(sorted(set(item["campaigns"]), key=str.casefold)),
+            "outreach_status": " | ".join(sorted(set(item["statuses"]))) or "CAMPAIGN_DRAFTED",
+            "last_outreach_timestamp": max(item["dates"], default=""),
+            "response_status": " | ".join(sorted(set(item["responses"]))),
+            "interest_form_submission_status": " | ".join(sorted(set(item["interests"]))),
+        } for company_id, item in grouped.items()}
 
     def analytics(self) -> dict[str, Any]:
         with self.connect() as db:
@@ -512,11 +721,12 @@ class CampaignStore:
                     "simulated_failure_events": int(db.execute("SELECT COUNT(*) FROM campaign_audit WHERE event_type='SIMULATED_DELIVERY_RESULT' AND details_json LIKE '%FAILED%' ").fetchone()[0]),
                     "delivery_status": statuses, "responses": responses, "interest_submissions": interests,
                     "simulated_submissions": int(db.execute("SELECT COUNT(*) FROM demo_interest_submissions WHERE is_simulated=1").fetchone()[0]),
+                    "simulated_followups": int(db.execute("SELECT COUNT(*) FROM demo_interest_submissions WHERE handoff_status<>'NOT_STARTED'").fetchone()[0]),
                     "real_sends": 0, "opens_or_clicks": "NOT_TRACKED", "formal_consents": 0,
                     "global_emergency_stopped": bool(db.execute("SELECT emergency_stopped FROM demo_control WHERE id=1").fetchone()[0])}
 
     def seed_demo_campaign(self, data: dict[str, Any], *, count: int = 20,
-                           name: str = "Professor Walkthrough — DEMO ONLY") -> dict[str, Any]:
+                           name: str = "Research Outreach Campaign") -> dict[str, Any]:
         """Create a deterministic cohort selection; synthetic behavior is seeded separately."""
         candidates = []
         for company_id, detail in data["details"].items():
@@ -539,5 +749,20 @@ class CampaignStore:
             if not row:
                 return
             if not row["demo_only"]:
-                raise ValueError("Refusing to reset a non-demo campaign")
+                raise ValueError("Refusing to reset a campaign that is not marked as test-only")
             db.execute("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+
+    def rename_campaign(self, campaign_id: str, name: str) -> dict[str, Any]:
+        """Explicitly rename one campaign without changing its items or form records."""
+        label = " ".join(str(name or "").split())[:120]
+        if not label:
+            raise ValueError("Campaign name is required")
+        with self.connect() as db:
+            row = db.execute("SELECT name FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
+            if not row:
+                raise KeyError(campaign_id)
+            previous_name = row["name"]
+            now = _now()
+            db.execute("UPDATE campaigns SET name=?,updated_at=? WHERE id=?", (label, now, campaign_id))
+            self._audit(db, campaign_id, "CAMPAIGN_RENAMED", {"previous_name": previous_name, "new_name": label})
+        return self.get(campaign_id)

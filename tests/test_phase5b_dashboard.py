@@ -1,4 +1,7 @@
 import hashlib
+import csv
+import io
+import json
 import sqlite3
 import threading
 import urllib.error
@@ -10,6 +13,7 @@ import pytest
 
 from outreach_agent.dashboard import make_handler
 from outreach_agent.dashboard_data import filter_companies, load_dashboard_data, make_draft_preview
+from outreach_agent.dashboard_data import COMPANY_EXPORT_COLUMNS, export_companies_csv
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN_DB = ROOT / "data/phase3c1_validation_77.db"
@@ -85,6 +89,15 @@ def test_dashboard_data_loading_is_stable_and_read_only():
     assert sha256(EXPERIMENTAL_DB) == experimental_before
 
 
+def test_phase6a_snapshot_is_supported_as_read_only_dashboard_database(tmp_path):
+    database = tmp_path / "phase6a_experimental.db"
+    database.write_bytes(EXPERIMENTAL_DB.read_bytes())
+    before = sha256(database)
+    data = load_dashboard_data(database)
+    assert data["summary"]["total_companies"] == 537
+    assert sha256(database) == before
+
+
 def test_company_search_and_filters_use_existing_source_and_channel_evidence(tmp_path):
     database = fixture_db(tmp_path)
     verification = verification_csv(tmp_path / "verification.csv")
@@ -110,7 +123,7 @@ def test_draft_preview_uses_saved_recipient_and_marks_not_sent(tmp_path):
     data = load_dashboard_data(fixture_db(tmp_path), verification_csv(tmp_path / "verification.csv"), tmp_path / "empty.csv")
     draft = make_draft_preview(data, 1, 10)
     assert draft["status"] == "DRAFT_READY"
-    assert draft["label"] == "DEMO DRAFT — NOT SENT"
+    assert draft["label"] == "DRAFT · NOT SENT"
     assert draft["recipient"] == "hello@fixture.test"
     assert draft["delivery_status"] == "NOT_SENT"
     assert draft["approval_status"] == "NOT_APPROVED"
@@ -177,14 +190,14 @@ def test_dashboard_assets_do_not_load_external_resources_or_submit_forms():
     assert "fetch(" in js and "fetch(\"http" not in js
     assert "localStorage" not in js and "sessionStorage" not in js
     assert 'method:"POST"' in js
-    assert "SIMULATED DELIVERY" in js
+    assert "Test delivery recorded" in js
     assert 'value="INTERESTED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     assert 'value="DECLINED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     assert 'value="UNANSWERED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
-    assert "SIMULATED FORM OPENED" in js
-    assert "SIMULATED INTEREST SUBMITTED" in js
-    assert "SIMULATED RESEARCH-TEAM REVIEW" in js
-    assert "SIMULATED FOLLOW-UP PROCESS BEGINS" in js
+    assert "Test form opened" in js
+    assert "Test interest submitted" in js
+    assert "Test review recorded" in js
+    assert "Test handoff recorded" in js
 
 
 def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():
@@ -199,3 +212,145 @@ def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():
     assert ".company-row { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto;" in css
     assert ".company-name { display: block;" in css and "overflow-wrap: anywhere;" in css
     assert ".company-row { grid-template-columns: minmax(0,1fr);" in css
+
+
+def test_company_export_is_stable_one_row_per_company_and_formula_safe(tmp_path):
+    data = load_dashboard_data(fixture_db(tmp_path), verification_csv(tmp_path / "verification.csv"), tmp_path / "empty.csv")
+    data["details"][1]["company_name"] = "=HYPERLINK(\"x\")"
+    first = export_companies_csv(data)
+    second = export_companies_csv(data)
+    assert first == second
+    rows = list(csv.DictReader(io.StringIO(first)))
+    assert len(rows) == 2
+    assert list(rows[0]) == list(COMPANY_EXPORT_COLUMNS)
+    assert rows[0]["Company name"].startswith("'=")
+    assert rows[0]["Source name"] == "YC Public Directory"
+    assert rows[0]["Contact email"] == "hello@fixture.test"
+    filtered = list(csv.DictReader(io.StringIO(export_companies_csv(data, {"eligibility": "ELIGIBLE"}))))
+    assert [row["Company ID"] for row in filtered] == ["1", "2"]
+    filtered = list(csv.DictReader(io.StringIO(export_companies_csv(data, {"source": "YC Public Directory"}))))
+    assert [row["Company ID"] for row in filtered] == ["1"]
+
+
+def test_company_export_endpoint_downloads_all_and_filtered_results(tmp_path):
+    database = fixture_db(tmp_path)
+    data = load_dashboard_data(database, verification_csv(tmp_path / "verification.csv"), tmp_path / "empty.csv")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(data))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        all_response = urllib.request.urlopen(base + "/api/companies/export.csv")
+        all_rows = list(csv.DictReader(io.StringIO(all_response.read().decode("utf-8-sig"))))
+        assert len(all_rows) == 2
+        assert all_response.headers["Content-Disposition"] == 'attachment; filename="companies.csv"'
+        filtered = urllib.request.urlopen(base + "/api/companies/export.csv?source=YC%20Public%20Directory")
+        filtered_rows = list(csv.DictReader(io.StringIO(filtered.read().decode("utf-8-sig"))))
+        assert [row["Company ID"] for row in filtered_rows] == ["1"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_company_export_handles_more_than_five_thousand_rows_without_truncation(tmp_path):
+    base = load_dashboard_data(fixture_db(tmp_path), verification_csv(tmp_path / "verification.csv"), tmp_path / "empty.csv")
+    companies = []
+    details = {}
+    channel_presence = {}
+    for company_id in range(1, 5002):
+        source = base["companies"][(company_id - 1) % 2]
+        detail = dict(base["details"][int(source["id"])])
+        company = dict(source)
+        company["id"] = company_id
+        detail["id"] = company_id
+        details[company_id] = detail
+        companies.append(company)
+        channel_presence[company_id] = bool(base["channel_presence"][int(source["id"])])
+    large = {**base, "companies": companies, "details": details, "channel_presence": channel_presence}
+    exported = export_companies_csv(large)
+    assert sum(1 for _ in csv.DictReader(io.StringIO(exported))) == 5001
+
+
+def test_test_email_settings_and_exact_recipient_preview_are_available_without_oauth():
+    from outreach_agent.email_test_settings import (
+        AUTHORIZED_TEST_RECIPIENTS, PREFERRED_SENDER, load_test_email_settings,
+    )
+
+    config = load_test_email_settings()
+    assert PREFERRED_SENDER == "yuxuan.chen.1031@gmail.com"
+    assert AUTHORIZED_TEST_RECIPIENTS == (
+        "yuxaun.chen.1031@outlook.com", "yuxuan.chen.1031@outlook.com",
+    )
+    assert config["authorized_test_recipients"] == list(AUTHORIZED_TEST_RECIPIENTS)
+    assert config["send_enabled"] is False
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(load_dashboard_data()))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        stored = json.load(urllib.request.urlopen(base + "/api/test-email/config"))
+        assert stored["preferred_sender"] == PREFERRED_SENDER
+        assert stored["authorized_test_recipients"] == list(AUTHORIZED_TEST_RECIPIENTS)
+        assert stored["authenticated"] is False
+        preview = json.load(urllib.request.urlopen(base + "/api/test-email/preview?recipient=yuxaun.chen.1031%40outlook.com"))
+        assert preview["to"] == "yuxaun.chen.1031@outlook.com"
+        assert preview["from"] == PREFERRED_SENDER
+        assert preview["status"] == "TEST PREVIEW · NOT SENT"
+        assert "not a discovered company" in preview["body"]
+        assert preview["participation_form_url"] == "[PUBLIC HTTPS TEST FORM URL NOT CONFIGURED]"
+        assert preview["form_ready"] == "false"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_test_email_backend_allowlist_and_missing_gmail_auth_fail_closed(tmp_path):
+    from outreach_agent.email_test_settings import test_email_preview
+    from outreach_agent.gmail_integration import EmailEventStore
+
+    events = EmailEventStore(tmp_path / "test-email-events.sqlite3")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(load_dashboard_data(), email_event_store=events))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = urllib.request.Request(
+            base + "/api/test-email/send",
+            data=json.dumps({"recipient": "other@example.com", "confirm": True}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request)
+        assert error.value.code == 403
+
+        request = urllib.request.Request(
+            base + "/api/test-email/send",
+            data=json.dumps({"recipient": "yuxaun.chen.1031@outlook.com", "preview_hash": test_email_preview("yuxaun.chen.1031@outlook.com")["preview_hash"], "confirm": True}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request)
+        assert error.value.code == 503
+        result = json.loads(error.value.read())
+        assert result["sent"] is False
+        assert result["provider_accepted"] is False
+        assert "Google OAuth desktop-client JSON" in result["error"]
+        assert "public HTTPS test participation form URL" in result["error"]
+        assert events.recent() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_test_email_ui_shows_configuration_preview_and_disabled_send():
+    html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    assert "EMAIL CONFIGURATION" in html
+    assert 'id="test-email-recipient"' in html
+    assert 'id="test-email-preview"' in html
+    assert 'id="send-test-email" disabled' in html
+    assert "yuxaun.chen.1031@outlook.com" not in js  # settings are loaded from persisted backend config
+    assert "!state.emailConfiguration?.send_enabled" in js

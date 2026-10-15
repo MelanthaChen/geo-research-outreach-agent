@@ -1,5 +1,7 @@
 # Phase 4F: Scale Unified Discovery and Qualification Toward 500 Companies
 
+> Historical reproduction note (Phase 6A, 2026-10-09): the live discovery commands below document the original bounded run only. Current YC Terms of Use prohibit extraction absent express authorization, and Greater Dalton bulk-reuse permission remains unresolved. Do not repeat Phase 4F discovery requests unless those permissions are obtained and recorded. See [Phase 6A source inventory](phase6a_source_inventory.md).
+
 ## Outcome
 
 The isolated experiment now contains **537 unique companies**: the preserved Phase 4D/4E cohort of 198 plus **339 new records**. The target was crossed at a category boundary, not forced. New additions are 336 YC directory companies and 3 Greater Dalton Chamber companies. The original 77-company database was not used as a write target.

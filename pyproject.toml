@@ -20,6 +20,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0,<9"]
 crawl4ai = ["crawl4ai==0.9.4"]
+gmail = [
+  "google-api-python-client>=2.0,<3",
+  "google-auth>=2.0,<3",
+  "google-auth-oauthlib>=1.0,<2",
+  "keyring>=25,<27",
+]
 
 [project.scripts]
 outreach-agent = "outreach_agent.cli:app"

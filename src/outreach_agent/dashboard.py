@@ -16,13 +16,19 @@ from outreach_agent.dashboard_data import (
     filter_companies,
     load_dashboard_data,
     make_draft_preview,
+    export_companies_csv,
 )
 from outreach_agent.campaigns import CampaignStore, DEFAULT_CAMPAIGN_DB
+from outreach_agent.email_test_settings import load_test_email_settings, test_email_preview, validate_test_recipient
+from outreach_agent.gmail_integration import (
+    EmailEventStore, GmailProviderError, GmailSetupError, authorize_gmail, send_gmail_message,
+)
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
 
-def make_handler(data: dict, campaign_store: CampaignStore | None = None):
+def make_handler(data: dict, campaign_store: CampaignStore | None = None,
+                 email_event_store: EmailEventStore | None = None):
     class DashboardHandler(BaseHTTPRequestHandler):
         server_version = "GEOResearchDashboard/1.0"
 
@@ -36,11 +42,45 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
             self.end_headers()
             self.wfile.write(payload)
 
+        def _csv(self, payload: str, filename: str) -> None:
+            body = payload.encode("utf-8-sig")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/api/test-email/config":
+                try:
+                    self._json(load_test_email_settings())
+                except (OSError, ValueError) as exc:
+                    self._json({"error": f"Test email configuration is invalid: {exc}"}, 503)
+                return
+            if parsed.path == "/api/test-email/events":
+                events = email_event_store.recent() if email_event_store else []
+                self._json({"events": events})
+                return
+            if parsed.path == "/api/test-email/preview":
+                params = parse_qs(parsed.query)
+                try:
+                    recipient = params.get("recipient", [""])[0]
+                    self._json(test_email_preview(recipient))
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 403)
+                return
+            if parsed.path == "/api/companies/export.csv":
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                filters = {key: value for key, value in params.items() if key in {"q", "source", "verification", "eligibility", "geo", "priority", "channel"}}
+                self._csv(export_companies_csv(data, filters, campaign_store), "companies.csv")
+                return
             if parsed.path.startswith("/api/campaigns") or parsed.path.startswith("/api/campaign-analytics") or parsed.path.startswith("/api/companies/") and parsed.path.endswith("/outreach-history"):
                 if campaign_store is None:
-                    self._json({"error": "Persistent demo campaign store is unavailable"}, 503)
+                    self._json({"error": "Persistent campaign store is unavailable"}, 503)
                     return
                 try:
                     if parsed.path == "/api/campaigns":
@@ -60,6 +100,36 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
                 self._json({"summary": data["summary"], "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
                             "participation_form_configuration": data["participation_form_configuration"]})
                 return
+            if parsed.path in {"/api/responses", "/api/responses/export.csv"}:
+                if campaign_store is None:
+                    self._json({"error": "Campaign response store is unavailable"}, 503)
+                    return
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                allowed = {"q", "status", "campaign_id", "source", "date_from", "date_to", "environment", "sort"}
+                filters = {key: value for key, value in params.items() if key in allowed}
+                if parsed.path.endswith(".csv"):
+                    self._csv(campaign_store.export_responses_csv(filters), "response-results.csv")
+                    return
+                try:
+                    result = campaign_store.response_page(
+                        filters, page=int(params.get("page", "1")), page_size=int(params.get("page_size", "25"))
+                    )
+                except (ValueError, TypeError) as exc:
+                    self._json({"error": f"Invalid response pagination: {exc}"}, 400)
+                    return
+                result["campaigns"] = campaign_store.list()
+                self._json(result)
+                return
+            if parsed.path.startswith("/api/responses/"):
+                if campaign_store is None:
+                    self._json({"error": "Campaign response store is unavailable"}, 503)
+                    return
+                record_id = parsed.path.rsplit("/", 1)[-1]
+                try:
+                    self._json(campaign_store.response_detail(record_id))
+                except KeyError:
+                    self._json({"error": "Response record not found"}, 404)
+                return
             if parsed.path == "/api/companies":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
                 companies = filter_companies(data, params)
@@ -69,17 +139,23 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
                 if params.get("outreach_status"):
                     companies = [row for row in companies if row["outreach_status"] == params["outreach_status"]]
                 total = len(companies)
-                if "page" in params or "page_size" in params:
-                    try:
-                        page = max(1, int(params.get("page", "1")))
-                        page_size = max(1, min(100, int(params.get("page_size", "50"))))
-                    except ValueError:
-                        self._json({"error": "page and page_size must be integers"}, 400)
-                        return
-                    companies = companies[(page - 1) * page_size:page * page_size]
-                else:
-                    page, page_size = 1, total
+                try:
+                    page = max(1, int(params.get("page", "1")))
+                    page_size = max(1, min(100, int(params.get("page_size", "50"))))
+                except ValueError:
+                    self._json({"error": "page and page_size must be integers"}, 400)
+                    return
+                companies = companies[(page - 1) * page_size:page * page_size]
                 self._json({"companies": companies, "total": total, "page": page, "page_size": page_size})
+                return
+            if parsed.path == "/api/company-ids":
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                rows = filter_companies(data, params)
+                states = campaign_store.company_states() if campaign_store else {}
+                outreach_filter = params.get("outreach_status")
+                if outreach_filter:
+                    rows = [row for row in rows if states.get(row["id"], "NO_CAMPAIGN_HISTORY") == outreach_filter]
+                self._json({"company_ids": [row["id"] for row in rows], "total": len(rows)})
                 return
             if parsed.path.startswith("/api/companies/"):
                 try:
@@ -118,14 +194,11 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
-            if campaign_store is None:
-                self._json({"error": "Demo server is read-only; campaign persistence is not enabled"}, 405)
-                return
             try:
                 origin = self.headers.get("Origin")
                 fetch_site = self.headers.get("Sec-Fetch-Site", "same-origin")
                 if (origin and (urlparse(origin).scheme != "http" or urlparse(origin).netloc != self.headers.get("Host"))) or fetch_site in {"cross-site", "same-site"}:
-                    self._json({"error": "Cross-origin demo mutations are not allowed"}, 403)
+                    self._json({"error": "Cross-origin changes are not allowed"}, 403)
                     return
                 length = int(self.headers.get("Content-Length", "0"))
                 if length < 1 or length > 128_000:
@@ -135,14 +208,72 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
                 if not isinstance(body, dict):
                     raise ValueError("JSON object required")
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/test-email/send":
+                    try:
+                        validate_test_recipient(body.get("recipient"))
+                    except ValueError as exc:
+                        self._json({"error": str(exc)}, 403)
+                        return
+                    if body.get("confirm") is not True:
+                        self._json({"error": "Explicit confirmation is required for a test send"}, 400)
+                        return
+                    settings = load_test_email_settings()
+                    preview = test_email_preview(body["recipient"])
+                    if body.get("preview_hash") != preview["preview_hash"]:
+                        self._json({"error": "The message preview changed. Review the current recipient and message again.", "sent": False}, 409)
+                        return
+                    if not settings["send_enabled"]:
+                        self._json({"error": settings["prerequisite"], "sent": False, "provider_accepted": False}, 503)
+                        return
+                    event_store = email_event_store or EmailEventStore()
+                    try:
+                        idempotency_key = event_store.reserve(body["recipient"], preview["subject"], preview["preview_hash"])
+                    except ValueError as exc:
+                        self._json({"error": str(exc), "sent": False}, 409)
+                        return
+                    try:
+                        result = send_gmail_message(
+                            recipient=preview["to"], sender=preview["from"],
+                            subject=preview["subject"], body=preview["body"], settings=settings,
+                        )
+                    except GmailProviderError as exc:
+                        status = "PROVIDER_REJECTED" if exc.provider_rejected else "SEND_FAILED_UNCERTAIN"
+                        event_store.finish(idempotency_key, status, error=str(exc))
+                        self._json({"error": str(exc), "sent": False,
+                                    "provider_rejected": exc.provider_rejected,
+                                    "delivery_confirmation": "NOT_CONFIRMED"}, 502)
+                        return
+                    except GmailSetupError as exc:
+                        event_store.finish(idempotency_key, "SEND_FAILED", error=str(exc))
+                        self._json({"error": str(exc), "sent": False, "provider_accepted": False}, 503)
+                        return
+                    event_store.finish(idempotency_key, result["status"], message_id=result["provider_message_id"])
+                    self._json({"sent": True, "provider": "Gmail API", **result})
+                    return
+                if parsed.path == "/api/test-email/connect":
+                    settings = load_test_email_settings()
+                    try:
+                        result = authorize_gmail(settings)
+                    except GmailSetupError as exc:
+                        self._json({"error": str(exc), "authenticated": False}, 503)
+                        return
+                    except Exception as exc:
+                        self._json({"error": f"Google authorization did not complete ({type(exc).__name__}); no credential was saved.", "authenticated": False}, 502)
+                        return
+                    self._json(result)
+                    return
+                if campaign_store is None:
+                    self._json({"error": "Campaign persistence is not enabled"}, 405)
+                    return
                 if parsed.path == "/api/campaigns":
                     company_ids = body.get("company_ids", [])
                     if body.get("all_matching") is True:
                         params = body.get("filters") or {}
                         if not isinstance(params, dict):
                             raise ValueError("filters must be a JSON object")
-                        rows = filter_companies(data, {k: str(v) for k, v in params.items() if v})
-                        outreach_filter = params.get("outreach_status")
+                        filtered = {k: str(v) for k, v in params.items() if v}
+                        rows = filter_companies(data, filtered)
+                        outreach_filter = filtered.get("outreach_status")
                         states = campaign_store.company_states()
                         if outreach_filter:
                             rows = [row for row in rows if states.get(row["id"], "NO_CAMPAIGN_HISTORY") == outreach_filter]
@@ -162,7 +293,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None):
                 if parsed.path.startswith("/api/demo/submissions/"):
                     parts = parsed.path.strip("/").split("/")
                     if len(parts) != 5 or parts[4] not in {"review", "handoff"}:
-                        self._json({"error": "Unknown simulated-submission action"}, 404)
+                        self._json({"error": "Unknown test-submission action"}, 404)
                         return
                     submission_id = int(parts[3])
                     result = (campaign_store.review_demo_submission(submission_id) if parts[4] == "review"
@@ -210,13 +341,14 @@ def serve(host: str = "127.0.0.1", port: int = 8765, db: Path = DEFAULT_DB,
         raise ValueError("Professor dashboard may only bind to loopback")
     data = load_dashboard_data(db, verification, delivery)
     campaign_store = CampaignStore(DEFAULT_CAMPAIGN_DB)
-    server = ThreadingHTTPServer((host, port), make_handler(data, campaign_store))
-    print(f"GEO RESEARCH OUTREACH — DEMO MODE — http://127.0.0.1:{port}")
-    print(f"Loaded {data['summary']['total_companies']} companies read-only; DEMO campaign events persist in {DEFAULT_CAMPAIGN_DB.name}. Ctrl+C stops the local dashboard.")
+    email_event_store = EmailEventStore()
+    server = ThreadingHTTPServer((host, port), make_handler(data, campaign_store, email_event_store))
+    print(f"GEO RESEARCH OUTREACH PLATFORM — LOCAL TEST TRANSPORT — http://127.0.0.1:{port}")
+    print(f"Loaded {data['summary']['total_companies']} companies read-only; test campaign events persist in {DEFAULT_CAMPAIGN_DB.name}. Ctrl+C stops the local dashboard.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nDashboard stopped. No real delivery or form submission occurred.")
+        print("\nDashboard stopped. No live delivery or form submission occurred.")
     finally:
         server.server_close()
 

@@ -1,6 +1,8 @@
 import hashlib
 import importlib.util
 import json
+import csv
+import io
 import sqlite3
 import threading
 import urllib.error
@@ -74,7 +76,7 @@ def test_campaign_routes_verified_email_form_queue_and_exclusions(tmp_path):
     by_id = {item["company_id"]: item for item in campaign["items"]}
     assert by_id[1]["item_status"] == "DRAFT_REVIEW"
     assert by_id[1]["draft"]["recipient"] == "hello@fixture.test"
-    assert by_id[1]["draft"]["label"] == "DEMO DRAFT — NOT SENT"
+    assert by_id[1]["draft"]["label"] == "DRAFT · NOT SENT"
     assert ".invalid/demo/" in by_id[1]["form_url"]
     assert by_id[2]["item_status"] == "EXCLUDED_NO_SUITABLE_CHANNEL"
     assert by_id[3]["item_status"] == "CONTACT_FORM_REVIEW"
@@ -174,6 +176,117 @@ def test_test_response_statuses_include_more_info_and_opt_out_without_real_suppr
     assert json.loads(last_event["details_json"])["suppression_registry_changed"] is False
 
 
+def response_fixture_store(tmp_path):
+    data, company_db = cohort_fixture(tmp_path)
+    for company_id in (2, 3, 5):
+        detail = data["details"][company_id]
+        detail["identity_verification_status"] = "VERIFIED"
+        detail["eligibility"] = "ELIGIBLE"
+        detail["contact_channels"] = [{
+            "id": 100 + company_id, "channel_type": "GENERAL_BUSINESS_EMAIL",
+            "email": f"team@{detail['normalized_domain']}", "source_url": detail["website"],
+            "review_status": "PENDING", "is_suitable_first_party": True,
+        }]
+    store = CampaignStore(tmp_path / "responses.db")
+    campaign = store.create(data, "Responses Cohort", [1, 2, 3, 5])
+    store.approve_demo(campaign["id"])
+    store.simulate_batch(campaign["id"])
+    store.record_response(campaign["id"], 1, "DECLINED")
+    store.record_response(campaign["id"], 2, "OPTED_OUT")
+    store.record_response(campaign["id"], 3, "MORE_INFO")
+    store.record_response(campaign["id"], 5, "UNANSWERED")
+    token = next(item["demo_token"] for item in store.get(campaign["id"])["items"] if item["company_id"] == 3)
+    store.submit_demo_interest(token, {
+        "company_name": "Form Co", "website": "https://form.test", "business_email": "researcher@example.invalid",
+        "interest": "INTERESTED", "questions": "Test question",
+    })
+    return store, campaign["id"]
+
+
+def test_response_filters_status_source_search_date_campaign_and_environment(tmp_path):
+    store, campaign_id = response_fixture_store(tmp_path)
+    all_rows = store.response_page({"environment": "TEST"}, page_size=100)
+    assert all_rows["total"] == 5
+    assert all_rows["sources"] == ["PARTICIPATION_INTEREST_FORM", "TEST_RECIPIENT_OUTCOME"]
+    assert all_rows["counts"]["DECLINED"] == 1
+    assert all_rows["counts"]["NO_RESPONSE"] == 1
+    assert all_rows["counts"]["PENDING_VERIFICATION"] == 1
+    assert all_rows["counts"]["NEEDS_FOLLOW_UP"] == 2
+    assert store.response_page({"status": "NO_RESPONSE"})["total"] == 1
+    assert store.response_page({"status": "DECLINED"})["total"] == 1
+    assert store.response_page({"status": "OPTED_OUT"})["total"] == 1
+    assert store.response_page({"status": "PENDING_VERIFICATION"})["records"][0]["original_answer"] == "INTERESTED"
+    assert store.response_page({"campaign_id": campaign_id, "source": "PARTICIPATION_INTEREST_FORM", "status": "PENDING_VERIFICATION"})["total"] == 1
+    assert store.response_page({"q": "FORM.TEST", "status": "MORE_INFO"})["total"] == 1
+    assert store.response_page({"q": "Form Co"})["total"] == 2
+    assert store.response_page({"q": "hello@fixture.test"})["total"] == 1
+    assert store.response_page({"q": "RESEARCHER@EXAMPLE.INVALID", "source": "PARTICIPATION_INTEREST_FORM"})["total"] == 1
+    assert store.response_page({"environment": "LIVE"})["total"] == 0
+    date = all_rows["records"][0]["activity_at"][:10]
+    assert store.response_page({"date_from": date, "date_to": date})["total"] == 5
+    assert store.response_page({"date_from": "2999-01-01"})["total"] == 0
+
+
+def test_response_sort_pagination_and_filtered_csv_are_stable_and_private(tmp_path):
+    store, campaign_id = response_fixture_store(tmp_path)
+    recent = store.response_page({"sort": "recent"}, page=1, page_size=2)
+    oldest = store.response_page({"sort": "oldest"}, page=1, page_size=2)
+    company_sorted = store.response_page({"sort": "company"}, page=1, page_size=2)
+    status_sorted = store.response_page({"sort": "status"}, page=1, page_size=2)
+    assert recent["total"] == oldest["total"] == 5
+    assert len(recent["records"]) == len(oldest["records"]) == 2
+    assert recent["records"][0]["activity_at"] >= recent["records"][1]["activity_at"]
+    assert oldest["records"][0]["activity_at"] <= oldest["records"][1]["activity_at"]
+    assert company_sorted["records"][0]["company_name"].casefold() <= company_sorted["records"][1]["company_name"].casefold()
+    assert status_sorted["records"][0]["status"] <= status_sorted["records"][1]["status"]
+    page_ids = [row["record_id"] for row in recent["records"]]
+    assert not set(page_ids).intersection(row["record_id"] for row in store.response_page({"sort": "recent"}, page=2, page_size=2)["records"])
+    first = store.response_page({"sort": "recent"}, page=1, page_size=100)
+    second = store.response_page({"sort": "recent"}, page=1, page_size=100)
+    assert first["records"] == second["records"]
+    filtered = store.export_responses_csv({"campaign_id": campaign_id, "status": "NO_RESPONSE", "sort": "oldest"})
+    rows = list(csv.DictReader(io.StringIO(filtered)))
+    assert len(rows) == 1 and rows[0]["response_status"] == "NO_RESPONSE"
+    assert rows[0]["response_source"] == ""
+    assert rows[0]["source_evidence_url"] == "https://review.test"
+    assert "contact_email" not in rows[0] and "researcher@example.invalid" not in filtered
+
+
+def test_response_details_include_company_history_without_form_personal_data(tmp_path):
+    store, _ = response_fixture_store(tmp_path)
+    response = store.response_page({"source": "PARTICIPATION_INTEREST_FORM"})["records"][0]
+    detail = store.response_detail(response["record_id"])
+    assert detail["company_name"] == "Form Co"
+    assert detail["formal_consent"] == 0
+    assert detail["company_history"]
+    assert "form_data" not in detail
+
+
+def test_response_api_paginates_filters_exports_and_exposes_company_history(tmp_path):
+    store, campaign_id = response_fixture_store(tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler({}, store))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        page = json.load(urllib.request.urlopen(base + "/api/responses?status=NO_RESPONSE&page=1&page_size=1"))
+        assert page["total"] == 1 and page["page"] == 1 and page["page_size"] == 1
+        assert page["records"][0]["status"] == "NO_RESPONSE"
+        assert page["sources"] == ["PARTICIPATION_INTEREST_FORM", "TEST_RECIPIENT_OUTCOME"]
+        response_id = page["records"][0]["record_id"]
+        detail = json.load(urllib.request.urlopen(base + f"/api/responses/{response_id}"))
+        assert detail["company_history"]
+        export = urllib.request.urlopen(base + f"/api/responses/export.csv?campaign_id={campaign_id}&status=NO_RESPONSE").read().decode("utf-8-sig")
+        rows = list(csv.DictReader(io.StringIO(export)))
+        assert len(rows) == 1 and rows[0]["company_domain"] == "review.test"
+        assert "contact_email" not in rows[0]
+        empty = json.load(urllib.request.urlopen(base + "/api/responses?status=INTERESTED&environment=LIVE"))
+        assert empty["total"] == 0 and empty["records"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_interest_form_token_duplicate_validation_review_and_handoff_are_demo_only(tmp_path):
     data, _ = cohort_fixture(tmp_path)
     store = CampaignStore(tmp_path / "campaigns.db")
@@ -197,6 +310,8 @@ def test_interest_form_token_duplicate_validation_review_and_handoff_are_demo_on
     assert handoff == {"status": "SIMULATED_FOLLOWUP_STARTED", "message_sent": False, "formal_consent": False, "simulated": True}
     analytics = store.analytics()
     assert analytics["simulated_submissions"] == 1
+    assert analytics["simulated_followups"] == 1
+    assert store.list()[0]["simulated_followup_count"] == 1
     assert analytics["formal_consents"] == 0
     assert analytics["opens_or_clicks"] == "NOT_TRACKED"
     with pytest.raises(ValueError, match="Invalid, revoked, or expired"):
@@ -229,7 +344,7 @@ def test_suppressed_first_party_email_is_excluded_without_writing_suppression_fi
     assert sha(suppression) == before
 
 
-def test_demo_exports_are_stable_and_mark_synthetic_events(tmp_path):
+def test_campaign_exports_are_stable_and_mark_test_source(tmp_path):
     spec = importlib.util.spec_from_file_location("phase5d_campaign_demo", ROOT / "scripts/phase5d_campaign_demo.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -243,7 +358,7 @@ def test_demo_exports_are_stable_and_mark_synthetic_events(tmp_path):
     hashes = [sha(path) for path in first]
     second = module.export(store, tmp_path)
     assert [sha(path) for path in second] == hashes
-    assert "DEMO ONLY" in first[0].read_text(encoding="utf-8")
+    assert "TEST — LOCAL GENERATED EVENTS" in first[0].read_text(encoding="utf-8")
     assert "source_data_mutated" in first[1].read_text(encoding="utf-8").splitlines()[0]
 
 
@@ -264,6 +379,10 @@ def test_demo_dashboard_api_is_persistent_same_origin_only_and_has_no_real_send_
         page_two = json.load(urllib.request.urlopen(base + "/api/companies?page=2&page_size=2"))
         assert page_one["total"] == page_two["total"] == 5
         assert len(page_one["companies"]) == len(page_two["companies"]) == 2
+        matching_ids = json.load(urllib.request.urlopen(base + "/api/company-ids?geo=HIGH"))
+        assert matching_ids["total"] == 3
+        assert len(matching_ids["company_ids"]) == 3
+        assert "companies" not in matching_ids
         all_matches = json.dumps({"name": "All pages DEMO", "all_matching": True, "filters": {"geo": "HIGH"}}).encode()
         all_request = urllib.request.Request(base + "/api/campaigns", data=all_matches, method="POST", headers={"Content-Type": "application/json"})
         all_campaign = json.load(urllib.request.urlopen(all_request))
@@ -283,14 +402,15 @@ def test_demo_dashboard_api_is_persistent_same_origin_only_and_has_no_real_send_
         thread.join(timeout=2)
 
 
-def test_dashboard_campaign_ui_uses_same_origin_demo_only_and_separate_review_states():
+def test_dashboard_campaign_ui_uses_same_origin_test_processing_and_separate_review_states():
     html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
-    assert "Campaign workspace" in html
-    assert "No email provider" in html
+    assert "Create an invitation batch" in html
+    assert "Live delivery is unavailable" in html
     assert 'method:"POST"' in js
     assert "fetch(\"http" not in js
-    assert "SIMULATED" in js and "NOT SENT" in js
+    assert "simulated" in js.lower() and "NOT SENT" in js
+    assert 'class="test-actions"' in js
     assert "data-submission-review" in js
     assert "formal consent: NO" in js
     assert "privacy_notice" in (ROOT / "config/outreach.yaml").read_text(encoding="utf-8")
@@ -307,8 +427,48 @@ def test_phase5e_dashboard_has_independent_views_and_safe_test_form_tools():
     assert 'id="select-all-matching"' in html and "state.selectedIds" in js
     assert 'id="form-token-select"' in html and 'id="submit-local-interest"' in html
     assert 'apiWrite("/api/demo/interest"' in js and 'apiWrite("/api/demo/form-open"' in js
-    assert "TEST RECORD" in js and "real_sends" in js
+    assert 'class="test-label">Test</span>' in js and "analytics.real_sends" in js
+    assert all(f'id="{control}"' in html for control in (
+        "response-search", "response-status", "response-campaign", "response-source",
+        "response-date-from", "response-date-to", "response-environment", "response-sort",
+        "response-export", "response-prev", "response-next", "response-detail",
+    ))
+    assert "/api/responses?" in js and "/api/responses/export.csv" in js
     assert "fetch(\"http" not in js and "localStorage" not in js
+
+
+def test_dashboard_test_copy_and_seed_defaults_preserve_existing_campaigns(tmp_path):
+    html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    assert all(f'data-view="{page}"' in html for page in ("overview", "companies", "campaigns", "interest-form", "responses", "analytics", "settings"))
+    assert "TEST ENVIRONMENT" not in html and "Professor walkthrough" not in html
+    assert "Test activity" in js and "Live activity" in js
+    assert "DEMO ONLY" not in js and "DEMO DRAFT" not in js
+    assert 'class="test-label">Test' in js
+    config = (ROOT / "config/outreach.yaml").read_text(encoding="utf-8")
+    assert 'sender_email: ""' in config and 'participation_interest_form_url: ""' in config
+    store = CampaignStore(tmp_path / "campaigns.db")
+    data, _ = cohort_fixture(tmp_path)
+    saved = store.create(data, "Legacy Professor Walkthrough — DEMO ONLY", [1])
+    store.approve_demo(saved["id"])
+    store.simulate_batch(saved["id"])
+    stored = store.get(saved["id"])
+    original_name = stored["name"]
+    assert original_name == "Legacy Professor Walkthrough — DEMO ONLY"
+    token = stored["items"][0]["demo_token"]
+    assert token
+    assert stored["items"][0]["draft"]["participation_interest_form_url"].startswith("TEST LINK — NOT ACTIVE: https://participation.example.invalid/")
+    store.submit_demo_interest(token, {"company_name":"Fixture Co", "website":"https://fixture.test", "contact_name":"Reviewer",
+        "contact_role":"Research contact", "business_email":"reviewer@example.invalid", "interest":"INTERESTED"})
+    preserved = store.get(saved["id"])
+    assert preserved["name"] == original_name
+    assert preserved["interest_submissions"][0]["is_simulated"] == 1
+    assert store.submit_demo_interest(token, {"company_name":"Fixture Co", "website":"https://fixture.test", "contact_name":"Reviewer",
+        "contact_role":"Research contact", "business_email":"reviewer@example.invalid", "interest":"INTERESTED"})["status"] == "DUPLICATE_IGNORED"
+    renamed = store.rename_campaign(saved["id"], "Research Outreach Campaign")
+    assert renamed["name"] == "Research Outreach Campaign"
+    assert renamed["items"][0]["demo_token"] == token
+    assert len(renamed["interest_submissions"]) == 1
 
 
 def test_real_cohort_and_frozen_77_database_hashes_survive_campaign_processing(tmp_path):

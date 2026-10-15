@@ -215,7 +215,7 @@ The integrated Phase 3B rerun is documented in [`docs/phase3b_live_validation.md
 
 ## Phase 5A/5C professor demo — offline only
 
-The sender account is intentionally not selected. `config/outreach.yaml` keeps sender name/email, reply-to, Participation Interest Form URL, research contact, researcher, team, and university affiliation unset, with live delivery disabled. Email drafts direct interest to the Participation Interest Form; email is listed only for research questions. Demo drafts use a clearly labeled reserved `.invalid` URL. No Gmail, Microsoft 365, SMTP, API key, browser automation, or form-submit integration is required or present. The demo reads the existing 537-company Phase 4F database read-only, combines its stored qualifications/contact evidence with saved website-verification exports, and writes labeled draft/simulation CSVs. It does not modify approval fields or the database, send email, submit forms, or establish consent. The simulated participation workflow distinguishes a form-interest indication from formal research consent.
+The Phase 5A demo remains provider-free. It reads the existing 537-company Phase 4F database read-only, combines its stored qualifications/contact evidence with saved website-verification exports, and writes labeled draft/simulation CSVs. It does not modify approval fields or the database, send email, submit forms, or establish consent. The simulated participation workflow distinguishes a form-interest indication from formal research consent. A separate, restricted Gmail test workflow was added in Phase 6B.2; it does not enable company outreach.
 
 Run the deterministic walkthrough from the repository root:
 
@@ -235,9 +235,24 @@ It is limited to 100 companies per invocation and batches of at most 25. It make
 
 ## Phase 5B professor dashboard
 
-Start the local dashboard with `uv run python scripts/phase5b_dashboard.py`, then open [http://127.0.0.1:8765](http://127.0.0.1:8765). It explores the actual 537-company experimental cohort and saved qualification/contact evidence. Phase 5D adds persistent DEMO-only campaign records in a separate ignored SQLite sidecar; the Phase 4F cohort remains read-only. There is no email provider, real-send route, public form endpoint, or company website request. See [`docs/phase5b_professor_dashboard.md`](docs/phase5b_professor_dashboard.md) and [`docs/phase5d_campaign_manager.md`](docs/phase5d_campaign_manager.md).
+Start the local dashboard with `uv run python scripts/phase5b_dashboard.py`, then open [http://127.0.0.1:8765](http://127.0.0.1:8765). It explores the isolated Phase 6A copy of the 537-company experimental cohort and saved qualification/contact evidence. Test campaign activity is stored in the separate ignored Phase 5D SQLite sidecar; company data is read-only. There is no email provider, live-send route, public form endpoint, or company website request. Test records are labeled separately from live activity. See [`docs/phase5b_professor_dashboard.md`](docs/phase5b_professor_dashboard.md) and [`docs/phase5d_campaign_manager.md`](docs/phase5d_campaign_manager.md).
 
-## Phase 5D campaign manager and reusable interest-form demo
+## Phase 6A company expansion status
+
+The 5,000-company expansion is permission-gated. The current Phase 6A database is a validated copy of Phase 4F with 537 preserved companies; no new company records were added because the existing YC terms prohibit unapproved extraction and Greater Dalton bulk-reuse permission is unresolved. A CC0 GLEIF bulk file is documented, but it contains legal-entity references rather than sufficient company website/SMB/GEO evidence and is not ingested as a direct cohort. Source-level decisions are in [`docs/phase6a_source_inventory.md`](docs/phase6a_source_inventory.md); actual counts and limitations are in [`docs/phase6a_company_expansion.md`](docs/phase6a_company_expansion.md).
+
+The Phase 4F live discovery commands are historical reproduction instructions only and must not be repeated without obtaining YC’s express authorization and resolving Chamber reuse permission. Phase 6A's discovery/verification/qualification/contact/resume commands intentionally fail closed pending approval.
+
+Generate the offline progress report and validate the Phase 6A snapshot:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase6a_scale_cohort.py report
+PYTHONPATH=src uv run python scripts/phase6a_scale_cohort.py validate
+```
+
+The CLI has `discover`, `verify`, `qualify`, `discover-contacts`, and `resume` placeholders, but they fail closed until an appropriate source is explicitly authorized and approved. No discovery, website crawl, contact submission, real outreach, or campaign-sidecar modification occurred in Phase 6A. For 5,000-company readiness, dashboard detail loading still needs a SQL-backed paginated read model; current list API pagination and filter-ID selection are bounded, but the startup loader currently materializes the saved cohort.
+
+## Phase 5D campaign manager and reusable participation form
 
 Seed/resume the reproducible 20-company professor scenario and generate its two review CSV exports:
 
@@ -245,13 +260,19 @@ Seed/resume the reproducible 20-company professor scenario and generate its two 
 uv run python scripts/phase5d_campaign_demo.py seed --count 20
 ```
 
-The scenario uses 20 actual verified/eligible cohort companies with suitable saved first-party channels: 19 email drafts and one contact-form draft held in a separate manual review queue. It records only explicitly synthetic DEMO deliveries, failures/retries, responses, one interest form, demo review, and follow-up handoff. Expected first-run summary shape: `companies=20 drafts=20 simulated_deliveries=19 simulated_failures=2 simulated_submissions=1 real_sends=0 real_form_submissions=0 formal_consents=0`. Start the dashboard with the Phase 5B command above to inspect campaigns, history, drafts, and analytics.
+The scenario uses 20 actual verified/eligible cohort companies with suitable saved first-party channels: 19 email drafts and one contact-form draft held in a separate manual review queue. It records local test deliveries, failures/retries, responses, one interest form, review, and follow-up handoff. Expected first-run summary shape: `companies=20 drafts=20 test_deliveries=19 test_failures=2 test_submissions=1 live_sends=0 live_form_submissions=0 formal_consents=0`. Start the dashboard with the Phase 5B command above to inspect campaigns, history, drafts, and analytics.
 
-To re-export the unchanged sidecar state, run `uv run python scripts/phase5d_campaign_demo.py export`; exports are stable across repeated runs. The generated files are [`data/phase5d_demo_campaign_summary.csv`](data/phase5d_demo_campaign_summary.csv) and [`data/phase5d_demo_outreach_status.csv`](data/phase5d_demo_outreach_status.csv). To reset only one demo campaign, pass its printed ID to `uv run python scripts/phase5d_campaign_demo.py reset --campaign-id <campaign-id>`. This never resets company or human-review data. The dashboard uses only reserved `.invalid` demo URLs and all campaign/form states remain explicitly simulated. Sender, institution, study description, privacy notice, and real form settings remain unset. See [`docs/phase5d_professor_demo_walkthrough.md`](docs/phase5d_professor_demo_walkthrough.md) for a five-minute script and exact expectations.
+To re-export the unchanged sidecar state, run `uv run python scripts/phase5d_campaign_demo.py export`; exports are stable across repeated runs and identify test records in their source fields. The generated files remain [`data/phase5d_demo_campaign_summary.csv`](data/phase5d_demo_campaign_summary.csv) and [`data/phase5d_demo_outreach_status.csv`](data/phase5d_demo_outreach_status.csv) for compatibility. To reset only one test campaign, pass its printed ID to `uv run python scripts/phase5d_campaign_demo.py reset --campaign-id <campaign-id>`. This never resets company or human-review data. The dashboard uses reserved `.invalid` links and test-only form states. Sender, institution, study description, privacy notice, and real form settings remain unset. See [`docs/phase5d_professor_demo_walkthrough.md`](docs/phase5d_professor_demo_walkthrough.md) for the original test scenario details.
+
+Existing campaign names containing legacy test labels are cleaned for display only and are not changed in storage. If you want to update a saved name explicitly, use `uv run python scripts/phase5d_campaign_demo.py rename --campaign-id <campaign-id> --name "Research Outreach Campaign"`; this records an audit event and preserves campaign items, submissions, and form tokens.
 
 ### Phase 5E multi-page dashboard
 
 Run `uv run python scripts/phase5b_dashboard.py --host 127.0.0.1 --port 8765` and open `http://127.0.0.1:8765`. The local dashboard has separate Overview, Companies, Campaigns, Interest Form, Responses, Analytics, and Settings views. Company search/filter/pagination and evidence details remain available; selected companies can be kept across pages and added to a campaign. The Interest Form view accepts only a token from an existing test-delivered campaign and stores submissions in the isolated campaign sidecar. Responses and analytics are sourced from saved records and mark test activity separately. No real delivery, external company-site access, public form endpoint, or real form submission is available. See [`docs/phase5e_multipage_dashboard.md`](docs/phase5e_multipage_dashboard.md) for page behavior and validation commands.
+
+The Companies page also offers “Download all companies CSV” and “Download filtered CSV”. Exports are server-generated, stable, one row per company, and include stored provenance, qualification, available contact evidence, and isolated test campaign status; multiple values use sorted ` | `-separated cells. Formula-like cells are escaped. Phase 6B's full export validation and real-email blockers are documented in [`docs/phase6b_email_and_company_export.md`](docs/phase6b_email_and_company_export.md). Real delivery remains disabled because no authorized provider/OAuth configuration or public HTTPS participant form is present; no message was sent.
+
+Phase 6B.2 replaces the prior Microsoft Graph configuration with a Gmail API test workflow. The preferred sender and two exact Outlook test recipients are in `config/test_email.yaml`; Settings supports explicit Gmail OAuth connection and Campaigns shows a full message preview before any confirmed send. Gmail tokens are stored only in the OS keyring, and test sends are hard-allowlisted and recorded separately from company campaign history. Sending is currently blocked until the desktop OAuth client is configured, the correct Gmail account is authorized, and a verified public HTTPS test form endpoint is deployed. See [`docs/phase6b2_gmail_test_workflow.md`](docs/phase6b2_gmail_test_workflow.md). The earlier Phase 6B.1 note is historical.
 
 ## Qualification and review
 
@@ -283,16 +304,16 @@ tests/                  unit and integration tests
 
 ## Safety guarantees
 
-- Phase 5A has no live email-sending implementation or provider dependency; demo delivery is local simulation only.
+- Phase 5A demo delivery is local simulation only. Phase 6B.2 adds Gmail sending only for the two explicitly allowlisted test addresses, with per-message confirmation; company campaign delivery remains disabled.
 - Demo domains use the reserved `.example` namespace.
 - No paid APIs, social-platform scraping, LinkedIn dependency, private-data source, or GEO-platform integration exists.
 - Real-company discovery and website inspection only read ordinary public pages; blocks and robots restrictions are honored.
-- Future production sending must require explicit human approval; test sending should require a recipient allowlist.
+- Any future company outreach must remain separately designed and disabled until research-team approval, recipient eligibility, human review, and audit controls are in place.
 
 ## Intentionally deferred
 
-Additional discovery sources, mailbox deliverability checks, Google Sheets/Forms, automated form submission, Gmail/provider integration, real response tracking, and GEO handoff are future phases. Phase 5A's templates, local simulated state machine, and simulated response are demo-only. A small additive schema upgrader supports existing Phase 1/2 databases, but a formal migration tool will be needed once the model evolves further.
+Additional discovery sources, mailbox deliverability checks, Google Sheets/Forms, automated form submission, public HTTPS test-form deployment, test-form callback integration into Responses/Analytics, production company outreach, and GEO handoff remain future work. Phase 5A's templates, local simulated state machine, and simulated response are demo-only. A small additive schema upgrader supports existing Phase 1/2 databases, but a formal migration tool will be needed once the model evolves further.
 
 ## Suggested next phase
 
-Have the professor label a sample of stored snapshots, then calibrate the provisional weights/thresholds and add an inspection export for human review. Keep real delivery deferred until the sender is selected and a separately reviewed provider integration, explicit approvals, allowlisting, and audit controls are designed and tested.
+Complete the external HTTPS test-form deployment, authorize the Gmail desktop OAuth client, and run the one-recipient controlled E2E workflow. Keep all discovered-company outreach disabled; the test flow must not be treated as research consent or a company response.

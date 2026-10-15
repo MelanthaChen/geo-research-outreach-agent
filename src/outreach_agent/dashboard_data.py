@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import sqlite3
 import types
@@ -28,7 +29,7 @@ from outreach_agent.outreach_pipeline import (
 from outreach_agent.website_identity import verify_company_website
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DB = ROOT / "data/phase4f_experimental.db"
+DEFAULT_DB = ROOT / "data/phase6a_experimental.db"
 DEFAULT_VERIFICATION = ROOT / "data/phase4f_website_verification.csv"
 PRIOR_VERIFICATION = ROOT / "data/phase4e_website_verification.csv"
 DEFAULT_DELIVERY = ROOT / "data/phase5a_delivery_simulation.csv"
@@ -184,8 +185,8 @@ def load_dashboard_data(
     prior_verification_path: Path | None = PRIOR_VERIFICATION,
 ) -> dict[str, Any]:
     """Return a stable cohort snapshot. SQLite is always opened read-only."""
-    if db_path.name != "phase4f_experimental.db":
-        raise ValueError("Dashboard is restricted to the Phase 4F experimental database")
+    if db_path.name not in {"phase4f_experimental.db", "phase6a_experimental.db"}:
+        raise ValueError("Dashboard is restricted to the isolated Phase 4F/6A experimental database")
     with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
         verification_paths = (prior_verification_path, verification_path) if prior_verification_path else (verification_path,)
@@ -296,20 +297,93 @@ def filter_companies(data: dict[str, Any], params: dict[str, str]) -> list[dict[
     return result
 
 
+COMPANY_EXPORT_COLUMNS = (
+    "Company ID", "Company name", "Website", "Canonical domain", "Industry/category", "Location",
+    "Source name", "Source URL", "Identity verification status", "GEO eligibility", "GEO opportunity",
+    "Research priority score", "Research priority level", "Qualification confidence",
+    "Qualification reason summary", "Contact channel type", "Contact email", "Contact form URL",
+    "Contact evidence URL", "Contact review status", "Human review status", "Campaign membership",
+    "Outreach status", "Last outreach timestamp", "Response status", "Interest form submission status",
+)
+
+
+def _spreadsheet_safe(value: Any) -> str:
+    """Prevent CSV cells from being interpreted as spreadsheet formulas."""
+    if value is None:
+        return ""
+    text = str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
+
+
+def export_companies_csv(data: dict[str, Any], params: dict[str, str] | None = None,
+                         campaign_store: Any | None = None) -> str:
+    """Stable one-row-per-company CSV for the complete cohort or current filters.
+
+    Multiple contact channels are represented as deterministic, pipe-separated
+    values within their respective columns; company rows are never multiplied.
+    Campaign state is read from its isolated sidecar and does not alter cohort data.
+    """
+    params = params or {}
+    rows = filter_companies(data, params)
+    rows.sort(key=lambda row: (row["company_name"].casefold(), row["id"]))
+    states = campaign_store.company_export_states() if campaign_store else {}
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=COMPANY_EXPORT_COLUMNS, lineterminator="\r\n")
+    writer.writeheader()
+    for row in rows:
+        company = data["details"][int(row["id"])]
+        provenance = sorted(company.get("provenance", []), key=lambda item: (
+            str(item.get("source_name") or item.get("source_type") or "").casefold(),
+            str(item.get("source_url") or ""), int(item.get("id") or 0),
+        ))
+        channels = sorted(company.get("contact_channels", []), key=lambda item: (
+            str(item.get("channel_type") or ""), str(item.get("email") or "").casefold(),
+            str(item.get("channel_url") or ""), int(item.get("id") or 0),
+        ))
+        state = states.get(int(row["id"]), {})
+        values = {
+            "Company ID": row["id"], "Company name": company.get("company_name"),
+            "Website": company.get("website"), "Canonical domain": company.get("normalized_domain"),
+            "Industry/category": company.get("industry"), "Location": company.get("location"),
+            "Source name": " | ".join(sorted({str(item.get("source_name") or item.get("source_type") or "") for item in provenance if item.get("source_name") or item.get("source_type")})),
+            "Source URL": " | ".join(sorted({str(item.get("source_url")) for item in provenance if item.get("source_url")})),
+            "Identity verification status": company.get("identity_verification_status"),
+            "GEO eligibility": company.get("eligibility"), "GEO opportunity": company.get("geo_opportunity"),
+            "Research priority score": company.get("priority_score"), "Research priority level": company.get("priority_tier"),
+            "Qualification confidence": company.get("evidence_confidence"),
+            "Qualification reason summary": company.get("qualification_reason"),
+            "Contact channel type": " | ".join(sorted({str(item.get("channel_type")) for item in channels if item.get("channel_type")})),
+            "Contact email": " | ".join(sorted({str(item.get("email")) for item in channels if item.get("email")})),
+            "Contact form URL": " | ".join(sorted({str(item.get("channel_url")) for item in channels if item.get("channel_type") == "CONTACT_FORM" and item.get("channel_url")})),
+            "Contact evidence URL": " | ".join(sorted({str(item.get("source_url")) for item in channels if item.get("source_url")})),
+            "Contact review status": " | ".join(sorted({str(item.get("review_status")) for item in channels if item.get("review_status")})),
+            "Human review status": company.get("review_status"),
+            "Campaign membership": state.get("campaign_membership", ""),
+            "Outreach status": state.get("outreach_status", "NO_CAMPAIGN_HISTORY"),
+            "Last outreach timestamp": state.get("last_outreach_timestamp", ""),
+            "Response status": state.get("response_status", ""),
+            "Interest form submission status": state.get("interest_form_submission_status", ""),
+        }
+        writer.writerow({key: _spreadsheet_safe(values.get(key)) for key in COMPANY_EXPORT_COLUMNS})
+    return output.getvalue()
+
+
 def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | None) -> dict[str, Any]:
     detail = data["details"].get(company_id)
     if not detail:
         raise KeyError(company_id)
     if detail.get("eligibility", "").upper() != "ELIGIBLE":
-        return {"status": "BLOCKED_NOT_ELIGIBLE", "label": "NOT SENT — draft unavailable", "reason": "Company is not currently machine-classified ELIGIBLE."}
+        return {"status": "BLOCKED_NOT_ELIGIBLE", "label": "Draft unavailable · not sent", "reason": "Company is not currently machine-classified ELIGIBLE."}
     if detail.get("identity_verification_status") != "VERIFIED":
-        return {"status": "BLOCKED_IDENTITY_UNVERIFIED", "label": "NOT SENT — draft unavailable", "reason": "Website identity is not VERIFIED in saved evidence."}
+        return {"status": "BLOCKED_IDENTITY_UNVERIFIED", "label": "Draft unavailable · not sent", "reason": "Website identity is not VERIFIED in saved evidence."}
     channels = [channel for channel in detail["contact_channels"] if channel["is_suitable_first_party"]]
     if not channels:
-        return {"status": "NO_SUITABLE_CHANNEL", "label": "NOT SENT — no suitable channel", "reason": "No suitable first-party email or official contact form is stored. No address is inferred."}
+        return {"status": "NO_SUITABLE_CHANNEL", "label": "Draft unavailable · no suitable channel", "reason": "No suitable first-party email or official contact form is stored. No address is inferred."}
     selected = next((channel for channel in channels if int(channel["id"]) == contact_id), None)
     if not selected:
-        return {"status": "CHANNEL_NOT_FOUND", "label": "NOT SENT — choose saved evidence", "reason": "The selected channel is not a suitable first-party channel for this company."}
+        return {"status": "CHANNEL_NOT_FOUND", "label": "Draft unavailable · select saved evidence", "reason": "The selected channel is not a suitable first-party channel for this company."}
 
     config = yaml.safe_load(DEFAULT_OUTREACH_CONFIG.read_text(encoding="utf-8")) or {}
     template = Path(config.get("template_file") or "config/templates/research_invitation.txt")
@@ -335,7 +409,7 @@ def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | 
         recipient = validate_recipient(selected.get("email"))
     return {
         "status": "DRAFT_READY",
-        "label": "DEMO DRAFT — NOT SENT",
+        "label": "DRAFT · NOT SENT",
         "company_id": company_id,
         "company_name": detail["company_name"],
         "contact_id": int(selected["id"]),

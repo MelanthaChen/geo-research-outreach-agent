@@ -144,6 +144,20 @@ The website collector uses bounded retries, timeout and request budgets, serial 
 
 Phase 6H writes `data/phase6h_verified_companies.csv`, `phase6h_geo_eligible_companies.csv`, `phase6h_business_email_contacts.csv`, `phase6h_official_contact_forms.csv`, `phase6h_contact_review_queue.csv`, `phase6h_execution_metrics.csv`, and `phase6h_final_report.md`. The company/contact exports cover the full Top 5,000 snapshot; the execution metrics cover Phase 6H runs. Verification is not human review, and discovered channels remain pending until reviewed.
 
+### Phase 7 full-pool contactable-company qualification
+
+Phase 7 audits the 57,664-domain candidate pool (including, not in addition to, the 537-company cohort), recovers already-saved first-party contact evidence offline, then processes the complete never-attempted pool in resumable quality-first batches. A company counts only with verified identity, successful substantive first-party website evidence, existing GEO `ELIGIBLE` status, and a suitable same-domain public business email or a confirmed form with visible controls. Contact pages alone, unresolved chain/repeated-name candidates, inappropriate role inboxes, and pending/failed/blocked sites do not count. Contact review is not send approval; Phase 7 does not send or submit anything.
+
+```bash
+PYTHONPATH=src uv run python scripts/phase7_contacts.py preflight
+PYTHONPATH=src uv run python scripts/phase7_contacts.py prepare
+PYTHONPATH=src uv run python scripts/phase7_contacts.py run --batch-size 500 --request-cap 10000 --time-cap-seconds 21600 --chunk-request-budget 500
+PYTHONPATH=src uv run python scripts/phase7_contacts.py status
+PYTHONPATH=src uv run python scripts/phase7_contacts.py export
+```
+
+Caps are cumulative across runs. Increase them to resume; checkpointed results are reused. Outputs are `data/phase7_contactable_companies.csv`, `phase7_contact_channel_audit.csv`, `phase7_validation_failures.csv`, `phase7_exclusion_queue.csv`, `phase7_yield_metrics.csv`, and `phase7_final_report.md`. See [`docs/phase7_contactable_company_database.md`](docs/phase7_contactable_company_database.md) for the strict count semantics, evidence policy, and limitations. The target is based on unique qualified contactable companies—not discovered candidates or crawls.
+
 To acquire the dated extract, install the optional parser and run the reproducible import. The PBF is intentionally ignored by Git and should remain in `data/raw_sources/`:
 
 ```bash

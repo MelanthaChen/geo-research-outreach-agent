@@ -1,0 +1,27 @@
+{
+  "captured_date": "2026-10-15",
+  "candidate_records": 57664,
+  "unique_canonical_domains": 57664,
+  "osm_candidates": 57127,
+  "existing_537_company_cohort_domains_included": 537,
+  "previously_unattempted_candidates": 55911,
+  "strict_contactable_companies": 315,
+  "strict_contactable_companies_after_offline_recovery": 660,
+  "additional_existing_phase6_contactable_companies_recovered_offline": 345,
+  "strict_business_email_companies": 262,
+  "strict_confirmed_form_companies": 85,
+  "source_composition": {
+    "Greater Dalton Chamber Member Directory": 60,
+    "OpenStreetMap (Geofabrik US Northeast extract)": 57127,
+    "Y Combinator Consumer Startup Directory": 30,
+    "Y Combinator Public Startup Directory": 447
+  },
+  "source_contribution_to_strict_contactable_companies": {
+    "Greater Dalton Chamber Member Directory": 4,
+    "OpenStreetMap (Geofabrik US Northeast extract)": 165,
+    "Y Combinator Consumer Startup Directory": 6,
+    "Y Combinator Public Startup Directory": 140
+  },
+  "phase6f_phase6h_unique_channel_audit_rows_after_offline_snapshot_recovery": 366,
+  "human_approval_or_outreach_authorization_granted": false
+}

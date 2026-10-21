@@ -48,7 +48,10 @@ function renderSummary(summary) {
   const reviews = summary.pending_human_reviews;
   const outreach = summary.outreach;
   const pool = summary.candidate_pool || {};
+  const channelClasses = summary.contact_channel_classes || {};
   const scale = summary.phase6h || {};
+  const smb = summary.phase7_smb_target || {};
+  const hotelPool = summary.hotel_candidate_pool || {};
   const metrics = [
     ["Total candidates", pool.total_candidates ?? summary.total_companies, "existing cohort + separate discovery pool"],
     ["Verified companies", pool.verified_companies ?? summary.website_verification.VERIFIED ?? 0, "based on identity evidence"],
@@ -58,6 +61,11 @@ function renderSummary(summary) {
   ];
   $("metrics").innerHTML = metrics.map(([label,value,note]) => `<div class="metric"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div><div class="metric-note">${esc(note)}</div></div>`).join("");
   $("secondary-metrics").innerHTML = [
+    ["Email only", channelClasses.EMAIL_ONLY || 0],
+    ["Contact form only", channelClasses.FORM_ONLY || 0],
+    ["Email and form", channelClasses.EMAIL_AND_FORM || 0],
+    ["Channel evidence needs review", channelClasses.NEEDS_REVIEW || 0],
+    ["No contact channel", channelClasses.NO_CONTACT_CHANNEL || 0],
     ["Companies awaiting human review", reviews.companies],
     ["Suitable channels awaiting review", reviews.contact_channels],
     ["Test deliveries", outreach.simulated_delivery_events],
@@ -68,7 +76,7 @@ function renderSummary(summary) {
   ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
   $("candidate-scale-metrics").innerHTML = [
     ["Total candidate pool", pool.total_candidates ?? "—"],
-    ["Top 5,000 shortlist", scale.shortlist ?? 0],
+    ["Priority shortlist records", scale.shortlist ?? 0],
     ["Processed in shortlist", scale.processed ?? 0],
     ["Verified identities", scale.verified ?? 0],
     ["GEO eligible", scale.geo_eligible ?? 0],
@@ -76,6 +84,44 @@ function renderSummary(summary) {
     ["Companies with confirmed forms", scale.companies_with_contact_forms ?? 0],
     ["Pending contact reviews", scale.pending_contact_reviews ?? 0],
     ["Outreach ready", scale.outreach_ready ?? 0],
+    ["Hotel property candidates (separate pool)", hotelPool.properties ?? 0],
+    ["Hotel candidates processed", hotelPool.processed ?? 0],
+    ["Hotel identities verified", hotelPool.verified ?? 0],
+    ["GEO-eligible hotels", hotelPool.geo_eligible ?? 0],
+    ["Hotels with business emails", hotelPool.with_business_email ?? 0],
+    ["Hotels with confirmed contact forms", hotelPool.with_confirmed_form ?? 0],
+    ["Hotel properties awaiting review", hotelPool.pending_review ?? 0],
+  ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(Number(value).toLocaleString())}</strong></div>`).join("");
+  const smbChannels = smb.contact_channel_breakdown_contactable_smb || {};
+  const allChannels = smb.contact_channel_breakdown_contactable || {};
+  $("phase7-smb-metrics").innerHTML = [
+    ["Phase 7 company records", smb.phase7_company_records ?? 0],
+    ["Strict contactable companies · all sectors", smb.strict_contactable_companies ?? 0],
+    ["Positive size-evidence records", smb.smb_size_supported_records ?? 0],
+    ["Verified SMB candidates", smb.verified_smb_count ?? 0],
+    ["GEO-eligible SMBs", smb.geo_eligible_smb_count ?? 0],
+    ["Contactable SMBs", smb.contactable_smb_count ?? 0],
+    ["Remaining to 5,000", smb.remaining_gap_to_5000 ?? 5000],
+    ["Contactable records with unknown size", smb.contactable_unknown_size_nonhotel ?? 0],
+    ["Hotel-tagged contacts excluded", smb.hotel_tagged_contactable_excluded ?? 0],
+    ["Potential hotel/business domain overlaps · review only", smb.hotel_cross_cohort_domain_overlap?.hotel_records_sharing_business_domain ?? 0],
+    ["Large-enterprise size evidence", smb.large_enterprise_supported_records ?? 0],
+    ["SMB email only", smbChannels.EMAIL_ONLY ?? 0],
+    ["SMB form only", smbChannels.FORM_ONLY ?? 0],
+    ["SMB email and form", smbChannels.EMAIL_AND_FORM ?? 0],
+    ["All contactable · email only", allChannels.EMAIL_ONLY ?? 0],
+    ["All contactable · form only", allChannels.FORM_ONLY ?? 0],
+    ["All contactable · email and form", allChannels.EMAIL_AND_FORM ?? 0],
+    ["No strict usable channel · full pool", (smb.contact_channel_breakdown_all_candidates||{}).NO_CONTACT ?? 0],
+  ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(Number(value).toLocaleString())}</strong></div>`).join("");
+  $("hotel-candidate-metrics").innerHTML = [
+    ["Hotel property candidates", hotelPool.properties ?? 0],
+    ["Actually inspected", hotelPool.processed ?? 0],
+    ["Identity verified", hotelPool.verified ?? 0],
+    ["GEO eligible", hotelPool.geo_eligible ?? 0],
+    ["With public business email", hotelPool.with_business_email ?? 0],
+    ["With confirmed contact form", hotelPool.with_confirmed_form ?? 0],
+    ["Awaiting human review", hotelPool.pending_review ?? 0],
   ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(Number(value).toLocaleString())}</strong></div>`).join("");
   const distributionHTML = [
     distCard("WEBSITE IDENTITY", summary.website_verification, summary.total_companies),
@@ -111,7 +157,7 @@ async function reloadCandidates() {
   const sixf=result.phase6f||{};
   const sixfProgress=sixf.selected?` · Phase 6F ${sixf.processed}/${sixf.selected} processed · ${sixf.verified} verified · ${sixf.geo_eligible} GEO eligible · ${sixf.contact_channels_found} channels · ${sixf.pending_verification} pending · ${sixf.review_required} review`:"";
   const sixh=result.phase6h||{};
-  $("candidate-total").textContent=`${Number(p.candidate_count||0).toLocaleString()} candidates · top 5,000: ${Number(sixh.processed||0).toLocaleString()} processed, ${Number(sixh.remaining||0).toLocaleString()} pending · ${Number(sixh.verified||0).toLocaleString()} verified · ${Number(sixh.geo_eligible||0).toLocaleString()} GEO eligible`;
+  $("candidate-total").textContent=`${Number(p.candidate_count||0).toLocaleString()} candidates · 5,000 prioritized: ${Number(sixh.processed||0).toLocaleString()} processed, ${Number(sixh.remaining||0).toLocaleString()} pending · ${Number(sixh.verified||0).toLocaleString()} verified · ${Number(sixh.geo_eligible||0).toLocaleString()} GEO eligible`;
   setOptions("candidate-source", result.filters?.sources||[]);
   setOptions("candidate-status", result.filters?.statuses||[]);
   setOptions("candidate-screen-status", result.filters?.screen_statuses||[]);
@@ -356,6 +402,10 @@ let selectedCampaignId = null;
 let campaignMetricFilter = "all";
 async function loadCampaignWorkspace() {
   const [campaignResult, analytics] = await Promise.all([api("/api/campaigns"), api("/api/campaign-analytics")]);
+  const campaignToolbar = document.querySelector("#campaign-manager .campaign-toolbar");
+  if (campaignToolbar && !$("export-form-review-queue")) {
+    campaignToolbar.insertAdjacentHTML("beforeend", '<a class="button outline" id="export-form-review-queue" href="/api/campaigns/form-review-queue.csv">Export manual form-review queue</a>');
+  }
   state.campaignSummaries=campaignResult.campaigns;
   const mergeSelect=$("mail-merge-campaign");
   const priorMergeCampaign=mergeSelect.value || selectedCampaignId || "";

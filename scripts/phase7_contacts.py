@@ -25,6 +25,13 @@ def main() -> None:
     run_parser.add_argument("--request-timeout-seconds", type=float, default=12)
     run_parser.add_argument("--retry-count", type=int, default=1)
     run_parser.add_argument("--delay-between-requests-seconds", type=float, default=1)
+    run_parser.add_argument("--concurrency", type=int, choices=range(1, 9), default=1,
+                            help="Maximum simultaneous company inspections; respects per-domain crawl ordering")
+    run_parser.add_argument("--max-candidates", type=int,
+                            help="Stop after this many additional candidate records; useful for bounded benchmarks")
+    run_parser.add_argument("--stop-file", help="Stop cleanly after the active 25-candidate checkpoint finishes")
+    run_parser.add_argument("--export-each-batch", action="store_true",
+                            help="Refresh reproducible exports after each completed selection batch")
     export_parser = commands.add_parser("export", help="Regenerate strict evidence exports offline")
     export_parser.add_argument("--database", default=str(PHASE7_DB))
     status_parser = commands.add_parser("status", help="Show saved progress and SQLite integrity")
@@ -41,7 +48,10 @@ def main() -> None:
         result = run(db_path=database, batch_size=args.batch_size, request_cap=args.request_cap,
                      time_cap_seconds=args.time_cap_seconds, chunk_request_budget=args.chunk_request_budget,
                      request_timeout_seconds=args.request_timeout_seconds, retry_count=args.retry_count,
-                     delay_between_requests_seconds=args.delay_between_requests_seconds)
+                     delay_between_requests_seconds=args.delay_between_requests_seconds,
+                     concurrency=args.concurrency, max_candidates=args.max_candidates,
+                     stop_file=Path(args.stop_file) if args.stop_file else None,
+                     export_each_batch=args.export_each_batch)
         result["exports"] = export_outputs(db_path=database)
     elif args.command == "export":
         database = Path(args.database)

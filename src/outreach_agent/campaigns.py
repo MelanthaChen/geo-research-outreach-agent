@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from outreach_agent.dashboard_data import make_draft_preview
+from outreach_agent.dashboard_data import make_draft_preview, _spreadsheet_safe
 from outreach_agent.outreach_pipeline import SuppressionRegistry, validate_recipient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -492,6 +492,35 @@ class CampaignStore:
                 "SELECT i.campaign_id,c.name campaign_name,i.item_status,i.channel_type,i.delivery_status,i.response_status,i.interest_status,i.provider,i.created_at,i.updated_at FROM campaign_items i JOIN campaigns c ON c.id=i.campaign_id WHERE i.company_id=? ORDER BY i.created_at DESC,i.id DESC",
                 (company_id,),
             )]
+
+    def form_review_queue_csv(self) -> str:
+        """Export prepared form invitations for manual handling only."""
+        columns = ["company_id", "company_name", "campaign_id", "campaign_name", "website",
+                   "official_contact_form_url", "contact_evidence_url", "prepared_message",
+                   "contact_review_status", "manual_submission_status", "outreach_status"]
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\r\n")
+        writer.writeheader()
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT i.*, c.name campaign_name FROM campaign_items i
+                   JOIN campaigns c ON c.id=i.campaign_id
+                   WHERE i.channel_type='CONTACT_FORM' AND i.item_status='CONTACT_FORM_REVIEW'
+                   ORDER BY c.created_at, i.company_name COLLATE NOCASE, i.company_id"""
+            )
+            for row in rows:
+                item = dict(row)
+                draft = json.loads(item.get("draft_json") or "{}")
+                values = {
+                    "company_id": item["company_id"], "company_name": item["company_name"],
+                    "campaign_id": item["campaign_id"], "campaign_name": item["campaign_name"],
+                    "website": item["website"], "official_contact_form_url": draft.get("form_url", ""),
+                    "contact_evidence_url": item["evidence_url"], "prepared_message": draft.get("body", ""),
+                    "contact_review_status": item["contact_review_status"],
+                    "manual_submission_status": "NOT_SUBMITTED", "outreach_status": item["delivery_status"],
+                }
+                writer.writerow({key: _spreadsheet_safe(value) for key, value in values.items()})
+        return output.getvalue()
 
     @staticmethod
     def _response_cte() -> str:

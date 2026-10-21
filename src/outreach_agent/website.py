@@ -4,8 +4,11 @@ import hashlib
 import gzip
 import json
 import logging
+import math
 import re
+import threading
 import time
+from collections import Counter
 import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -55,7 +58,8 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def extract_page(markup: str, requested_url: str, final_url: str, status: int, content_type: str) -> tuple[WebsitePage, list[str]]:
+def extract_page(markup: str, requested_url: str, final_url: str, status: int, content_type: str,
+                 timings: dict[str, float] | None = None) -> tuple[WebsitePage, list[str]]:
     soup = BeautifulSoup(markup, "html.parser")
     for node in soup(["script", "style", "noscript", "svg"]):
         node.decompose()
@@ -101,6 +105,11 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
         else (1 if re.search(r"contact", url, re.I) else 2)
     ))
     links = channel_links + other_links
+    contact_started = time.perf_counter()
+    contact_evidence = extract_contact_evidence(markup, final_url)
+    channel_evidence = _channel_evidence(markup, final_url)
+    if timings is not None:
+        timings["contact_extraction_seconds"] = timings.get("contact_extraction_seconds", 0.0) + time.perf_counter() - contact_started
     page = WebsitePage(
         requested_url=requested_url,
         final_url=final_url,
@@ -110,8 +119,8 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
         meta_description=str(description_node.get("content"))[:4000] if description_node and description_node.get("content") else None,
         canonical_url=urljoin(final_url, str(canonical_node.get("href"))) if canonical_node and canonical_node.get("href") else None,
         visible_text=text,
-        contact_evidence=json.dumps(extract_contact_evidence(markup, final_url), sort_keys=True),
-        extracted_channels=json.dumps(_channel_evidence(markup, final_url), sort_keys=True),
+        contact_evidence=json.dumps(contact_evidence, sort_keys=True),
+        extracted_channels=json.dumps(channel_evidence, sort_keys=True),
         visible_text_length=len(text),
         content_hash=hashlib.sha256(markup.encode("utf-8", errors="replace")).hexdigest(),
         structured_data_types=json.dumps(sorted(schema_types)),
@@ -122,7 +131,7 @@ def extract_page(markup: str, requested_url: str, final_url: str, status: int, c
 
 class WebsiteCollector:
     def __init__(self, settings: WebsiteSettings, client: httpx.Client | None = None, sleep=time.sleep,
-                 request_budget: int | None = None):
+                 request_budget: int | None = None, check_sitemap: bool = True):
         self.settings = settings
         self.sleep = sleep
         self._owns_client = client is None
@@ -141,29 +150,97 @@ class WebsiteCollector:
         self.retry_attempts = 0
         self.request_budget = request_budget
         self.request_budget_exhausted = False
+        self.check_sitemap = check_sitemap
+        self.sitemap_requests_skipped = 0
+        self._metrics_lock = threading.Lock()
+        self._inflight = 0
+        self._max_inflight = 0
+        self._request_observations: list[dict[str, Any]] = []
+        self._stage_seconds: dict[str, float] = {}
+        self._delay_seconds: dict[str, float] = {}
+
+    def _add_counter(self, name: str, value: int = 1) -> None:
+        with self._metrics_lock:
+            setattr(self, name, getattr(self, name) + value)
+
+    def add_stage_time(self, stage: str, seconds: float) -> None:
+        with self._metrics_lock:
+            self._stage_seconds[stage] = self._stage_seconds.get(stage, 0.0) + max(0.0, seconds)
+
+    def request_metrics(self) -> dict[str, Any]:
+        with self._metrics_lock:
+            observations = list(self._request_observations)
+            stage_seconds = dict(self._stage_seconds)
+            delay_seconds = dict(self._delay_seconds)
+            max_inflight = self._max_inflight
+        latencies = sorted(item["latency_ms"] for item in observations)
+        p95 = latencies[max(0, math.ceil(len(latencies) * .95) - 1)] if latencies else 0.0
+        return {
+            "logical_requests": len(observations),
+            "average_request_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else 0.0,
+            "p95_request_latency_ms": round(p95, 2),
+            "request_stage_seconds": stage_seconds,
+            "request_delay_seconds": delay_seconds,
+            "request_stage_counts": dict(Counter(item["stage"] for item in observations)),
+            "request_error_types": dict(Counter(item["error_type"] for item in observations if item.get("error_type"))),
+            "effective_request_concurrency_peak": max_inflight,
+            "request_latency_samples_ms": [round(value, 2) for value in latencies],
+            "sitemap_requests_skipped": self.sitemap_requests_skipped,
+        }
+
+    def _sleep(self, seconds: float, reason: str) -> None:
+        started = time.perf_counter()
+        try:
+            self.sleep(seconds)
+        finally:
+            elapsed = time.perf_counter() - started
+            with self._metrics_lock:
+                self._delay_seconds[reason] = self._delay_seconds.get(reason, 0.0) + elapsed
 
     def close(self) -> None:
         if self._owns_client:
             self.client.close()
 
-    def _request(self, url: str) -> httpx.Response:
+    def _request(self, url: str, stage: str = "website") -> httpx.Response:
+        started = time.perf_counter()
+        with self._metrics_lock:
+            self._inflight += 1
+            self._max_inflight = max(self._max_inflight, self._inflight)
+        response_status = None
+        error_type = None
+        try:
+            response = self._request_impl(url)
+            response_status = response.status_code
+            return response
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            elapsed = time.perf_counter() - started
+            with self._metrics_lock:
+                self._inflight -= 1
+                self._request_observations.append({"stage": stage, "latency_ms": elapsed * 1000,
+                    "status": response_status, "error_type": error_type})
+                self._stage_seconds[stage] = self._stage_seconds.get(stage, 0.0) + elapsed
+
+    def _request_impl(self, url: str) -> httpx.Response:
         if self.request_budget is not None:
             return self._request_bounded(url)
         last_error: Exception | None = None
         for attempt in range(self.settings.retry_count + 1):
-            self.website_requests_attempted += 1
+            self._add_counter("website_requests_attempted")
             if attempt:
-                self.retry_attempts += 1
+                self._add_counter("retry_attempts")
             try:
                 with self.client.stream("GET", url) as response:
                     # httpx follows redirects inside one stream call; account for
                     # each intermediate response as its own outbound request.
-                    self.website_requests_attempted += len(response.history)
+                    self._add_counter("website_requests_attempted", len(response.history))
                     for redirected_response in response.history:
                         if redirected_response.status_code < 400:
-                            self.website_requests_succeeded += 1
+                            self._add_counter("website_requests_succeeded")
                         else:
-                            self.website_requests_failed += 1
+                            self._add_counter("website_requests_failed")
                     body = bytearray()
                     chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
                     for chunk in chunks:
@@ -186,9 +263,9 @@ class WebsiteCollector:
                     headers.pop("content-encoding", None)
                     headers.pop("content-length", None)
                     if response.status_code < 400:
-                        self.website_requests_succeeded += 1
+                        self._add_counter("website_requests_succeeded")
                     else:
-                        self.website_requests_failed += 1
+                        self._add_counter("website_requests_failed")
                     return httpx.Response(
                         response.status_code,
                         headers=headers,
@@ -197,12 +274,12 @@ class WebsiteCollector:
                         extensions=response.extensions,
                     )
             except (httpx.RequestError, ValueError) as exc:
-                self.website_requests_failed += 1
+                self._add_counter("website_requests_failed")
                 last_error = exc
                 # Content-size/decoding ValueErrors are deterministic; retry only
                 # transport failures so large pages do not consume duplicate requests.
                 if attempt < self.settings.retry_count and isinstance(exc, httpx.RequestError):
-                    self.sleep(self.settings.delay_between_requests_seconds)
+                    self._sleep(self.settings.delay_between_requests_seconds, "retry_backoff")
                 else:
                     raise
         assert last_error is not None
@@ -213,13 +290,14 @@ class WebsiteCollector:
         last_error: Exception | None = None
         for attempt in range(self.settings.retry_count + 1):
             if attempt:
-                self.retry_attempts += 1
+                self._add_counter("retry_attempts")
             current = url
             for redirect_count in range(6):
-                if self.website_requests_attempted >= (self.request_budget or 0):
-                    self.request_budget_exhausted = True
-                    raise RequestBudgetExceeded("Configured HTTP request budget exhausted")
-                self.website_requests_attempted += 1
+                with self._metrics_lock:
+                    if self.website_requests_attempted >= (self.request_budget or 0):
+                        self.request_budget_exhausted = True
+                        raise RequestBudgetExceeded("Configured HTTP request budget exhausted")
+                    self.website_requests_attempted += 1
                 try:
                     with self.client.stream("GET", current, follow_redirects=False) as response:
                         status = response.status_code
@@ -228,9 +306,9 @@ class WebsiteCollector:
                             current = urljoin(str(response.url), location)
                             if redirect_count < 5:
                                 if status < 400:
-                                    self.website_requests_succeeded += 1
+                                    self._add_counter("website_requests_succeeded")
                                 else:
-                                    self.website_requests_failed += 1
+                                    self._add_counter("website_requests_failed")
                                 continue
                         body = bytearray()
                         chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
@@ -252,17 +330,17 @@ class WebsiteCollector:
                         headers = dict(response.headers)
                         headers.pop("content-encoding", None)
                         headers.pop("content-length", None)
-                        self.website_requests_succeeded += int(status < 400)
-                        self.website_requests_failed += int(status >= 400)
+                        self._add_counter("website_requests_succeeded", int(status < 400))
+                        self._add_counter("website_requests_failed", int(status >= 400))
                         return httpx.Response(status, headers=headers, content=raw,
                                               request=response.request, extensions=response.extensions)
                 except (httpx.RequestError, ValueError) as exc:
                     if isinstance(exc, RequestBudgetExceeded):
                         raise
-                    self.website_requests_failed += 1
+                    self._add_counter("website_requests_failed")
                     last_error = exc
                     if attempt < self.settings.retry_count and isinstance(exc, httpx.RequestError):
-                        self.sleep(self.settings.delay_between_requests_seconds)
+                        self._sleep(self.settings.delay_between_requests_seconds, "retry_backoff")
                         break
                     raise
         assert last_error is not None
@@ -279,7 +357,7 @@ class WebsiteCollector:
         parser = RobotFileParser()
         parser.set_url(robots_url)
         try:
-            robots = self._request(robots_url)
+            robots = self._request(robots_url, stage="robots")
             robots_present = robots.status_code == 200
             if robots.status_code in {401, 403, 429}:
                 # A denied/rate-limited robots endpoint is not treated as an
@@ -302,14 +380,18 @@ class WebsiteCollector:
             raise
         except (httpx.RequestError, ValueError):
             pass
-        self.sleep(self.settings.delay_between_requests_seconds)
-        try:
-            sitemap = self._request(sitemap_url)
-            sitemap_present = sitemap.status_code == 200 and ("xml" in sitemap.headers.get("content-type", "").lower() or sitemap.text.lstrip().startswith("<"))
-        except RequestBudgetExceeded:
-            raise
-        except (httpx.RequestError, ValueError):
-            pass
+        if self.check_sitemap:
+            self._sleep(self.settings.delay_between_requests_seconds, "per_domain_rate_limit")
+            try:
+                sitemap = self._request(sitemap_url, stage="sitemap")
+                sitemap_present = sitemap.status_code == 200 and ("xml" in sitemap.headers.get("content-type", "").lower() or sitemap.text.lstrip().startswith("<"))
+            except RequestBudgetExceeded:
+                raise
+            except (httpx.RequestError, ValueError):
+                pass
+        else:
+            with self._metrics_lock:
+                self.sitemap_requests_skipped += 1
 
         snapshot = WebsiteSnapshot(
             company_id=company.id, requested_url=requested, fetch_status="FETCH_FAILED",
@@ -326,9 +408,9 @@ class WebsiteCollector:
             if len(seen) > 1 and robots_present and not parser.can_fetch(self.settings.user_agent, url):
                 continue
             if seen:
-                self.sleep(self.settings.delay_between_requests_seconds)
+                self._sleep(self.settings.delay_between_requests_seconds, "per_domain_rate_limit")
             try:
-                response = self._request(url)
+                response = self._request(url, stage="website")
                 content_type = response.headers.get("content-type", "")
                 if response.status_code in {403, 429}:
                     snapshot.fetch_status = "BLOCKED"
@@ -346,7 +428,11 @@ class WebsiteCollector:
                     raise httpx.HTTPStatusError(f"HTTP {response.status_code}", request=response.request, response=response)
                 if "html" not in content_type.lower():
                     raise ValueError(f"non-HTML content type: {content_type or 'unknown'}")
-                page, links = extract_page(response.text, url, str(response.url), response.status_code, content_type)
+                page_timings: dict[str, float] = {}
+                page, links = extract_page(response.text, url, str(response.url), response.status_code, content_type,
+                                           timings=page_timings)
+                for name, seconds in page_timings.items():
+                    self.add_stage_time(name, seconds)
                 snapshot.pages.append(page)
                 if len(snapshot.pages) == 1:
                     homepage_links = links

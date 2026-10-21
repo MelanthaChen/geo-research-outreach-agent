@@ -69,6 +69,8 @@ def cohort_fixture(tmp_path: Path):
 
 def test_campaign_routes_verified_email_form_queue_and_exclusions(tmp_path):
     data, source_db = cohort_fixture(tmp_path)
+    assert data["summary"]["contact_channel_classes"]["EMAIL_ONLY"] == 1
+    assert data["summary"]["contact_channel_classes"]["FORM_ONLY"] == 1
     before = sha(source_db)
     store = CampaignStore(tmp_path / "campaigns.db")
     campaign = store.create(data, "  Pilot   DEMO  ", [1, 2, 3, 4, 5, 1])
@@ -81,6 +83,7 @@ def test_campaign_routes_verified_email_form_queue_and_exclusions(tmp_path):
     assert by_id[2]["item_status"] == "EXCLUDED_NO_SUITABLE_CHANNEL"
     assert by_id[3]["item_status"] == "CONTACT_FORM_REVIEW"
     assert by_id[3]["recipient"] == ""
+    assert by_id[3]["draft"]["form_url"] == "https://form.test/contact"
     assert by_id[4]["item_status"] == "EXCLUDED_IDENTITY_UNVERIFIED"
     assert by_id[5]["item_status"] == "EXCLUDED_NOT_ELIGIBLE"
     assert campaign["eligible_count"] == 2
@@ -88,6 +91,11 @@ def test_campaign_routes_verified_email_form_queue_and_exclusions(tmp_path):
     assert campaign["unresolved_count"] == 2
     assert campaign["excluded_count"] == 3
     assert sha(source_db) == before
+    form_queue = list(csv.DictReader(io.StringIO(store.form_review_queue_csv())))
+    assert len(form_queue) == 1
+    assert form_queue[0]["official_contact_form_url"] == "https://form.test/contact"
+    assert form_queue[0]["manual_submission_status"] == "NOT_SUBMITTED"
+    assert form_queue[0]["outreach_status"] == "NOT_SENT"
 
 
 def test_persistent_idempotent_simulated_queue_and_resumable_retry(tmp_path):

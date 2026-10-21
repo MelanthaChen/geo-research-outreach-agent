@@ -1,4 +1,7 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 import gzip
 
 import httpx
@@ -70,6 +73,46 @@ def make_collector(handler) -> WebsiteCollector:
     )
     client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
     return WebsiteCollector(settings, client=client, sleep=lambda _: None)
+
+
+def test_phase7_collector_skips_unused_sitemap_but_keeps_robots_and_identity_evidence():
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nAllow: /", headers={"content-type": "text/plain"})
+        return httpx.Response(200, text=HOME, headers={"content-type": "text/html"})
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = WebsiteSettings(delay_between_requests_seconds=0, retry_count=0, max_pages_per_company=1)
+    collector = WebsiteCollector(settings, client=client, sleep=lambda _: None, request_budget=5, check_sitemap=False)
+    snapshot = collector.inspect(SimpleNamespace(id="test", website="https://example.test/", normalized_domain="example.test"))
+    assert snapshot.fetch_status == "SUCCESS"
+    assert calls == ["/robots.txt", "/"]
+    assert collector.sitemap_requests_skipped == 1
+    assert collector.request_metrics()["request_stage_counts"] == {"robots": 1, "website": 1}
+    collector.close()
+    client.close()
+
+
+def test_shared_collector_is_safe_under_bounded_concurrent_requests():
+    barrier = threading.Barrier(4)
+    def handler(request):
+        barrier.wait(timeout=3)
+        return httpx.Response(200, text="ok")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = WebsiteSettings(retry_count=0, delay_between_requests_seconds=0)
+    collector = WebsiteCollector(settings, client=client, sleep=lambda _: None, request_budget=4)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(executor.map(lambda i: collector._request(f"https://example{i}.test/", stage="website"), range(4)))
+    metrics = collector.request_metrics()
+    assert all(response.status_code == 200 for response in responses)
+    assert collector.website_requests_attempted == 4
+    assert collector.website_requests_succeeded == 4
+    assert metrics["effective_request_concurrency_peak"] == 4
+    assert metrics["average_request_latency_ms"] > 0
+    assert metrics["p95_request_latency_ms"] >= metrics["average_request_latency_ms"]
+    collector.close()
+    client.close()
 
 
 def test_collection_stores_evidence_and_reuses_cache(session):

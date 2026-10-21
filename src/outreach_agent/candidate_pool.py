@@ -311,7 +311,9 @@ def verify_candidate_batch(limit: int = 25, *, candidate_db: Path = CANDIDATE_DB
                           include_contact_evidence: bool = False,
                           request_timeout_seconds: float = 12,
                           retry_count: int = 1,
-                          delay_between_requests_seconds: float = 1) -> dict[str, Any]:
+                          delay_between_requests_seconds: float = 1,
+                          max_concurrency: int = 1,
+                          check_sitemap: bool = True) -> dict[str, Any]:
     """Inspect a resumable, bounded batch using the project's identity/qualification rules.
 
     Page-level business contact evidence is retained only when explicitly enabled.
@@ -320,12 +322,13 @@ def verify_candidate_batch(limit: int = 25, *, candidate_db: Path = CANDIDATE_DB
     if not 1 <= limit <= 100:
         raise ValueError("Batch limit must be between 1 and 100")
     import yaml
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from outreach_agent.config import WebsiteSettings
     from outreach_agent.qualification import evaluate
     from outreach_agent.website import RequestBudgetExceeded, WebsiteCollector
     rules = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
-    if request_timeout_seconds <= 0 or retry_count < 0 or delay_between_requests_seconds < 0:
-        raise ValueError("timeout must be positive; retry count and request delay cannot be negative")
+    if request_timeout_seconds <= 0 or retry_count < 0 or delay_between_requests_seconds < 0 or not 1 <= max_concurrency <= 8:
+        raise ValueError("timeout must be positive; retry/delay cannot be negative; concurrency must be 1..8")
     settings = WebsiteSettings(max_companies_per_run=min(limit, 25), max_pages_per_company=2,
                                request_timeout_seconds=request_timeout_seconds,
                                delay_between_requests_seconds=delay_between_requests_seconds,
@@ -348,71 +351,94 @@ def verify_candidate_batch(limit: int = 25, *, candidate_db: Path = CANDIDATE_DB
                     candidates.append(dict(row))
     counts: Counter[str] = Counter()
     started = time.monotonic()
-    collector = WebsiteCollector(settings, request_budget=request_budget) if request_budget is not None else WebsiteCollector(settings)
+    if request_budget is None and check_sitemap:
+        collector = WebsiteCollector(settings)
+    else:
+        collector = WebsiteCollector(settings, request_budget=request_budget, check_sitemap=check_sitemap)
     processed = 0
     time_budget_exhausted = False
+    stage_totals: Counter[str] = Counter()
+
+    def process_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        candidate_metrics: Counter[str] = Counter()
+        if time_budget_seconds is not None and time.monotonic() - started >= time_budget_seconds:
+            return {"attempted": False, "time_budget_exhausted": True}
+        if getattr(collector, "request_budget_exhausted", False):
+            return {"attempted": False, "request_budget_exhausted": True}
+        company = types.SimpleNamespace(id=candidate["candidate_id"], company_name=candidate["company_name"],
+            website=candidate["website"], normalized_domain=candidate["canonical_domain"])
+        try:
+            phase_started = time.perf_counter()
+            snapshot = collector.inspect(company)
+            candidate_metrics["website_inspection_seconds"] += time.perf_counter() - phase_started
+            if getattr(collector, "request_budget_exhausted", False) and not any(page.fetch_status in {"SUCCESS", "PARTIAL"} for page in snapshot.pages):
+                return {"attempted": False, "request_budget_exhausted": True}
+            phase_started = time.perf_counter()
+            identity = verify_identity_for_candidate(company, snapshot)
+            candidate_metrics["identity_decision_seconds"] += time.perf_counter() - phase_started
+            phase_started = time.perf_counter()
+            if identity.status == "VERIFIED":
+                signals = {"discovery_source": candidate["source_name"], "website_evidence": json.loads(snapshot.extracted_signals or "{}"), "fetch_status": snapshot.fetch_status}
+                qualification = evaluate(signals, rules)
+                eligibility, opportunity, qualification_evidence = qualification.eligibility, qualification.geo_opportunity, qualification.evidence
+            else:
+                eligibility, opportunity = "NEEDS_REVIEW", "UNKNOWN"
+                qualification_evidence = {"status": "NOT_APPLIED_IDENTITY_UNVERIFIED", "reason": identity.reason}
+            candidate_metrics["geo_qualification_seconds"] += time.perf_counter() - phase_started
+            safe_pages = []
+            for page in snapshot.pages:
+                try:
+                    raw_channels = json.loads(getattr(page, "extracted_channels", "[]") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    raw_channels = []
+                allowed_channels = []
+                if include_contact_evidence:
+                    for channel in raw_channels if isinstance(raw_channels, list) else []:
+                        channel_type = str(channel.get("type", "")).split(".")[-1]
+                        if channel_type in {"PARTNERSHIP_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL", "GENERAL_BUSINESS_EMAIL", "SALES_MARKETING_EMAIL", "CONTACT_FORM"}:
+                            allowed_channels.append({key: value for key, value in channel.items() if key not in {"name", "title"}})
+                safe_pages.append({"requested_url": page.requested_url, "final_url": page.final_url, "http_status": page.http_status,
+                    "title": page.title, "meta_description": page.meta_description, "content_hash": page.content_hash,
+                    "visible_text_length": page.visible_text_length, "structured_data_types": page.structured_data_types,
+                    "fetch_status": page.fetch_status, "extracted_channels": json.dumps(allowed_channels, sort_keys=True)})
+            evidence = {"pages": safe_pages, "signals": json.loads(snapshot.extracted_signals or "{}"),
+                "identity_token_evidence": identity.identity_tokens, "qualification": qualification_evidence,
+                "source_record_id": candidate["source_record_id"]}
+            values = (identity.status, eligibility, opportunity, identity.reason,
+                json.dumps(qualification_evidence, sort_keys=True), snapshot.fetch_status, snapshot.http_status,
+                json.dumps(evidence, sort_keys=True), datetime.now(timezone.utc).isoformat(), candidate["candidate_id"])
+            phase_started = time.perf_counter()
+            with sqlite3.connect(candidate_db) as db:
+                db.execute("""UPDATE candidates SET verification_status=?,geo_eligibility_status=?,geo_opportunity_status=?,verification_reason=?,
+                             qualification_evidence=?,fetch_status=?,http_status=?,evidence_json=?,last_inspected_at=? WHERE candidate_id=?""", values)
+                db.commit()
+            candidate_metrics["checkpoint_persistence_seconds"] += time.perf_counter() - phase_started
+            return {"attempted": True, "identity": identity.status, "eligibility": eligibility,
+                    "stage_seconds": candidate_metrics}
+        except RequestBudgetExceeded:
+            return {"attempted": False, "request_budget_exhausted": True, "stage_seconds": candidate_metrics}
+        except Exception as exc:  # one bad site must not stop the bounded batch
+            with sqlite3.connect(candidate_db) as db:
+                db.execute("UPDATE candidates SET verification_status='FETCH_FAILED',geo_eligibility_status='UNKNOWN',fetch_status='FETCH_FAILED',verification_reason=?,last_inspected_at=? WHERE candidate_id=?",
+                    (f"Inspection error: {type(exc).__name__}: {exc}"[:1000], datetime.now(timezone.utc).isoformat(), candidate["candidate_id"]))
+                db.commit()
+            return {"attempted": True, "processing_error": True, "stage_seconds": candidate_metrics}
+
     try:
-        for candidate in candidates:
-            if time_budget_seconds is not None and time.monotonic() - started >= time_budget_seconds:
-                time_budget_exhausted = True
-                break
-            if getattr(collector, "request_budget_exhausted", False):
-                break
-            company = types.SimpleNamespace(id=candidate["candidate_id"], company_name=candidate["company_name"], website=candidate["website"], normalized_domain=candidate["canonical_domain"])
-            try:
-                snapshot = collector.inspect(company)
-                if getattr(collector, "request_budget_exhausted", False) and not any(page.fetch_status in {"SUCCESS", "PARTIAL"} for page in snapshot.pages):
-                    break
-                identity = verify_identity_for_candidate(company, snapshot)
-                qualification = None
-                if identity.status == "VERIFIED":
-                    signals = {"discovery_source": candidate["source_name"], "website_evidence": json.loads(snapshot.extracted_signals or "{}"), "fetch_status": snapshot.fetch_status}
-                    qualification = evaluate(signals, rules)
-                    eligibility, opportunity, qualification_evidence = qualification.eligibility, qualification.geo_opportunity, qualification.evidence
-                else:
-                    # Identity evidence is a prerequisite for automatic qualification.
-                    # Keep the observed page signals, but do not promote the record.
-                    eligibility, opportunity = "NEEDS_REVIEW", "UNKNOWN"
-                    qualification_evidence = {"status": "NOT_APPLIED_IDENTITY_UNVERIFIED", "reason": identity.reason}
-                safe_pages = []
-                for page in snapshot.pages:
-                    try:
-                        raw_channels = json.loads(getattr(page, "extracted_channels", "[]") or "[]")
-                    except (json.JSONDecodeError, TypeError):
-                        raw_channels = []
-                    allowed_channels = []
-                    if include_contact_evidence:
-                        for channel in raw_channels if isinstance(raw_channels, list) else []:
-                            channel_type = str(channel.get("type", "")).split(".")[-1]
-                            if channel_type in {"PARTNERSHIP_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL", "GENERAL_BUSINESS_EMAIL", "SALES_MARKETING_EMAIL", "CONTACT_FORM"}:
-                                allowed_channels.append({key: value for key, value in channel.items() if key not in {"name", "title"}})
-                    safe_pages.append({"requested_url": page.requested_url, "final_url": page.final_url, "http_status": page.http_status,
-                               "title": page.title, "meta_description": page.meta_description, "content_hash": page.content_hash,
-                               "visible_text_length": page.visible_text_length, "structured_data_types": page.structured_data_types,
-                               "fetch_status": page.fetch_status, "extracted_channels": json.dumps(allowed_channels, sort_keys=True)})
-                evidence = {"pages": safe_pages, "signals": json.loads(snapshot.extracted_signals or "{}"), "identity_token_evidence": identity.identity_tokens,
-                            "qualification": qualification_evidence, "source_record_id": candidate["source_record_id"]}
-                values = (identity.status, eligibility, opportunity,
-                          identity.reason, json.dumps(qualification_evidence, sort_keys=True), snapshot.fetch_status,
-                          snapshot.http_status, json.dumps(evidence, sort_keys=True), datetime.now(timezone.utc).isoformat(), candidate["candidate_id"])
-                with sqlite3.connect(candidate_db) as db:
-                    db.execute("""UPDATE candidates SET verification_status=?,geo_eligibility_status=?,geo_opportunity_status=?,verification_reason=?,
-                                 qualification_evidence=?,fetch_status=?,http_status=?,evidence_json=?,last_inspected_at=? WHERE candidate_id=?""", values)
-                    db.commit()
-                processed += 1
-                counts[identity.status] += 1
-                counts[f"eligibility:{eligibility}"] += 1
-                if getattr(collector, "request_budget_exhausted", False):
-                    break
-            except RequestBudgetExceeded:
-                break
-            except Exception as exc:  # one bad site must not stop the bounded batch
-                counts["processing_error"] += 1
-                with sqlite3.connect(candidate_db) as db:
-                    db.execute("UPDATE candidates SET verification_status='FETCH_FAILED',geo_eligibility_status='UNKNOWN',fetch_status='FETCH_FAILED',verification_reason=?,last_inspected_at=? WHERE candidate_id=?",
-                               (f"Inspection error: {type(exc).__name__}: {exc}"[:1000], datetime.now(timezone.utc).isoformat(), candidate["candidate_id"]))
-                    db.commit()
-                processed += 1
+        with ThreadPoolExecutor(max_workers=max_concurrency, thread_name_prefix="phase7-crawl") as executor:
+            futures = [executor.submit(process_candidate, candidate) for candidate in candidates]
+            for future in as_completed(futures):
+                result = future.result()
+                if result.get("attempted"):
+                    processed += 1
+                    if result.get("processing_error"):
+                        counts["processing_error"] += 1
+                    else:
+                        counts[result["identity"]] += 1
+                        counts[f"eligibility:{result['eligibility']}"] += 1
+                time_budget_exhausted |= bool(result.get("time_budget_exhausted"))
+                for stage, seconds in result.get("stage_seconds", {}).items():
+                    stage_totals[stage] += seconds
     finally:
         collector.close()
     with sqlite3.connect(candidate_db) as db:
@@ -422,7 +448,9 @@ def verify_candidate_batch(limit: int = 25, *, candidate_db: Path = CANDIDATE_DB
             "requests_succeeded": getattr(collector, "website_requests_succeeded", 0), "requests_failed": getattr(collector, "website_requests_failed", 0),
             "retries": collector.retry_attempts, "request_budget": request_budget,
             "request_budget_exhausted": getattr(collector, "request_budget_exhausted", False),
-            "time_budget_exhausted": time_budget_exhausted, "counts": dict(counts)}
+            "time_budget_exhausted": time_budget_exhausted, "counts": dict(counts),
+            "stage_seconds": dict(stage_totals), "request_metrics": collector.request_metrics() if hasattr(collector, "request_metrics") else {},
+            "check_sitemap": check_sitemap, "max_concurrency": max_concurrency}
 
 
 def verify_identity_for_candidate(company: Any, snapshot: Any):

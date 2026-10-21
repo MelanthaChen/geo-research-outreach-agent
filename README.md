@@ -151,12 +151,76 @@ Phase 7 audits the 57,664-domain candidate pool (including, not in addition to, 
 ```bash
 PYTHONPATH=src uv run python scripts/phase7_contacts.py preflight
 PYTHONPATH=src uv run python scripts/phase7_contacts.py prepare
-PYTHONPATH=src uv run python scripts/phase7_contacts.py run --batch-size 500 --request-cap 10000 --time-cap-seconds 21600 --chunk-request-budget 500
+PYTHONPATH=src uv run python scripts/phase7_contacts.py run --batch-size 500 --request-cap 250000 --time-cap-seconds 172800 --chunk-request-budget 500 --concurrency 4 --export-each-batch
 PYTHONPATH=src uv run python scripts/phase7_contacts.py status
 PYTHONPATH=src uv run python scripts/phase7_contacts.py export
 ```
 
-Caps are cumulative across runs. Increase them to resume; checkpointed results are reused. Outputs are `data/phase7_contactable_companies.csv`, `phase7_contact_channel_audit.csv`, `phase7_validation_failures.csv`, `phase7_exclusion_queue.csv`, `phase7_yield_metrics.csv`, and `phase7_final_report.md`. See [`docs/phase7_contactable_company_database.md`](docs/phase7_contactable_company_database.md) for the strict count semantics, evidence policy, and limitations. The target is based on unique qualified contactable companies—not discovered candidates or crawls.
+For a persistent overnight run on macOS, use the per-user LaunchAgent instead of leaving a terminal command open. Installation starts the worker; status, graceful stop, start, and cap-increasing resume are available as commands:
+
+```sh
+PYTHONPATH=src uv run python scripts/phase7_service.py install
+PYTHONPATH=src uv run python scripts/phase7_service.py status
+PYTHONPATH=src uv run python scripts/phase7_service.py stop
+PYTHONPATH=src uv run python scripts/phase7_service.py start
+PYTHONPATH=src uv run python scripts/phase7_service.py resume
+```
+
+The LaunchAgent runs at concurrency 4, holds the Mac awake only while active with `caffeinate`, checkpoints every internal chunk, and refreshes the full-pool exports after each completed 500-candidate batch. Initial cumulative hard caps are 250,000 HTTP attempts and 48 hours; a cap stop is visible in `status`, and `resume` raises both finite caps. It resumes at login after a restart, not before login. Read [the Phase 7 overnight worker guide](docs/phase7_overnight_worker.md) for exact behavior, safety limits, exports, and logs.
+
+Caps are cumulative across runs. Increase them to resume; checkpointed results are reused. `--concurrency 4` allows four distinct company inspections while preserving sequential requests within each domain. A database-level lock prevents overlapping runners. Use `--max-candidates 200` for a bounded benchmark. Outputs are `data/phase7_contactable_companies.csv`, `phase7_contact_channel_audit.csv`, `phase7_validation_failures.csv`, `phase7_exclusion_queue.csv`, `phase7_yield_metrics.csv`, and `phase7_final_report.md`. See [`docs/phase7_contactable_company_database.md`](docs/phase7_contactable_company_database.md) for strict count semantics and [`docs/phase7_performance_optimization.md`](docs/phase7_performance_optimization.md) for measured performance and the benchmark. The strict contactable export is an all-industry count; it is not itself the SMB/SME target count.
+
+#### Offline SMB/SME target reconciliation
+
+The professor's 5,000-company target means small and medium-sized businesses. It does not require YC affiliation, venture funding, recent founding, accelerator participation, or technology-sector classification. Unknown size remains `SIZE_UNKNOWN` and requires evidence or review. Hotels are tracked in the separate 3,000-property target and excluded from the SMB count. Reconcile the complete saved Phase 7 pool without crawling:
+
+```bash
+PYTHONPATH=src uv run python scripts/phase7_smb_reconcile.py
+```
+
+The reconciliation reads the Phase 7 database, preserved Phase 6A size evidence, current hotel properties, and existing strict contact/evidence exports in read-only mode. It creates `data/phase7_smb_reconciliation.csv` (full pool), `data/phase7_smb_contactable_companies.csv`, `data/phase7_smb_size_review_queue.csv`, `data/phase7_cohort_domain_overlap.csv`, and a summary JSON. The overlap CSV lists exact-domain matches for identity review only; a shared chain website is not proof that a hotel property and a company record are the same company. The Overview dashboard displays SMB counts, unknown-size workload, channel breakdown, hotel exclusions, and potential overlaps; the exports are available from the dashboard. Current measured counts and policy are in [`docs/phase7_smb_target_reconciliation.md`](docs/phase7_smb_target_reconciliation.md). No approvals or outreach permissions are created.
+
+### Separate hotel-property research pipeline
+
+Hotels are stored by OSM property ID rather than canonical domain, so two locations that share a chain website remain distinct properties. OSM tags are candidate evidence only. The isolated hotel database reuses the existing first-party website identity verifier, GEO qualification rules, bounded crawler, and contact extractor; no property counts as verified until those checks pass. The existing US Northeast PBF is ODbL-licensed, with OpenStreetMap attribution and source element URLs retained. Guest segments are not inferred, and room/amenity fields are explicitly retained as unverified OSM source tags until corroborated.
+
+```bash
+PYTHONPATH=src uv run python scripts/phase7_hotels.py discover
+PYTHONPATH=src uv run python scripts/phase7_hotels.py status
+PYTHONPATH=src uv run python scripts/phase7_hotels.py cohort-export
+PYTHONPATH=src uv run python scripts/phase7_hotels.py pilot --limit 25 --request-budget 100
+PYTHONPATH=src uv run python scripts/phase7_hotels.py export
+PYTHONPATH=src uv run python scripts/phase7_hotels.py install --request-cap 1000 --time-cap-seconds 21600
+PYTHONPATH=src uv run python scripts/phase7_hotels.py stop
+```
+
+The hotel LaunchAgent is separate from the Phase 7 company worker, uses one concurrent company inspection and 25-property checkpoints, and has a database-level lock, explicit cumulative request/time caps, logs under `logs/hotel_worker*.log`, and a stop-after-current-batch request. It never submits a form or sends a message. The current regional extract is a candidate source, not enough by itself to claim 3,000 verified hotels; other properly licensed regions or structured sources must be added if pilot yield confirms the need.
+
+Hotel properties are classified as both `BUSINESS` and `HOTEL` candidates in hotel exports, with property-level IDs and a separate hotel-cohort membership. `cohort-export` writes `data/phase7_hotel_cohort_membership.csv` without touching the worker or its database. They are excluded from the SMB target by default; unknown or chain ownership never implies SMB size. Exact-domain matches between property and company pools are emitted as unconfirmed review leads, not merged identities. Existing hotel-tagged records in the general-business pool remain there, avoiding data loss and automatic double-counting.
+
+Company-level channel coverage on the dashboard distinguishes email-only, form-only, both, no channel, and evidence needing review. Campaign creation keeps form-only records in a separate manual review queue. Export that queue from Campaigns or use `/api/campaigns/form-review-queue.csv`; the CSV includes the official form URL, prepared message, evidence URL, and explicit `NOT_SUBMITTED` state. It does not change contact approvals or send status.
+
+The historical YC-only progress snapshot is retained in [`docs/phase7_new_targets_initial_progress.md`](docs/phase7_new_targets_initial_progress.md); it is superseded for target counts by the [SMB/SME reconciliation](docs/phase7_smb_target_reconciliation.md). The reusable company report template is [`templates/company_geo_analysis_report_template.docx`](templates/company_geo_analysis_report_template.docx).
+
+### Separate hotel-property research pipeline
+
+Hotel properties are stored separately from the SMB/company candidate database. The initial bounded pilot uses a deterministic, domain-diverse sample; OSM records are property candidates and do not establish current operation or independent ownership. Geofabrik extracts carry OpenStreetMap ODbL attribution requirements. Download regional `.osm.pbf` files only from permitted official Geofabrik pages, then import and resume with:
+
+```bash
+uv sync --extra openstreetmap
+PYTHONPATH=src uv run python scripts/phase7_hotels.py discover --pbf data/raw_sources/us-northeast-261014.osm.pbf data/raw_sources/hotel_states/california-latest.osm.pbf data/raw_sources/hotel_states/texas-latest.osm.pbf data/raw_sources/hotel_states/georgia-latest.osm.pbf
+PYTHONPATH=src uv run python scripts/phase7_hotels.py pilot --limit 25 --request-budget 100
+PYTHONPATH=src uv run python scripts/phase7_hotels.py install --request-cap 20000 --time-cap-seconds 86400 --batch-size 25
+PYTHONPATH=src uv run python scripts/phase7_hotels.py status
+PYTHONPATH=src uv run python scripts/phase7_hotels.py stop
+PYTHONPATH=src uv run python scripts/phase7_hotels.py resume --request-increment 20000 --time-increment-seconds 86400
+PYTHONPATH=src uv run python scripts/phase7_hotels.py export
+PYTHONPATH=src uv run python scripts/phase7_hotels.py profiles
+```
+
+The independent hotel worker uses a separate database lock, one active HTTP inspection at a time, finite cumulative caps, 25-property checkpoints, and the shared robots/identity/GEO/contact verification pipeline. It pauses after a full batch if access blocks reach 40%, a material increase from the measured 20% pilot baseline. Stop requests are honored between batches. Contact channels stay pending review; no messages or forms are submitted. The `profiles` command exports verified, GEO-eligible hotel properties and a legacy verified, GEO-eligible YC-attributed company subset to separate versioned JSONL handoffs documented in [`docs/phase7_geo_platform_integration.md`](docs/phase7_geo_platform_integration.md). The YC subset is not the 5,000-SMB target. The command does not write to the separate GEO platform.
+
+See [`docs/phase7_hotel_pilot_report.md`](docs/phase7_hotel_pilot_report.md) for acquired-source counts, pilot metrics, worker caps and resume instructions, and [`docs/phase7_new_targets_current_status.md`](docs/phase7_new_targets_current_status.md) for the current SMB/SME reconciliation and separate hotel target status.
 
 To acquire the dated extract, install the optional parser and run the reproducible import. The PBF is intentionally ignored by Git and should remain in `data/raw_sources/`:
 

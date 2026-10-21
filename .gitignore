@@ -6,6 +6,12 @@ __pycache__/
 .env
 data/*.db
 data/*.db-*
+data/phase7_service_state.json
+data/.phase7_stop.request
+logs/phase7_worker*.log
+data/hotel_worker_state.json
+data/.hotel_stop.request
+logs/hotel_worker*.log
 data/raw_sources/
 dist/
 build/

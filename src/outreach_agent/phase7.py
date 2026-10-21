@@ -11,6 +11,7 @@ import csv
 import fcntl
 import hashlib
 import json
+import math
 import sqlite3
 import tempfile
 import time
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS phase7_runs (
  attempted INTEGER NOT NULL, requests_attempted INTEGER NOT NULL, requests_succeeded INTEGER NOT NULL,
  requests_failed INTEGER NOT NULL, retries INTEGER NOT NULL, runtime_seconds REAL NOT NULL,
  request_budget INTEGER NOT NULL, time_budget_seconds REAL NOT NULL,
- counts_json TEXT NOT NULL, stop_reason TEXT
+ counts_json TEXT NOT NULL, stop_reason TEXT, metrics_json TEXT NOT NULL DEFAULT '{}'
 );
 """
 
@@ -61,6 +62,9 @@ def initialize(path: Path = PHASE7_DB, source: Path = PHASE6H_DB) -> None:
             src.backup(dst)
     with sqlite3.connect(path) as db:
         db.executescript(RUN_TABLES)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(phase7_runs)")}
+        if "metrics_json" not in columns:
+            db.execute("ALTER TABLE phase7_runs ADD COLUMN metrics_json TEXT NOT NULL DEFAULT '{}' ")
         db.commit()
 
 
@@ -415,9 +419,13 @@ def preflight(*, db_path: Path = PHASE7_DB, source: Path = PHASE6H_DB) -> dict[s
 def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, review_path: Path = REVIEW_DB,
         batch_size: int = 250, request_cap: int = 5000, time_cap_seconds: int = 7200,
         chunk_request_budget: int = 500, request_timeout_seconds: float = 12,
-        retry_count: int = 1, delay_between_requests_seconds: float = 1) -> dict[str, Any]:
+        retry_count: int = 1, delay_between_requests_seconds: float = 1,
+        concurrency: int = 1, max_candidates: int | None = None,
+        stop_file: Path | None = None, export_each_batch: bool = False) -> dict[str, Any]:
     if not 1 <= batch_size <= 1000 or request_cap < 1 or time_cap_seconds < 1 or not 1 <= chunk_request_budget <= 500:
         raise ValueError("batch size must be 1..1000; request/time caps positive; chunk request budget 1..500")
+    if not 1 <= concurrency <= 8 or (max_candidates is not None and max_candidates < 1):
+        raise ValueError("concurrency must be 1..8 and max_candidates must be positive")
     initialize(db_path)
     selected = select_remaining(db_path=db_path)
     before = _summary(db_path, active_db, review_path)
@@ -429,10 +437,16 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
         cumulative_runtime = _union_run_wall_seconds(intervals)
     started = time.monotonic()
     stop_reason = None
+    processed_limit_start = 0
+    with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as db:
+        processed_limit_start = db.execute("SELECT COUNT(*) FROM candidates c JOIN phase7_selection s USING(candidate_id) WHERE c.verification_status<>'DISCOVERED_UNVERIFIED'").fetchone()[0]
     batch_number = 0
     chunk_number = 0
     active_batch: int | None = None
     while True:
+        if stop_file is not None and stop_file.exists():
+            stop_reason = "operator_stop_requested"
+            break
         elapsed = _cumulative_elapsed_seconds(cumulative_runtime, time.monotonic() - started)
         if cumulative_requests >= request_cap:
             stop_reason = "request_cap_exhausted"
@@ -441,9 +455,17 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
             stop_reason = "time_cap_exhausted"
             break
         with sqlite3.connect(db_path) as db:
+            batch_todo_limit = 25
+            if max_candidates is not None:
+                processed_so_far = db.execute("SELECT COUNT(*) FROM candidates c JOIN phase7_selection s USING(candidate_id) WHERE c.verification_status<>'DISCOVERED_UNVERIFIED'").fetchone()[0]
+                remaining_candidates = max_candidates - (processed_so_far - processed_limit_start)
+                if remaining_candidates <= 0:
+                    stop_reason = "candidate_limit_reached"
+                    break
+                batch_todo_limit = min(batch_todo_limit, remaining_candidates)
             todo = [r[0] for r in db.execute("""SELECT c.candidate_id FROM candidates c
               JOIN phase7_selection s USING(candidate_id) WHERE c.verification_status='DISCOVERED_UNVERIFIED'
-              ORDER BY s.selection_rank LIMIT 25""")]
+              ORDER BY s.selection_rank LIMIT ?""", (batch_todo_limit,))]
             if not todo:
                 break
             rank = db.execute("SELECT selection_rank FROM phase7_selection WHERE candidate_id=?", (todo[0],)).fetchone()[0]
@@ -457,18 +479,23 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
         result = verify_candidate_batch(len(todo), candidate_db=db_path, candidate_ids=todo,
             request_budget=budget, time_budget_seconds=remaining_time, include_contact_evidence=True,
             request_timeout_seconds=request_timeout_seconds, retry_count=retry_count,
-            delay_between_requests_seconds=delay_between_requests_seconds)
+            delay_between_requests_seconds=delay_between_requests_seconds,
+            max_concurrency=concurrency, check_sitemap=False)
         _extract_channels(db_path)
         finished = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(db_path) as db:
             db.execute("""INSERT INTO phase7_runs(batch_number,chunk_number,batch_size,started_at,finished_at,
               attempted,requests_attempted,requests_succeeded,requests_failed,retries,runtime_seconds,
-              request_budget,time_budget_seconds,counts_json,stop_reason)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+              request_budget,time_budget_seconds,counts_json,stop_reason,metrics_json)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                 batch_number, chunk_number, batch_size, stamp, finished, result["attempted"],
                 result["requests_attempted"], result["requests_succeeded"], result["requests_failed"],
                 result["retries"], result["runtime_seconds"], budget, remaining_time,
-                json.dumps(result.get("counts", {}), sort_keys=True), None))
+                json.dumps(result.get("counts", {}), sort_keys=True), None,
+                json.dumps({"stage_seconds": result.get("stage_seconds", {}),
+                    "request_metrics": result.get("request_metrics", {}),
+                    "check_sitemap": result.get("check_sitemap"),
+                    "max_concurrency": result.get("max_concurrency")}, sort_keys=True)))
             db.commit()
         cumulative_requests += result["requests_attempted"]
         # Current invocation wall time is measured from `started` on the next loop.
@@ -492,6 +519,8 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
               (interval_start, interval_end)).fetchall()
             expected = min(batch_size, selected - interval_start + 1)
         if expected > 0 and len(records) >= expected and all(r[0] != "DISCOVERED_UNVERIFIED" for r in records):
+            if export_each_batch:
+                export_outputs(db_path=db_path, active_db=active_db, review_path=review_path)
             verified_rate = sum(r[0] == "VERIFIED" for r in records) / expected
             eligible_rate = sum(r[1] == "ELIGIBLE" for r in records) / expected
             if verified_rate < 0.23 or eligible_rate < 0.204:
@@ -500,6 +529,12 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
         if result.get("request_budget_exhausted"):
             stop_reason = "request_cap_exhausted"
             break
+        if max_candidates is not None:
+            with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as db:
+                processed_this_run = db.execute("SELECT COUNT(*) FROM candidates c JOIN phase7_selection s USING(candidate_id) WHERE c.verification_status<>'DISCOVERED_UNVERIFIED'").fetchone()[0] - processed_limit_start
+            if processed_this_run >= max_candidates:
+                stop_reason = "candidate_limit_reached"
+                break
     _extract_channels(db_path)
     with sqlite3.connect(db_path) as db:
         db.execute("UPDATE phase7_runs SET stop_reason=? WHERE run_id=(SELECT MAX(run_id) FROM phase7_runs)",
@@ -510,20 +545,25 @@ def _run_unlocked(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, re
     after.update({"selected_workload": selected, "processed_this_invocation": after["phase7_processed"] - processed_before,
                   "runtime_seconds_this_invocation": round(time.monotonic() - started, 2),
                   "contactable_added_this_invocation": max(0, after["contactable_companies"] - before["contactable_companies"]),
-                  "stop_reason": stop_reason or "selection_complete", "integrity": integrity(db_path)})
+                  "stop_reason": stop_reason or "selection_complete", "integrity": integrity(db_path),
+                  "concurrency": concurrency, "max_candidates": max_candidates})
     return after
 
 
 def run(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB, review_path: Path = REVIEW_DB,
         batch_size: int = 250, request_cap: int = 5000, time_cap_seconds: int = 7200,
         chunk_request_budget: int = 500, request_timeout_seconds: float = 12,
-        retry_count: int = 1, delay_between_requests_seconds: float = 1) -> dict[str, Any]:
+        retry_count: int = 1, delay_between_requests_seconds: float = 1,
+        concurrency: int = 1, max_candidates: int | None = None,
+        stop_file: Path | None = None, export_each_batch: bool = False) -> dict[str, Any]:
     """Run with an OS lock so concurrent resumes cannot duplicate crawl work."""
     with _exclusive_run_lock(db_path):
         return _run_unlocked(db_path=db_path, active_db=active_db, review_path=review_path,
             batch_size=batch_size, request_cap=request_cap, time_cap_seconds=time_cap_seconds,
             chunk_request_budget=chunk_request_budget, request_timeout_seconds=request_timeout_seconds,
-            retry_count=retry_count, delay_between_requests_seconds=delay_between_requests_seconds)
+            retry_count=retry_count, delay_between_requests_seconds=delay_between_requests_seconds,
+            concurrency=concurrency, max_candidates=max_candidates, stop_file=stop_file,
+            export_each_batch=export_each_batch)
 
 
 def integrity(path: Path = PHASE7_DB) -> str:
@@ -550,6 +590,28 @@ def _metrics(db_path: Path = PHASE7_DB, *, batch_size: int = 500) -> list[dict[s
         emails = {r["candidate_id"] for r in processed if "PUBLIC_BUSINESS_EMAIL" in by_candidate.get(r["candidate_id"], set())}
         forms = {r["candidate_id"] for r in processed if "OFFICIAL_CONTACT_FORM" in by_candidate.get(r["candidate_id"], set())}
         ran = [r for r in runs if (r["batch_number"] - 1) * r["batch_size"] + 1 <= end and r["batch_number"] * r["batch_size"] >= start]
+        request_latency_samples: list[float] = []
+        request_stage_seconds: Counter[str] = Counter()
+        request_delay_seconds: Counter[str] = Counter()
+        processing_stage_seconds: Counter[str] = Counter()
+        concurrency_peak = 0
+        sitemap_requests_skipped = 0
+        for run in ran:
+            try:
+                metric_payload = json.loads(run.get("metrics_json") or "{}")
+            except json.JSONDecodeError:
+                metric_payload = {}
+            request_metrics = metric_payload.get("request_metrics") or {}
+            request_latency_samples.extend(request_metrics.get("request_latency_samples_ms") or [])
+            request_stage_seconds.update(request_metrics.get("request_stage_seconds") or {})
+            request_delay_seconds.update(request_metrics.get("request_delay_seconds") or {})
+            processing_stage_seconds.update(metric_payload.get("stage_seconds") or {})
+            concurrency_peak = max(concurrency_peak, int(request_metrics.get("effective_request_concurrency_peak") or 0))
+            sitemap_requests_skipped += int(request_metrics.get("sitemap_requests_skipped") or 0)
+        window_runtime = _union_run_wall_seconds([(r["started_at"], r["finished_at"]) for r in ran])
+        sorted_latencies = sorted(request_latency_samples)
+        p95_latency = sorted_latencies[max(0, math.ceil(len(sorted_latencies) * .95) - 1)] if sorted_latencies else ""
+        contactable_count = len(emails | forms)
         outputs.append({
             "selection_rank_start": start, "selection_rank_end": end, "selected": len(items), "processed": len(processed),
             "verified": sum(r["verification_status"] == "VERIFIED" for r in processed),
@@ -557,12 +619,28 @@ def _metrics(db_path: Path = PHASE7_DB, *, batch_size: int = 500) -> list[dict[s
             "geo_eligible": sum(r["geo_eligibility_status"] == "ELIGIBLE" for r in processed),
             "geo_eligibility_rate": round(sum(r["geo_eligibility_status"] == "ELIGIBLE" for r in processed) / len(processed), 4) if processed else "",
             "business_email_companies": len(emails), "confirmed_form_companies": len(forms),
-            "unique_contactable_companies": len(emails | forms),
+            "unique_contactable_companies": contactable_count,
             "http_attempts": sum(r["requests_attempted"] for r in ran), "http_successes": sum(r["requests_succeeded"] for r in ran),
             "http_failures": sum(r["requests_failed"] for r in ran), "retries": sum(r["retries"] for r in ran),
-            "runtime_seconds": round(sum(r["runtime_seconds"] for r in ran), 2),
-            "http_attempts_per_contactable_company": round(sum(r["requests_attempted"] for r in ran) / len(emails | forms), 2) if emails | forms else "",
-            "seconds_per_contactable_company": round(sum(r["runtime_seconds"] for r in ran) / len(emails | forms), 2) if emails | forms else "",
+            "runtime_seconds": round(window_runtime, 2),
+            "candidates_per_hour": round(len(processed) / window_runtime * 3600, 2) if window_runtime else "",
+            "contactable_companies_per_hour": round(contactable_count / window_runtime * 3600, 2) if window_runtime else "",
+            "http_attempts_per_contactable_company": round(sum(r["requests_attempted"] for r in ran) / contactable_count, 2) if contactable_count else "",
+            "seconds_per_contactable_company": round(window_runtime / contactable_count, 2) if contactable_count else "",
+            "average_request_latency_ms": round(sum(request_latency_samples) / len(request_latency_samples), 2) if request_latency_samples else "",
+            "p95_request_latency_ms": round(p95_latency, 2) if p95_latency != "" else "",
+            "robots_request_seconds": round(request_stage_seconds.get("robots", 0.0), 2),
+            "sitemap_request_seconds": round(request_stage_seconds.get("sitemap", 0.0), 2),
+            "website_request_seconds": round(request_stage_seconds.get("website", 0.0), 2),
+            "contact_extraction_worker_seconds": round(processing_stage_seconds.get("contact_extraction_seconds", 0.0), 2),
+            "website_inspection_worker_seconds": round(processing_stage_seconds.get("website_inspection_seconds", 0.0), 2),
+            "identity_decision_worker_seconds": round(processing_stage_seconds.get("identity_decision_seconds", 0.0), 2),
+            "geo_qualification_worker_seconds": round(processing_stage_seconds.get("geo_qualification_seconds", 0.0), 2),
+            "checkpoint_persistence_worker_seconds": round(processing_stage_seconds.get("checkpoint_persistence_seconds", 0.0), 2),
+            "retry_backoff_seconds": round(request_delay_seconds.get("retry_backoff", 0.0), 2),
+            "per_domain_rate_limit_seconds": round(request_delay_seconds.get("per_domain_rate_limit", 0.0), 2),
+            "sitemap_requests_skipped": sitemap_requests_skipped,
+            "effective_request_concurrency_peak": concurrency_peak,
         })
     return outputs
 
@@ -622,6 +700,8 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
     exclusions = []
     with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as db:
         db.row_factory = sqlite3.Row
+        all_candidate_records = [dict(r) for r in db.execute("""SELECT c.*,s.selection_rank FROM candidates c
+          LEFT JOIN phase7_selection s USING(candidate_id) ORDER BY COALESCE(s.selection_rank,2147483647),c.candidate_id""")]
         records = db.execute("""SELECT c.candidate_id,c.company_name,c.canonical_domain,c.source_name,c.source_url,
           c.verification_status,c.geo_eligibility_status,c.contact_status,c.verification_reason,c.last_inspected_at,
           s.screen_status,s.chain_location_concern,s.website_domain_concern FROM candidates c
@@ -644,6 +724,18 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
         if not reasons: reasons.append("NO_FIRST_PARTY_EMAIL_OR_CONFIRMED_FORM")
         exclusions.append({**row, "exclusion_reasons": ";".join(reasons)})
     metrics = _metrics(db_path)
+    processing_fields = ["candidate_id", "company_name", "website", "canonical_domain", "industry", "location",
+        "source_name", "source_url", "source_record_id", "source_license_or_permission", "discovery_timestamp",
+        "selection_rank", "verification_status", "geo_eligibility_status", "geo_opportunity_status", "contact_status",
+        "human_review_status", "outreach_ready_status", "verification_reason", "qualification_evidence",
+        "fetch_status", "http_status", "evidence_json", "last_inspected_at"]
+    processed_rows = [row for row in all_candidate_records if row.get("selection_rank") is not None
+                      and row.get("verification_status") != "DISCOVERED_UNVERIFIED"]
+    verified_rows = [row for row in all_candidate_records if row.get("verification_status") == "VERIFIED"]
+    eligible_rows = [row for row in all_candidate_records if row.get("geo_eligibility_status") == "ELIGIBLE"]
+    email_rows = [row for row in channels if row.get("channel_classification") == "PUBLIC_BUSINESS_EMAIL"]
+    form_rows = [row for row in channels if row.get("channel_classification") == "OFFICIAL_CONTACT_FORM"]
+    pending_review_rows = [row for row in channels if row.get("review_status") not in ("APPROVED", "APPROVED_CONTACT_ONLY")]
     from outreach_agent.phase6g import failure_category
     failed_exports = []
     failure_distribution: Counter[str] = Counter()
@@ -661,6 +753,7 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
         candidate_total = db.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
         pending = status_counts.get("DISCOVERED_UNVERIFIED", 0)
     report = ["# Phase 7: Contactable GEO Research Companies", "",
+      "> Target correction: the 5,000-company goal means SMB/SME businesses, not only venture-backed startups. The all-industry strict contactable total below is not the SMB target count. Run `PYTHONPATH=src uv run python scripts/phase7_smb_reconcile.py` for the offline, size-evidence-based reconciliation and hotel exclusion.", "",
       "## Strict baseline and current result", "",
       f"- Full existing candidate pool: {candidate_total:,} distinct canonical domains; source composition: `{json.dumps(summary['source_counts'], sort_keys=True)}`.",
       f"- Strict baseline from the first export before offline evidence recovery: {baseline.get('strict_contactable_companies', 0):,} distinct companies.",
@@ -668,7 +761,7 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
       f"- Phase 7 candidates snapshotted for first-pass processing: {selection_count:,}.",
       f"- Strict contactable-company count now: {summary['contactable_companies']:,} (verified identity + existing GEO eligibility + operational first-party website evidence + genuine same-domain business email or confirmed form).",
       f"- With public business email: {summary['contactable_with_email']:,}; with confirmed form: {summary['contactable_with_confirmed_form']:,}; distinct union: {summary['contactable_email_or_form']:,}.",
-      f"- Remaining unattempted candidates: {pending:,}; target shortfall: {max(0,5000-summary['contactable_companies']):,}.", "",
+      f"- Remaining unattempted candidates: {pending:,}; Phase 7 continues to pool completion and does not stop at 5,000 contactable companies.", "",
       "## Processing and yield", "",
       f"- Unique Phase 7 candidates processed: {summary['phase7_processed']:,}; HTTP attempts: {total_requests:,} (successful {total_success:,}, failed {total_failed:,}, retries {total_retries:,}).",
       f"- Union wall time across persisted run intervals: {runtime:.1f}s; summed worker runtime (can double-count overlapping workers): {worker_runtime:.1f}s.",
@@ -680,9 +773,9 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
       "## Evidence, limits, and source scope", "",
       "The existing Phase 6E pool contains 57,664 distinct domains, including the full 537-company active cohort. No new source was acquired because the existing pool is not exhausted. Website requests use the existing identity verifier, GEO qualification rules, bounded request/time/retry controls, robots/access handling, and saved evidence cache. Blocked, robots-denied, failed, ambiguous, and identity-mismatched sites are not bypassed or promoted. Contact pages without a discovered email or confirmed form do not count.",
       "The ‘operational’ indicator is bounded evidence: a current verified first-party website fetch with a successful 2xx/3xx response and substantive visible text. It does not independently establish business registration or revenue. Companies flagged for possible chain/franchise or repeated-name identity review are excluded from the automated total until resolved.", "",
-      "## Resume", "", f"Continue with: `PYTHONPATH=src uv run python scripts/phase7_contacts.py run --batch-size 500 --request-cap {max(10000, int(total_requests) + 5000)} --time-cap-seconds {max(21600, int(runtime) + 10800)} --chunk-request-budget 500`.",
+      "## Resume", "", f"Continue with: `PYTHONPATH=src uv run python scripts/phase7_contacts.py run --batch-size 500 --request-cap {max(10000, int(total_requests) + 5000)} --time-cap-seconds {max(21600, int(runtime) + 10800)} --chunk-request-budget 500 --concurrency 4`.",
       "The request and time caps are cumulative across saved Phase 7 runs; saved wall intervals are unioned to avoid double-counting overlap. Raise the caps to allow additional work. No email or form submissions are performed.", "",
-      "## Outputs", "", "- `data/phase7_contactable_companies.csv`", "- `data/phase7_contact_channel_audit.csv`", "- `data/phase7_validation_failures.csv`", "- `data/phase7_exclusion_queue.csv`", "- `data/phase7_yield_metrics.csv`", "- `data/phase7_candidates.db`", ""]
+      "## Outputs", "", "- `data/all_processed_candidates.csv`", "- `data/all_verified_companies.csv`", "- `data/all_geo_eligible_companies.csv`", "- `data/all_contactable_companies.csv`", "- `data/business_email_contacts.csv`", "- `data/official_contact_forms.csv`", "- `data/pending_human_review.csv`", "- `data/full_pool_execution_report.md`", "- `data/phase7_contactable_companies.csv`", "- `data/phase7_contact_channel_audit.csv`", "- `data/phase7_validation_failures.csv`", "- `data/phase7_exclusion_queue.csv`", "- `data/phase7_yield_metrics.csv`", "- `data/phase7_candidates.db`", ""]
     report_text = "\n".join(report)
     result = {
         "companies": write("phase7_contactable_companies.csv", company_rows, company_fields),
@@ -690,7 +783,16 @@ def export_outputs(*, db_path: Path = PHASE7_DB, active_db: Path = PHASE6A_DB,
         "validation_failures": write("phase7_validation_failures.csv", failed_exports, ["candidate_id", "company_name", "canonical_domain", "website", "source_name", "source_url", "verification_status", "fetch_status", "http_status", "failure_category", "verification_reason", "last_inspected_at", "next_safe_action"]),
         "exclusions": write("phase7_exclusion_queue.csv", exclusions, ["candidate_id", "company_name", "canonical_domain", "source_name", "source_url", "verification_status", "geo_eligibility_status", "contact_status", "screen_status", "chain_location_concern", "website_domain_concern", "verification_reason", "last_inspected_at", "exclusion_reasons"]),
         "yield_metrics": write("phase7_yield_metrics.csv", metrics, list(metrics[0].keys()) if metrics else ["selection_rank_start"]),
+        "all_processed_candidates": write("all_processed_candidates.csv", processed_rows, processing_fields),
+        "all_verified_companies": write("all_verified_companies.csv", verified_rows, processing_fields),
+        "all_geo_eligible_companies": write("all_geo_eligible_companies.csv", eligible_rows, processing_fields),
+        "all_contactable_companies": write("all_contactable_companies.csv", company_rows, company_fields),
+        "business_email_contacts": write("business_email_contacts.csv", email_rows, channel_fields),
+        "official_contact_forms": write("official_contact_forms.csv", form_rows, channel_fields),
+        "pending_human_review": write("pending_human_review.csv", pending_review_rows, channel_fields),
     }
     (output_dir / "phase7_final_report.md").write_text(report_text, encoding="utf-8")
+    (output_dir / "full_pool_execution_report.md").write_text(report_text, encoding="utf-8")
     result["report"] = str(output_dir / "phase7_final_report.md")
+    result["full_pool_report"] = str(output_dir / "full_pool_execution_report.md")
     return result

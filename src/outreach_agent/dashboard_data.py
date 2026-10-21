@@ -29,11 +29,45 @@ from outreach_agent.outreach_pipeline import (
 from outreach_agent.website_identity import verify_company_website
 from outreach_agent.candidate_pool import candidate_summary
 from outreach_agent.phase6e_screening import PHASE6E_DB, phase6e_summary
+from outreach_agent.contact_channel_model import classify_contact_channels
+from outreach_agent.phase7_smb import PHASE7_DB, phase7_smb_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / "data/phase6a_experimental.db"
 DEFAULT_VERIFICATION = ROOT / "data/phase4f_website_verification.csv"
 PRIOR_VERIFICATION = ROOT / "data/phase4e_website_verification.csv"
+HOTEL_CANDIDATE_DB = ROOT / "data/hotel_candidates.db"
+
+
+def _hotel_candidate_summary(path: Path = HOTEL_CANDIDATE_DB) -> dict[str, int]:
+    """Read the separate hotel-property pipeline without creating or migrating its DB."""
+    empty = {"properties": 0, "processed": 0, "verified": 0, "geo_eligible": 0,
+             "with_business_email": 0, "with_confirmed_form": 0, "pending_review": 0}
+    if not path.exists():
+        return empty
+    with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True) as connection:
+        table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='candidates'").fetchone()
+        if not table:
+            return empty
+        # Use scalar queries so older experimental schemas remain readable.
+        properties = connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
+        verified = connection.execute("SELECT COUNT(*) FROM candidates WHERE verification_status='VERIFIED'").fetchone()[0]
+        eligible = connection.execute("SELECT COUNT(*) FROM candidates WHERE geo_eligibility_status='ELIGIBLE'").fetchone()[0]
+        candidate_columns = {row[1] for row in connection.execute("PRAGMA table_info(candidates)")}
+        processed = (connection.execute("SELECT COUNT(*) FROM candidates WHERE last_inspected_at IS NOT NULL").fetchone()[0]
+                     if "last_inspected_at" in candidate_columns else 0)
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hotel_contact_channels'").fetchone():
+            email_count, form_count = connection.execute(
+                """SELECT
+                   COUNT(DISTINCT CASE WHEN channel_type IN ('GENERAL_BUSINESS_EMAIL','BUSINESS_DEVELOPMENT_EMAIL','PARTNERSHIP_EMAIL','SALES_MARKETING_EMAIL') AND email<>'' THEN candidate_id END),
+                   COUNT(DISTINCT CASE WHEN channel_type='CONTACT_FORM' AND channel_url<>'' THEN candidate_id END)
+                   FROM hotel_contact_channels WHERE review_status<>'REJECTED'""").fetchone()
+        else:
+            email_count, form_count = 0, 0
+        pending_review = connection.execute("SELECT COUNT(*) FROM candidates WHERE human_review_status='PENDING'").fetchone()[0]
+    return {"properties": properties, "processed": processed, "verified": verified,
+            "geo_eligible": eligible, "with_business_email": email_count,
+            "with_confirmed_form": form_count, "pending_review": pending_review}
 DEFAULT_DELIVERY = ROOT / "data/phase5a_delivery_simulation.csv"
 DEFAULT_OUTREACH_CONFIG = ROOT / "config/outreach.yaml"
 DEFAULT_TEMPLATE = ROOT / "config/templates/research_invitation.txt"
@@ -206,6 +240,10 @@ def load_dashboard_data(
             company_id: any(item["is_suitable_first_party"] for item in detail["contact_channels"])
             for company_id, detail in details.items()
         }
+        channel_classes = {
+            company_id: classify_contact_channels(detail["contact_channels"])
+            for company_id, detail in details.items()
+        }
         summary = {
             "total_companies": len(companies),
             "website_verification": dict(sorted(Counter(row["identity_verification_status"] for row in companies).items())),
@@ -216,6 +254,7 @@ def load_dashboard_data(
                 "with_suitable_first_party_channel": sum(channel_presence.values()),
                 "without_suitable_first_party_channel": len(companies) - sum(channel_presence.values()),
             },
+            "contact_channel_classes": dict(sorted(Counter(channel_classes.values()).items())),
             "pending_human_reviews": {
                 "companies": sum((row.get("review_status") or "PENDING").upper() == "PENDING" for row in companies),
                 "contact_channels": sum(
@@ -256,6 +295,9 @@ def load_dashboard_data(
                 "outreach_ready_companies": ready + pool["outreach_ready"],
                 "new_candidate_records": pool["candidate_count"],
             }
+        summary["hotel_candidate_pool"] = _hotel_candidate_summary()
+        if db_path.resolve() == DEFAULT_DB.resolve() and PHASE7_DB.exists():
+            summary["phase7_smb_target"] = phase7_smb_summary()
         filters = {
             "sources": sorted({source for detail in details.values() for source in detail["discovery_sources"]}),
             "website_verification": sorted({row["identity_verification_status"] for row in companies}),

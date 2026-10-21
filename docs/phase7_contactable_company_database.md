@@ -1,5 +1,7 @@
 # Phase 7: Contactable GEO Research Company Database
 
+The professor's 5,000-company target is an SMB/SME target, not a venture-backed-startup target. The strict 7,172-company contactable export is all-industry and is not itself an SMB count. See [the offline SMB/SME reconciliation](phase7_smb_target_reconciliation.md) for the evidence-supported target count, unknown-size review set, and separate hotel exclusion.
+
 Phase 7 reuses the existing candidate database, identity verifier, GEO qualification rules, crawler, contact parser, and Phase 6G contact-review sidecar. It does not introduce a second qualification model, change campaign state, send email, or submit contact forms.
 
 ## Strict count definition
@@ -42,7 +44,16 @@ Before new candidate processing, Phase 7 recovers first-party parser channels al
 - `data/phase7_exclusion_queue.csv` — nonqualifying pool with explicit reason(s).
 - `data/phase7_yield_metrics.csv` — measured yield, requests, retries, and runtime per 500 selected candidates.
 - `data/phase7_final_report.md` — generated current totals and resumable command.
+- `data/phase7_smb_reconciliation.csv` — all saved Phase 7 candidates classified by sector, geography, size evidence, verification, GEO state, contact channel, and provenance.
+- `data/phase7_smb_contactable_companies.csv` — strict contactable companies with separate SMB target status.
+- `data/phase7_smb_size_review_queue.csv` — non-hotel strict contactable businesses whose company size is unknown.
 
 ## Human controls and limitations
 
-Contact channels remain pending unless the existing Phase 6G review sidecar records a decision. An approved contact channel is not research authorization or permission to send. No candidate is marked outreach-ready by Phase 7. The source pool is not exhausted, so Phase 7 does not acquire another dataset. The 5,000-company goal is not considered met by candidate counts, crawls, contact pages, or attempted requests—only the strict company export count qualifies.
+Contact channels remain pending unless the existing Phase 6G review sidecar records a decision. An approved contact channel is not research authorization or permission to send. No candidate is marked outreach-ready by Phase 7. The source pool is not exhausted, so Phase 7 does not acquire another dataset. The 5,000-SMB goal is not considered met by candidate counts, crawls, contact pages, or attempted requests. Only records with identity, operating website, GEO suitability, size evidence, and a strict contact method qualify. Unknown-size companies remain reviewable.
+
+Reconcile the current saved data without network access:
+
+```bash
+PYTHONPATH=src uv run python scripts/phase7_smb_reconcile.py
+```

@@ -63,6 +63,7 @@ main { width: 95%; max-width: 2560px; margin: 0 auto; }
 .secondary-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin: 8px 0 15px; }
 .candidate-scale-overview { margin: 18px 0; }
 .candidate-scale-overview .secondary-metrics { grid-template-columns: repeat(5,minmax(0,1fr)); }
+.candidate-export-links { display:flex; flex-wrap:wrap; gap:10px; padding:0 20px 18px; }
 .secondary-metric { padding: 12px 15px; background: #f8faf8; border-radius: 7px; }
 .secondary-metric span, .secondary-metric strong { display: block; }
 .secondary-metric span { color: var(--muted); font-size: 12px; }

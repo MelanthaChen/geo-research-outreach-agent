@@ -32,6 +32,7 @@ from outreach_agent.phase6e_screening import PHASE6E_DB, list_phase6e_candidates
 from outreach_agent.phase6f import PHASE6F_DB, dashboard_overlays as phase6f_overlays, dashboard_summary as phase6f_summary
 from outreach_agent.phase6g import REVIEW_DB as PHASE6G_REVIEW_DB, review_rows as phase6g_review_rows, csv_text as phase6g_csv_text, record_channel_decision as phase6g_record_channel_decision, record_company_review as phase6g_record_company_review
 from outreach_agent.phase6h import PHASE6H_DB, dashboard_summary as phase6h_summary, dashboard_overlays as phase6h_overlays
+from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -87,6 +88,26 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 filters = {key: value for key, value in params.items() if key in {"q", "source", "verification", "eligibility", "geo", "priority", "channel"}}
                 self._csv(export_companies_csv(data, filters, campaign_store), "companies.csv")
                 return
+            smb_exports = {
+                "/api/phase7/smb/reconciliation.csv": "phase7_smb_reconciliation.csv",
+                "/api/phase7/smb/contactable.csv": "phase7_smb_contactable_companies.csv",
+                "/api/phase7/smb/size-review.csv": "phase7_smb_size_review_queue.csv",
+                "/api/phase7/smb/cohort-overlap.csv": "phase7_cohort_domain_overlap.csv",
+            }
+            if parsed.path in smb_exports:
+                target = PHASE7_SMB_EXPORT_DIR / smb_exports[parsed.path]
+                if not target.is_file():
+                    self._json({"error": "SMB reconciliation export is not available; run scripts/phase7_smb_reconcile.py"}, 404)
+                    return
+                self._csv(target.read_text(encoding="utf-8-sig"), target.name)
+                return
+            if parsed.path == "/api/phase7/hotels/cohort-membership.csv":
+                target = PHASE7_SMB_EXPORT_DIR / "phase7_hotel_cohort_membership.csv"
+                if not target.is_file():
+                    self._json({"error": "Hotel cohort membership export is not available; run scripts/phase7_hotels.py cohort-export"}, 404)
+                    return
+                self._csv(target.read_text(encoding="utf-8-sig"), target.name)
+                return
             if parsed.path.startswith("/api/campaigns") or parsed.path.startswith("/api/campaign-analytics") or parsed.path.startswith("/api/companies/") and parsed.path.endswith("/outreach-history"):
                 if campaign_store is None:
                     self._json({"error": "Persistent campaign store is unavailable"}, 503)
@@ -94,6 +115,8 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 try:
                     if parsed.path == "/api/campaigns":
                         self._json({"campaigns": campaign_store.list()})
+                    elif parsed.path == "/api/campaigns/form-review-queue.csv":
+                        self._csv(campaign_store.form_review_queue_csv(), "contact_form_manual_review_queue.csv")
                     elif parsed.path == "/api/campaign-analytics":
                         self._json(campaign_store.analytics())
                     elif parsed.path.endswith("/outreach-history"):

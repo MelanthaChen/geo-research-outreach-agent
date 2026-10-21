@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from outreach_agent.dashboard import make_handler
-from outreach_agent.dashboard_data import filter_companies, load_dashboard_data, make_draft_preview
+from outreach_agent.dashboard_data import _hotel_candidate_summary, filter_companies, load_dashboard_data, make_draft_preview
 from outreach_agent.dashboard_data import COMPANY_EXPORT_COLUMNS, export_companies_csv
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,12 +78,43 @@ def test_dashboard_metrics_are_derived_from_existing_537_company_cohort():
     assert sha256(EXPERIMENTAL_DB) == before
 
 
+def test_separate_hotel_metrics_are_read_only_and_distinguish_channels(tmp_path):
+    path = tmp_path / "hotel.db"
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+          CREATE TABLE candidates(candidate_id TEXT, verification_status TEXT, geo_eligibility_status TEXT, human_review_status TEXT, last_inspected_at TEXT);
+          CREATE TABLE hotel_contact_channels(candidate_id TEXT, channel_type TEXT, email TEXT, channel_url TEXT, review_status TEXT);
+          INSERT INTO candidates VALUES('a','VERIFIED','ELIGIBLE','PENDING','2026-01-01'),('b','ACCESS_BLOCKED','NEEDS_REVIEW','PENDING',NULL);
+          INSERT INTO hotel_contact_channels VALUES('a','GENERAL_BUSINESS_EMAIL','hi@example.test','','PENDING'),('a','CONTACT_FORM','','https://example.test/contact','PENDING');
+        """)
+    before = sha256(path)
+    assert _hotel_candidate_summary(path) == {"properties": 2, "processed": 1, "verified": 1,
+        "geo_eligible": 1, "with_business_email": 1, "with_confirmed_form": 1, "pending_review": 2}
+    assert sha256(path) == before
+
+
 def test_dashboard_data_loading_is_stable_and_read_only():
     frozen_before = sha256(FROZEN_DB)
     experimental_before = sha256(EXPERIMENTAL_DB)
     first = load_dashboard_data()
     second = load_dashboard_data()
-    assert first["summary"] == second["summary"]
+    first_summary = dict(first["summary"])
+    second_summary = dict(second["summary"])
+    first_hotel = first_summary.pop("hotel_candidate_pool")
+    second_hotel = second_summary.pop("hotel_candidate_pool")
+    first_smb = dict(first_summary["phase7_smb_target"])
+    second_smb = dict(second_summary["phase7_smb_target"])
+    first_overlap = first_smb.pop("hotel_cross_cohort_domain_overlap")
+    second_overlap = second_smb.pop("hotel_cross_cohort_domain_overlap")
+    # The hotel worker may advance its separate database between these read-only snapshots.
+    assert first_hotel["properties"] == second_hotel["properties"]
+    assert second_hotel["processed"] >= first_hotel["processed"]
+    assert first_smb == second_smb
+    first_summary["phase7_smb_target"] = first_smb
+    second_summary["phase7_smb_target"] = second_smb
+    assert first_summary == second_summary
+    assert first_overlap["hotel_property_records_with_domains"] == second_overlap["hotel_property_records_with_domains"]
+    assert second_overlap["hotel_records_sharing_business_domain"] >= first_overlap["hotel_records_sharing_business_domain"]
     assert first["details"] == second["details"]
     assert sha256(FROZEN_DB) == frozen_before
     assert sha256(EXPERIMENTAL_DB) == experimental_before

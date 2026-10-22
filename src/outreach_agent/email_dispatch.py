@@ -140,7 +140,7 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
                     invitation_id = draft["invitation_id"]
                     if invitation_id:
                         db.execute("UPDATE questionnaire_invitations SET status='SENT' WHERE invitation_id=? AND status IN ('DRAFTED','INVITED')", (invitation_id,))
-                    db.execute("UPDATE research_records SET recruitment_status='INVITED',updated_at=? WHERE profile_id=?", (now(), draft["profile_id"]))
+                    db.execute("UPDATE research_records SET recruitment_status='INVITED',promotion_state='INVITED',updated_at=? WHERE profile_id=?", (now(), draft["profile_id"]))
                     outcomes.append(DispatchOutcome(draft_id, "SENT", event_id, result.message_id, attempts=attempt)); break
             else:
                 event_id = _event(db, draft_id, key, "DISPATCH_FAILED", provider.name, provider.enabled, None, last_error or "retry limit exhausted")

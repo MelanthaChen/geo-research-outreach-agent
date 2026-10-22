@@ -12,23 +12,22 @@ Read-only counts from the checked-out databases:
 |---|---:|---|
 | `data/phase7_candidates.db` / `candidates` | 57,664 | company candidate source; never written by the Outreach lifecycle |
 | `data/hotel_candidates.db` / `candidates` | 15,262 | hotel candidate source; never written by the Outreach lifecycle |
-| `data/research_registry.db` / `research_records` | 72,927 | lifecycle read model, including company/hotel/test records |
+| Lean operational registry / `research_records` | 8,910 | qualified US prospects and owner-controlled lifecycle records |
 
 The Phase 7 and hotel stores remain SQLite source datasets. The durable cloud
 registry is the Outreach `research_records` database; do not upload or mutate
 the source stores as part of application startup.
 
-The checked-out source stores remain immutable SQLite inputs. They are now
-copied into a durable candidate read model by the source migration below; the
-operator must still stage and validate that migration before the production
-dashboard is expected to show the full candidate pool.
+The checked-out source stores remain immutable discovery inputs and are not
+required at application startup. Production uses the lean registry builder in
+`scripts/build_lean_prospect_registry.py`, which promotes only qualified US
+prospects with an actionable form or email evidence. Contact review remains a
+separate gate; imported email strings remain unverified.
 
-That source migration is now implemented by
-`scripts/migrate_candidate_sources.py`. It creates durable `candidate_companies`,
-`candidate_hotels`, provenance, contact, and company-screening mirror tables,
-then upserts source facts into the existing `research_records` lifecycle model.
-The Research Queue continues to read `research_records`; the mirror tables
-preserve source-specific fields and complete source-row JSON for reconciliation.
+The Research Queue, invitation, response, consent, and handoff services all
+read and write the same canonical `research_records` table. `prospect_contacts`,
+`prospect_provenance`, and lifecycle-event tables provide the lean operational
+read model without creating a second writable lifecycle registry.
 
 Source identity is deliberately not domain-only: company/property
 `candidate_id` remains the primary key, so multiple hotel properties sharing a
@@ -93,7 +92,7 @@ or exported database snapshot.
 4. Take a verified SQLite backup and checksum it before migration.
 5. Run the migration once against the Neon staging direct URL. The source is read-only; the target uses conflict-safe inserts.
 6. Compare per-table counts and foreign-key/invitation/submission/handoff relationships.
-7. Run dashboard read-only checks, Sheets dry-run, owner-controlled consent review, and GeoAIResume handoff.
+7. Run Dashboard read-only checks, Sheets dry-run, owner-controlled consent review, and GeoAIResume handoff.
 8. Repeat migration verification against a fresh staging target before production approval.
 9. For production, place the service in maintenance/read-only mode, take a final backup, migrate, compare counts, and only then switch the web service to PostgreSQL.
 
@@ -122,6 +121,21 @@ The dry-run writes only an ephemeral local target and never opens the supplied
 registry for writes. The real command is rerunnable and uses conflict-safe
 upserts. Review the report's source counts, duplicate-domain list, missing
 relationship counts, and field checksums before accepting staging.
+
+Lean operational registry staging command:
+
+```sh
+PYTHONPATH=src uv run python scripts/build_lean_prospect_registry.py \
+  --business-db data/phase7_candidates.db \
+  --hotel-db data/hotel_candidates.db \
+  --target "$OUTREACH_DATABASE_MIGRATION_URL" \
+  --existing-registry data/research_registry.db \
+  --report /tmp/lean-prospect-reconciliation.json
+```
+
+This command is run as a migration step, not during normal web-service
+startup. The web service needs only `OUTREACH_DATABASE_URL`; raw discovery
+SQLite files are not uploaded to Render.
 
 ## Startup and recovery
 

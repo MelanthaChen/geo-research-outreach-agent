@@ -194,11 +194,11 @@ def review_questionnaire_submission(submission_id: str, *, reviewer: str, compan
         db.execute("INSERT OR REPLACE INTO consent_reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (review_id, submission_id, record["profile_id"], decision, reviewer, int(company_identity_verified), int(representative_authorized), int(consent_version_verified), int(website_scope_verified), int(withdrawal_checked), notes, now()))
         if decision == "APPROVED":
             db.execute("UPDATE questionnaire_submissions SET consent_status='CONSENTED',review_status='APPROVED',company_identity_confirmed=1,website_analysis_allowed=1,identity_review_status='VERIFIED' WHERE submission_id=?", (submission_id,))
-            db.execute("UPDATE research_records SET consent_status='CONSENTED',geo_research_status='HANDOFF_PENDING',geo_integration_status='HANDOFF_PENDING',geo_integration_error=NULL,updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
+            db.execute("UPDATE research_records SET consent_status='CONSENTED',promotion_state='RESEARCH_PARTICIPANT',geo_research_status='HANDOFF_PENDING',geo_integration_status='HANDOFF_PENDING',geo_integration_error=NULL,updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
         else:
             status = "DECLINED" if decision == "REJECTED" else "NEEDS_REVIEW"
             db.execute("UPDATE questionnaire_submissions SET review_status=? WHERE submission_id=?", (decision, submission_id))
-            db.execute("UPDATE research_records SET consent_status=?,geo_research_status=?,geo_integration_status=?,updated_at=? WHERE profile_id=?", (status, "BLOCKED" if decision == "REJECTED" else "PENDING_REVIEW", "BLOCKED" if decision == "REJECTED" else "PENDING_REVIEW", now(), record["profile_id"]))
+            db.execute("UPDATE research_records SET consent_status=?,promotion_state=CASE WHEN ? THEN 'BLOCKED' ELSE promotion_state END,geo_research_status=?,geo_integration_status=?,updated_at=? WHERE profile_id=?", (status, int(decision == "REJECTED"), "BLOCKED" if decision == "REJECTED" else "PENDING_REVIEW", "BLOCKED" if decision == "REJECTED" else "PENDING_REVIEW", now(), record["profile_id"]))
         db.commit()
     if decision != "APPROVED":
         return {"status": decision, "submission_id": submission_id, "checks_passed": checks}

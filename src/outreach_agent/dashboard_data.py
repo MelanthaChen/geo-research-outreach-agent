@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sqlite3
 import types
 from collections import Counter
@@ -53,7 +54,7 @@ def cloud_dashboard_snapshot(registry: str | Path) -> dict[str, Any]:
 
     total = list_records(registry, limit=1, offset=0)["total"]
     return {
-        "summary": {"total_companies": total, "cloud_registry": True},
+        "summary": {"total_companies": total, "cloud_registry": True, "registry_mode": os.environ.get("OUTREACH_REGISTRY_MODE", "LEAN")},
         "companies": [],
         "details": {},
         "channel_presence": {},

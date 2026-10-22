@@ -210,6 +210,12 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
             "screening_model": "TEXT",
             "screening_prompt_version": "TEXT",
             "screening_completed_at": "TEXT",
+            "promotion_state": "TEXT NOT NULL DEFAULT 'DISCOVERY'",
+            "prior_contact_status": "TEXT NOT NULL DEFAULT 'NONE'",
+            "suppression_status": "TEXT NOT NULL DEFAULT 'NOT_SUPPRESSED'",
+            "withdrawal_status": "TEXT NOT NULL DEFAULT 'NOT_WITHDRAWN'",
+            "source_candidate_id": "TEXT",
+            "source_row_checksum": "TEXT",
         }
         for name, definition in additions.items():
             if name not in record_columns:
@@ -293,7 +299,7 @@ def create_questionnaire_invitation(profile_id: str, *, secret: str, path: Path 
         if record["profile_type"] != "owner_controlled_test" and not is_us_eligible(record["geographic_classification"]):
             raise PermissionError("outreach invitation requires VERIFIED_US geographic eligibility")
         db.execute("INSERT INTO questionnaire_invitations(invitation_id,profile_id,invitation_reference,token_hash,token_expires_at,status,created_at) VALUES (?,?,?,?,?,?,?)", (invitation_id, profile_id, invitation_reference, token_hash, expires_at, "INVITED", now()))
-        db.execute("UPDATE research_records SET recruitment_status='INVITED',questionnaire_status='INVITED',updated_at=? WHERE profile_id=?", (now(), profile_id))
+        db.execute("UPDATE research_records SET recruitment_status='INVITED',questionnaire_status='INVITED',promotion_state=CASE WHEN promotion_state='OUTREACH_READY' THEN 'INVITED' ELSE promotion_state END,updated_at=? WHERE profile_id=?", (now(), profile_id))
     return invitation_id, raw
 
 
@@ -394,7 +400,7 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
 def withdraw_consent(profile_id: str, *, reason: str | None = None, path: Path = REGISTRY_DB) -> None:
     init_registry(path)
     with _connect(path) as db:
-        changed = db.execute("UPDATE research_records SET consent_status='WITHDRAWN',geo_research_status='BLOCKED',monitoring_status='BLOCKED',updated_at=? WHERE profile_id=?", (now(), profile_id)).rowcount
+        changed = db.execute("UPDATE research_records SET consent_status='WITHDRAWN',withdrawal_status='WITHDRAWN',promotion_state='BLOCKED',geo_research_status='BLOCKED',monitoring_status='BLOCKED',updated_at=? WHERE profile_id=?", (now(), profile_id)).rowcount
         if not changed:
             raise ValueError("profile is not registered")
         db.execute("UPDATE geo_handoffs SET status='BLOCKED_WITHDRAWN' WHERE profile_id=? AND status<>'COMPLETED'", (profile_id,))
@@ -706,7 +712,7 @@ def ingest_candidate_stores(*, business_db: Path, hotel_db: Path, registry_db: P
     return counts
 
 
-def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "", consent_status: str = "", identity_status: str = "", contact_status: str = "", screening_status: str = "", recruitment_status: str = "", geo_status: str = "", geographic_status: str = "", industry: str = "", location: str = "", sort: str = "name", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "", consent_status: str = "", identity_status: str = "", contact_status: str = "", screening_status: str = "", recruitment_status: str = "", geo_status: str = "", geographic_status: str = "", promotion_state: str = "", industry: str = "", location: str = "", sort: str = "name", limit: int = 50, offset: int = 0) -> dict[str, Any]:
     init_registry(path)
     clauses, args = [], []
     if q:
@@ -718,11 +724,19 @@ def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "
     for field, value in (("identity_verification_status", identity_status), ("contact_verification_status", contact_status), ("screening_status", screening_status), ("recruitment_status", recruitment_status), ("geo_research_status", geo_status), ("geographic_classification", geographic_status)):
         if value:
             clauses.append(field + "=?"); args.append(value)
+    if promotion_state == "OPERATIONAL":
+        clauses.append("promotion_state IN ('PROSPECT','OUTREACH_READY','INVITED','RESEARCH_PARTICIPANT')")
+    elif promotion_state:
+        clauses.append("promotion_state=?"); args.append(promotion_state)
     for field, value in (("industry", industry), ("location", location)):
         if value:
             clauses.append(field + " LIKE ?"); args.append("%" + value + "%")
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    order = {"name": "name COLLATE NOCASE", "identity": "identity_verification_status", "consent": "consent_status", "updated": "updated_at DESC"}.get(sort, "name COLLATE NOCASE")
+    # SQLite's NOCASE collation is not available on PostgreSQL. PostgreSQL's
+    # default text ordering is deterministic enough for the cloud read model;
+    # keep the historical collation only for the local SQLite registry.
+    default_name_order = "name" if is_postgres_target(path) else "name COLLATE NOCASE"
+    order = {"name": default_name_order, "identity": "identity_verification_status", "consent": "consent_status", "updated": "updated_at DESC"}.get(sort, default_name_order)
     with _connect(path) as db:
         total = db.execute("SELECT COUNT(*) FROM research_records" + where, args).fetchone()[0]
         rows = [dict(row) for row in db.execute("SELECT * FROM research_records" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", args + [max(1, min(limit, 100)), max(0, offset)])]

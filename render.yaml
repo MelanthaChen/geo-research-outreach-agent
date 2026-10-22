@@ -12,6 +12,8 @@ services:
         value: "true"
       - key: OUTREACH_DATABASE_URL
         sync: false
+      - key: OUTREACH_REGISTRY_MODE
+        value: "LEAN"
       - key: OUTREACH_DATABASE_MIGRATION_URL
         sync: false
       - key: GEO_ENGINE_API_URL
@@ -38,6 +40,8 @@ services:
     envVars:
       - key: OUTREACH_DATABASE_URL
         sync: false
+      - key: OUTREACH_REGISTRY_MODE
+        value: "LEAN"
       - key: GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64
         sync: false
       - key: GEO_RESEARCH_SHEETS_RANGE

@@ -48,6 +48,7 @@ from outreach_agent.sender_accounts import add_account, disconnect, list_account
 from outreach_agent.combined_screening import run_combined_analysis
 from outreach_agent.research_lifecycle import edit_email_draft
 from outreach_agent.google_forms_integration import prefilled_form_url, sync_sheet_rows
+from outreach_agent.lean_registry import review_contact
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -305,7 +306,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 return
             if parsed.path in {"/api/research/records", "/api/research/records.csv"}:
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
-                filters = {key: params[key] for key in ("q", "profile_type", "consent_status", "identity_status", "contact_status", "screening_status", "recruitment_status", "geo_status", "geographic_status", "industry", "location", "sort") if key in params}
+                filters = {key: params[key] for key in ("q", "profile_type", "consent_status", "identity_status", "contact_status", "screening_status", "recruitment_status", "geo_status", "geographic_status", "promotion_state", "industry", "location", "sort") if key in params}
                 try:
                     if parsed.path.endswith(".csv"):
                         self._csv(export_records_csv(REGISTRY_DB, **filters), "research_registry.csv")
@@ -446,6 +447,17 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if parsed.path == "/api/research/withdraw":
                     withdraw_consent(str(body["profile_id"]), reason=str(body.get("reason") or "withdrawn by participant"), path=REGISTRY_DB)
                     self._json({"status": "WITHDRAWN"})
+                    return
+                if parsed.path == "/api/research/contact-review":
+                    if not self._review_auth_ok():
+                        self._json({"error": "Contact review requires trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        return
+                    result = review_contact(
+                        prospect_id=str(body["prospect_id"]), contact_id=str(body["contact_id"]),
+                        decision=str(body.get("decision") or ""), reviewer=str(body.get("reviewer") or ""),
+                        path=REGISTRY_DB,
+                    )
+                    self._json(result)
                     return
                 if parsed.path == "/api/research/consent-review":
                     if not self._review_auth_ok():

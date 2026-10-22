@@ -16,6 +16,7 @@ import yaml
 
 from outreach_agent.outreach_pipeline import (
     DEFAULT_RESEARCH_SUBJECT,
+    mail_merge_safe_subject,
     DEMO_PARTICIPATION_FORM_URL,
     SUITABLE_CHANNEL_TYPES,
     contact_form_invitation_message,
@@ -504,7 +505,7 @@ def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | 
     template_path = ROOT / template
     demo_form_url = data.get("simulated_signup_url") or DEMO_PARTICIPATION_FORM_URL
     values = research_invitation_values(config, detail["company_name"], demo_form_url=demo_form_url)
-    subject = str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT)
+    subject = mail_merge_safe_subject(str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT))
     is_form = selected.get("channel_type") == "CONTACT_FORM"
     if is_form:
         body = contact_form_invitation_message(

@@ -10,6 +10,7 @@ import json
 import yaml
 
 from outreach_agent.gmail_integration import gmail_connection_status
+from outreach_agent.outreach_pipeline import mail_merge_safe_subject
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_EMAIL_CONFIG = ROOT / "config/test_email.yaml"
@@ -99,7 +100,7 @@ def test_email_preview(recipient: str, path: Path = TEST_EMAIL_CONFIG) -> dict[s
     message = {
         "from": sender,
         "to": address,
-        "subject": "GEO Research Outreach — Test Participation Invitation",
+        "subject": mail_merge_safe_subject("GEO Research Outreach — Test Participation Invitation"),
         "body": (
             "Hello,\n\n"
             "This is a controlled test of the GEO research invitation and participation-form workflow. "

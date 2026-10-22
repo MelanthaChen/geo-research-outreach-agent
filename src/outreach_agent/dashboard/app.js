@@ -225,7 +225,7 @@ async function loadTestEmailPreview(){
   const preview=await api(`/api/test-email/preview?recipient=${encodeURIComponent(recipient)}`);
   state.testEmailPreview=preview;
   $("test-email-preview").innerHTML=`<div class="draft-banner">${esc(preview.status)}</div><div class="draft-meta"><strong>From:</strong> ${esc(preview.from)}<br><strong>To:</strong> ${esc(preview.to)}<br><strong>Subject:</strong> ${esc(preview.subject)}<br><strong>Participation form:</strong> ${esc(preview.participation_form_url)}</div><pre class="draft-body">${esc(preview.body)}</pre>`;
-  $("test-email-status").textContent="Preview only. No email has been sent.";
+  $("test-email-status").textContent="Preview only. Dispatch requires explicit human action.";
   $("test-email-confirm").checked=false;
   updateTestEmailSendButton();
 }

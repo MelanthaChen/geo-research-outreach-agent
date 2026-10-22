@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -50,6 +51,22 @@ SUITABLE_CHANNEL_TYPES = SUITABLE_EMAIL_TYPES | {"CONTACT_FORM"}
 EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", re.I)
 DEFAULT_RESEARCH_SUBJECT = "Invitation to Participate in University Research on AI Search"
 DEMO_PARTICIPATION_FORM_URL = "https://research.example.invalid/participation-interest"
+
+
+def mail_merge_safe_subject(subject: str) -> str:
+    """Normalize punctuation that Word Mail Merge for Mac renders unreliably.
+
+    Letters and numbers are preserved, while common typographic punctuation is
+    converted to ASCII equivalents. This keeps subjects readable without
+    changing the meaning of company names or other Unicode text.
+    """
+    replacements = str.maketrans({
+        "—": "-", "–": "-", "−": "-", "‐": "-", "‑": "-",
+        "…": "...", "“": '"', "”": '"', "‘": "'", "’": "'",
+        " ": " ",
+    })
+    normalized = unicodedata.normalize("NFKC", str(subject)).translate(replacements)
+    return "".join("-" if ord(char) > 127 and unicodedata.category(char).startswith("P") else char for char in normalized)
 
 
 def research_invitation_values(config: dict[str, Any], company_name: str, *, demo_form_url: str = "") -> dict[str, str]:

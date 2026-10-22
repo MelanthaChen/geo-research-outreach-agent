@@ -27,6 +27,8 @@ gmail = [
   "google-auth-oauthlib>=1.0,<2",
   "keyring>=25,<27",
 ]
+microsoft_graph = ["msal>=1.30,<2"]
+mail_merge = ["openpyxl>=3.1,<4"]
 openstreetmap = ["osmium>=4.0,<5"]
 
 [project.scripts]

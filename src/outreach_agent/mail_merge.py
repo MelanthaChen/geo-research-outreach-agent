@@ -8,6 +8,7 @@ ledger rather than changing campaign or cohort records.
 from __future__ import annotations
 
 import csv
+from copy import copy
 import hashlib
 import io
 import json
@@ -24,13 +25,23 @@ from urllib.parse import quote, urlparse
 import yaml
 
 from outreach_agent.dashboard_data import DEFAULT_OUTREACH_CONFIG, ROOT, _suitable_channel, _spreadsheet_safe, export_companies_csv, make_draft_preview
-from outreach_agent.outreach_pipeline import DEFAULT_RESEARCH_SUBJECT, DEMO_PARTICIPATION_FORM_URL, render_template, validate_recipient
+from outreach_agent.outreach_pipeline import DEFAULT_RESEARCH_SUBJECT, DEMO_PARTICIPATION_FORM_URL, mail_merge_safe_subject, render_template, validate_recipient
 
 TEST_RECIPIENTS = ("yuxaun.chen.1031@outlook.com", "yuxuan.chen.1031@outlook.com")
 MAIL_MERGE_COLUMNS = (
     "company_id", "company_name", "recipient_email", "email_subject", "email_body",
     "participation_form_url", "campaign_id", "contact_channel", "contact_evidence_url",
     "eligibility_status", "review_status",
+)
+RESEARCH_MAIL_MERGE_COLUMNS = (
+    # Word for Mac only enables Merge to E-Mail when it can identify a
+    # conventional email-address column. Keep the machine-readable field and
+    # add the compatibility alias; both are sourced from the same validated
+    # recipient and are never operator-editable send authorization.
+    "profile_id", "company_name", "recipient_email", "Email Address", "email_subject", "email_body",
+    "questionnaire_url", "invitation_reference", "draft_id", "invitation_id",
+    "draft_status", "invitation_status", "merge_status",
+    *(f"body_paragraph_{index:02d}" for index in range(1, 33)),
 )
 ELIGIBILITY_COLUMNS = (
     "campaign_id", "company_id", "company_name", "identity_status", "eligibility_status", "company_review_status",
@@ -222,7 +233,7 @@ def assess_company_mail_merge(
             seen_recipients.add(email)
             invite_url = _tokenized_url(form_base, tokens[company_id])
             template_file = ROOT / str(config.get("template_file") or "config/templates/research_invitation.txt")
-            subject = str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT)
+            subject = mail_merge_safe_subject(str(config.get("subject_template") or DEFAULT_RESEARCH_SUBJECT))
             context = {
                 "company_name": str(detail.get("company_name") or "Business"),
                 "participation_interest_form_url": invite_url,
@@ -339,3 +350,150 @@ def save_export(directory: Path, filename: str, content: str) -> tuple[Path, str
         os.fsync(handle.fileno())
     os.replace(temporary, path)
     return path, digest
+
+
+def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None = None,
+                             include_pending: bool = False,
+                             allowed_recipients: set[str] | None = None) -> list[dict[str, Any]]:
+    """Build Word-compatible rows from the existing Research Queue.
+
+    Approved rows are the only rows eligible for a sendable export. Pending
+    rows may be included solely as clearly labelled review previews. This
+    function is read-only with respect to the registry.
+    """
+    from outreach_agent.research_lifecycle import init_registry, _connect
+    init_registry(Path(registry_db))
+    where = ""
+    params: list[Any] = []
+    if profile_ids:
+        marks = ",".join("?" for _ in profile_ids)
+        where = f" AND r.profile_id IN ({marks})"
+        params.extend(profile_ids)
+    statuses = ("'APPROVED','PENDING'" if include_pending else "'APPROVED'")
+    rows: list[dict[str, Any]] = []
+    with _connect(Path(registry_db)) as db:
+        query = f"""SELECT r.name,d.draft_id,d.profile_id,d.recipient,d.subject,d.body,
+                    d.approval_status,i.invitation_id,i.invitation_reference,i.status AS invitation_status
+                    FROM email_drafts d JOIN research_records r ON r.profile_id=d.profile_id
+                    LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id
+                    WHERE d.approval_status IN ({statuses}) {where}
+                    ORDER BY r.name COLLATE NOCASE,d.draft_id"""
+        for row in db.execute(query, params):
+            recipient = str(row["recipient"]).casefold()
+            if allowed_recipients is not None and recipient not in {x.casefold() for x in allowed_recipients}:
+                continue
+            merge_status = "READY_FOR_WORD_MAIL_MERGE" if row["approval_status"] == "APPROVED" else "REVIEW_ONLY_NOT_APPROVED"
+            body = str(row["body"] or "")
+            urls = re.findall(r"https?://[^\s<>]+", body)
+            paragraphs = body.split("\n\n")
+            paragraph_fields = {f"body_paragraph_{index:02d}": value for index, value in enumerate(paragraphs[:32], start=1)}
+            rows.append({
+                "profile_id": row["profile_id"], "company_name": row["name"],
+                "recipient_email": row["recipient"], "Email Address": row["recipient"],
+                "email_subject": mail_merge_safe_subject(row["subject"]),
+                "email_body": body, "questionnaire_url": urls[0] if urls else "",
+                "invitation_reference": row["invitation_reference"] or "",
+                "draft_id": row["draft_id"], "invitation_id": row["invitation_id"] or "",
+                "draft_status": row["approval_status"], "invitation_status": row["invitation_status"] or "",
+                "merge_status": merge_status,
+                **paragraph_fields,
+            })
+    return rows
+
+
+def save_research_mail_merge_xlsx(directory: Path, filename: str, rows: list[dict[str, Any]]) -> tuple[Path, str]:
+    """Write a local XLSX data source for Word Mailings > Merge to E-mail."""
+    try:
+        from openpyxl import Workbook
+    except ImportError as exc:
+        raise RuntimeError("XLSX export requires the optional mail_merge dependency") from exc
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / filename
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "ResearchQueue"
+    sheet.append(list(RESEARCH_MAIL_MERGE_COLUMNS))
+    for row in rows:
+        sheet.append([row.get(column, "") for column in RESEARCH_MAIL_MERGE_COLUMNS])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for cell in sheet[1]:
+        font = copy(cell.font)
+        font.bold = True
+        cell.font = font
+    temporary = directory / f".{path.name}.tmp"
+    workbook.save(temporary)
+    digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+    os.replace(temporary, path)
+    return path, digest
+
+
+def save_word_mail_merge_template(directory: Path, filename: str = "geo-research-invitation-mail-merge.docx") -> tuple[Path, str]:
+    """Create a reusable Word email body with real MERGEFIELD instructions.
+
+    Word's email-merge dialog supplies the To field and subject. The body is
+    composed from paragraph merge fields rather than relying on Word to treat
+    an ``email_body`` column specially. Empty paragraph fields are harmless,
+    allowing one template to serve small and large batches.
+    """
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    def field(paragraph, name: str) -> None:
+        run = paragraph.add_run()
+        begin = OxmlElement("w:fldChar"); begin.set(qn("w:fldCharType"), "begin")
+        instruction = OxmlElement("w:instrText"); instruction.set(qn("xml:space"), "preserve"); instruction.text = f" MERGEFIELD {name} \\* MERGEFORMAT "
+        separate = OxmlElement("w:fldChar"); separate.set(qn("w:fldCharType"), "separate")
+        result = OxmlElement("w:t"); result.text = f"«{name}»"
+        end = OxmlElement("w:fldChar"); end.set(qn("w:fldCharType"), "end")
+        run._r.extend((begin, instruction, separate, result, end))
+
+    document = Document()
+    style = document.styles["Normal"]
+    style.font.name = "Calibri"
+    style.font.size = Pt(11)
+    for index in range(1, 33):
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(8)
+        field(paragraph, f"body_paragraph_{index:02d}")
+    # The approved export places the personalized URL in the corresponding
+    # paragraph field, so it is merged exactly once and is not duplicated.
+    document.core_properties.title = "GEO Research Invitation Mail Merge"
+    directory = Path(directory); directory.mkdir(parents=True, exist_ok=True)
+    path = directory / filename
+    temporary = directory / f".{path.name}.tmp"
+    document.save(temporary)
+    digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+    os.replace(temporary, path)
+    return path, digest
+
+
+def record_word_mail_merge_reconciliation(registry_db: Path, draft_id: str, *, status: str,
+                                          evidence: str, reviewer: str) -> None:
+    """Record human evidence after Word/Outlook; never infer delivery from export.
+
+    ``SENT_CONFIRMED`` requires an operator-provided Outlook evidence note.
+    Exporting, previewing, or placing messages in an outbox only records the
+    corresponding non-delivery status.
+    """
+    allowed = {"EXPORTED_PREPARED", "MERGED_TO_OUTBOX", "SENT_CONFIRMED", "FAILED", "UNKNOWN"}
+    if status not in allowed or not evidence.strip() or not reviewer.strip():
+        raise ValueError("reconciliation requires a valid status, evidence, and reviewer")
+    from outreach_agent.research_lifecycle import init_registry, _connect
+    init_registry(Path(registry_db))
+    with _connect(Path(registry_db)) as db:
+        draft = db.execute("SELECT draft_id,invitation_id FROM email_drafts WHERE draft_id=?", (draft_id,)).fetchone()
+        if not draft:
+            raise KeyError(draft_id)
+        db.execute("""CREATE TABLE IF NOT EXISTS mail_merge_reconciliations(
+          reconciliation_id TEXT PRIMARY KEY,draft_id TEXT NOT NULL,status TEXT NOT NULL,
+          evidence TEXT NOT NULL,reviewer TEXT NOT NULL,created_at TEXT NOT NULL,
+          UNIQUE(draft_id,status,evidence)
+        )""")
+        reconciliation_id = "merge-reconcile-" + hashlib.sha256((draft_id + status + evidence).encode()).hexdigest()[:20]
+        db.execute("INSERT OR IGNORE INTO mail_merge_reconciliations VALUES (?,?,?,?,?,?)", (reconciliation_id, draft_id, status, evidence, reviewer, datetime.now(timezone.utc).isoformat()))
+        if status == "SENT_CONFIRMED":
+            db.execute("UPDATE questionnaire_invitations SET status='SENT' WHERE invitation_id=?", (draft["invitation_id"],))

@@ -48,3 +48,34 @@ def test_one_analysis_pass_persists_findings_and_draft_without_second_provider_c
         assert db.execute("select count(*) from email_drafts").fetchone()[0] == 1
     approve_email_batch([first["draft_id"]], "reviewer", path=path)
     assert get_record("company-combined-1", path)["email_drafts"][0]["approval_status"] == "APPROVED"
+
+
+def test_combined_invitation_uses_mail_merge_safe_subject_and_personalized_url(tmp_path, monkeypatch):
+    path = tmp_path / "registry.db"
+    profile = _profile()
+    profile["profile_id"] = "company-punctuation-1"
+    profile["identity"]["name"] = "Cedar Studio — Boston"
+    register_profile(profile, path)
+
+    monkeypatch.setattr(
+        "outreach_agent.combined_screening._fetch",
+        lambda *args, **kwargs: ([{
+            "url": "https://cedar.example/services",
+            "title": "Services",
+            "text": "Cedar Studio Boston offers design services and contact information.",
+        }], {"robots": "ALLOWED", "http_status": "200"}),
+    )
+    result = run_combined_analysis(
+        "company-punctuation-1",
+        mode="RULE_BASED",
+        recipient="hello@cedar.example",
+        secret="test-secret",
+        path=path,
+        base_url="https://research.example",
+    )
+    draft = get_record("company-punctuation-1", path)["email_drafts"][0]
+    assert result["status"] == "DRAFTED"
+    assert "—" not in draft["subject"]
+    assert "entry.1773870597=" in draft["body"]
+    assert "GEO-" in draft["body"]
+    assert "no email has been sent" not in draft["body"].casefold()

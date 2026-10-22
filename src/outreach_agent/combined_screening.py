@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from outreach_agent.preliminary_screening import ScreeningConfig, _fetch, _hash
+from outreach_agent.outreach_pipeline import mail_merge_safe_subject
 from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, get_record, now, persist_combined_screening_and_draft
 from outreach_agent.screening_provider import PROMPT_VERSION, call as call_ai, configured_provider
 
@@ -57,7 +58,7 @@ def _rule_based(*, name: str, industry: str | None, location: str | None, pages:
 def _invitation(*, name: str, industry: str | None, location: str | None, screening: dict[str, Any]) -> dict[str, str]:
     points = screening.get("talking_points") or [str(item.get("title")) for item in (screening.get("opportunities") or [])[:2]]
     observations = " ".join(str(item) for item in points[:2])
-    subject = f"Research invitation for {name}: improving how website information is found"
+    subject = mail_merge_safe_subject(f"Research invitation for {name}: improving how website information is found")
     body = (f"Hello,\n\nWe are inviting {name} to participate in a research study about how clear, factual website information can support answers to realistic customer questions.\n\n"
             f"In a preliminary review of your public website, we observed: {observations}. These are evidence-based research opportunities, not a claim about current AI rankings or a guarantee of improvement.\n\n"
             f"The study would consider public information about your {industry or 'business'} in {location or 'the United States'} and would require your explicit consent before any deeper GEO research or experiments.\n\n"

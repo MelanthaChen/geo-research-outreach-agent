@@ -127,6 +127,13 @@ def init_registry(path: Path = REGISTRY_DB) -> Path:
           provider TEXT NOT NULL, provider_enabled INTEGER NOT NULL, message_id TEXT, error TEXT, created_at TEXT NOT NULL,
           idempotency_key TEXT UNIQUE
         );
+        CREATE TABLE IF NOT EXISTS dispatch_attempts (
+          attempt_id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+          provider TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL, status TEXT NOT NULL, provider_message_id TEXT,
+          error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(draft_id, idempotency_key, attempt_number)
+        );
         CREATE TABLE IF NOT EXISTS suppressed_recipients (recipient TEXT PRIMARY KEY, reason TEXT NOT NULL, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS replies (
           reply_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, thread_id TEXT NOT NULL,
@@ -579,7 +586,7 @@ def record_simulated_send(draft_id: str, *, expected_preview_hash: str | None = 
         if prior:
             return prior["event_id"]
         event_id = "email-event-" + secrets.token_urlsafe(10)
-        db.execute("INSERT INTO email_events VALUES (?,?,?,?,?,?,?,?,?)", (event_id, draft_id, "SIMULATED_SEND", "disabled-provider", 0, None, "Production delivery is disabled", now(), key))
+        db.execute("INSERT INTO email_events(event_id,draft_id,event_type,provider,provider_enabled,message_id,error,created_at,idempotency_key) VALUES (?,?,?,?,?,?,?,?,?)", (event_id, draft_id, "SIMULATED_SEND", "disabled-provider", 0, None, "Production delivery is disabled", now(), key))
     return event_id
 
 

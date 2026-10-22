@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hmac
 import json
 import mimetypes
 import os
@@ -13,6 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from outreach_agent.dashboard_data import (
+    cloud_dashboard_snapshot,
     DEFAULT_DB,
     DEFAULT_DELIVERY,
     DEFAULT_VERIFICATION,
@@ -40,6 +43,7 @@ from outreach_agent.research_lifecycle import (
     get_record, ingest_reply, list_records, personalized_recruitment_draft,
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
+from outreach_agent.geo_engine_handoff import review_questionnaire_submission
 from outreach_agent.sender_accounts import add_account, disconnect, list_accounts, set_default
 from outreach_agent.combined_screening import run_combined_analysis
 from outreach_agent.research_lifecycle import edit_email_draft
@@ -74,8 +78,43 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.end_headers()
             self.wfile.write(body)
 
+        def _review_auth_ok(self) -> bool:
+            """Allow loopback review by default; require a bearer token if configured."""
+            expected = os.environ.get("OUTREACH_REVIEW_TOKEN", "")
+            if not expected and self.server.server_address[0] in {"127.0.0.1", "localhost", "::1"}:
+                return True
+            supplied = self.headers.get("Authorization", "")
+            if supplied.lower().startswith("bearer "):
+                supplied = supplied[7:].strip()
+            supplied = supplied or self.headers.get("X-Outreach-Review-Token", "")
+            return bool(expected) and hmac.compare_digest(supplied, expected)
+
+        def _dashboard_auth_ok(self) -> bool:
+            loopback = self.server.server_address[0] in {"127.0.0.1", "localhost", "::1"}
+            token = os.environ.get("OUTREACH_DASHBOARD_TOKEN") or os.environ.get("OUTREACH_REVIEW_TOKEN", "")
+            user = os.environ.get("OUTREACH_BASIC_AUTH_USER", "")
+            password = os.environ.get("OUTREACH_BASIC_AUTH_PASSWORD", "")
+            if loopback and not token and not (user and password):
+                return True
+            supplied = self.headers.get("Authorization", "")
+            if supplied.lower().startswith("bearer ") and token:
+                return hmac.compare_digest(supplied[7:].strip(), token)
+            if supplied.lower().startswith("basic ") and user and password:
+                try:
+                    decoded = base64.b64decode(supplied[6:].strip()).decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    return False
+                return hmac.compare_digest(decoded, f"{user}:{password}")
+            return False
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/health":
+                self._json({"status": "healthy", "service": "outreach-dashboard"})
+                return
+            if parsed.path.startswith("/api/") and not self._dashboard_auth_ok():
+                self._json({"error": "dashboard authentication required"}, 401)
+                return
             if parsed.path == "/api/test-email/config":
                 try:
                     self._json(load_test_email_settings())
@@ -336,6 +375,9 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self.path.startswith("/api/") and not self._dashboard_auth_ok():
+                self._json({"error": "dashboard authentication required"}, 401)
+                return
             try:
                 origin = self.headers.get("Origin")
                 fetch_site = self.headers.get("Sec-Fetch-Site", "same-origin")
@@ -404,6 +446,21 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if parsed.path == "/api/research/withdraw":
                     withdraw_consent(str(body["profile_id"]), reason=str(body.get("reason") or "withdrawn by participant"), path=REGISTRY_DB)
                     self._json({"status": "WITHDRAWN"})
+                    return
+                if parsed.path == "/api/research/consent-review":
+                    if not self._review_auth_ok():
+                        self._json({"error": "Consent review requires trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        return
+                    result = review_questionnaire_submission(
+                        str(body["submission_id"]), reviewer=str(body.get("reviewer") or ""),
+                        company_identity_verified=bool(body.get("company_identity_verified")),
+                        representative_authorized=bool(body.get("representative_authorized")),
+                        consent_version_verified=bool(body.get("consent_version_verified")),
+                        website_scope_verified=bool(body.get("website_scope_verified")),
+                        withdrawal_checked=bool(body.get("withdrawal_checked")),
+                        approve=bool(body.get("approve")), notes=str(body.get("notes") or ""), path=REGISTRY_DB,
+                    )
+                    self._json(result, 201 if result.get("status") == "HANDED_OFF" else 200)
                     return
                 if parsed.path == "/api/research/handoff":
                     handoff_id = create_geo_handoff(
@@ -632,13 +689,18 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
 def serve(host: str = "127.0.0.1", port: int = 8765, db: Path = DEFAULT_DB,
           verification: Path = DEFAULT_VERIFICATION, delivery: Path = DEFAULT_DELIVERY) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise ValueError("Professor dashboard may only bind to loopback")
-    data = load_dashboard_data(db, verification, delivery)
+        if os.environ.get("OUTREACH_ALLOW_REMOTE", "").casefold() not in {"1", "true", "yes"}:
+            raise ValueError("remote dashboard binding requires OUTREACH_ALLOW_REMOTE=true")
+        if not (os.environ.get("OUTREACH_DASHBOARD_TOKEN") or (os.environ.get("OUTREACH_BASIC_AUTH_USER") and os.environ.get("OUTREACH_BASIC_AUTH_PASSWORD"))):
+            raise ValueError("remote dashboard binding requires dashboard token or basic-auth credentials")
+    cloud_registry = os.environ.get("OUTREACH_DATABASE_URL")
+    data = cloud_dashboard_snapshot(cloud_registry) if cloud_registry else load_dashboard_data(db, verification, delivery)
     campaign_store = CampaignStore(DEFAULT_CAMPAIGN_DB)
     email_event_store = EmailEventStore()
     server = ThreadingHTTPServer((host, port), make_handler(data, campaign_store, email_event_store))
     print(f"GEO RESEARCH OUTREACH PLATFORM — LOCAL TEST TRANSPORT — http://127.0.0.1:{port}")
-    print(f"Loaded {data['summary']['total_companies']} companies read-only; test campaign events persist in {DEFAULT_CAMPAIGN_DB.name}. Ctrl+C stops the local dashboard.")
+    source_label = "OUTREACH_DATABASE_URL" if cloud_registry else DEFAULT_CAMPAIGN_DB.name
+    print(f"Loaded {data['summary']['total_companies']} research records read-only from {source_label}. Ctrl+C stops the local dashboard.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

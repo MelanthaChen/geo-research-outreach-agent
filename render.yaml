@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: geo-research-outreach
+    runtime: python
+    plan: starter
+    buildCommand: pip install '.[gmail,cloud]'
+    startCommand: python scripts/phase5b_dashboard.py --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: OUTREACH_ALLOW_REMOTE
+        value: "true"
+      - key: OUTREACH_DATABASE_URL
+        sync: false
+      - key: OUTREACH_DATABASE_MIGRATION_URL
+        sync: false
+      - key: GEO_ENGINE_API_URL
+        sync: false
+      - key: GEO_ENGINE_HANDOFF_TOKEN
+        sync: false
+      - key: OUTREACH_DASHBOARD_TOKEN
+        generateValue: true
+      - key: RESEARCH_QUESTIONNAIRE_SECRET
+        generateValue: true
+      - key: RESEARCH_QUESTIONNAIRE_BASE_URL
+        sync: false
+      - key: GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64
+        sync: false
+
+  - type: cron
+    name: geo-research-sheets-sync
+    runtime: python
+    plan: starter
+    schedule: "*/5 * * * *"
+    buildCommand: pip install '.[gmail,cloud]'
+    startCommand: python scripts/sync_google_form_responses.py --registry "$OUTREACH_DATABASE_URL"
+    autoDeploy: false
+    envVars:
+      - key: OUTREACH_DATABASE_URL
+        sync: false
+      - key: GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64
+        sync: false
+      - key: GEO_RESEARCH_SHEETS_RANGE
+        value: "Form Responses 1!A:Z"

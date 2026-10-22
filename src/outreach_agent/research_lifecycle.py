@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from outreach_agent.integration import CONTRACT_VERSION, PROFILE_VERSION, OWNER_CONTROLLED_TEST
+from outreach_agent.database import connect_database, is_postgres_target
 from outreach_agent.geographic_eligibility import classify_geography, is_us_eligible
 from outreach_agent.google_forms_integration import make_invitation_reference, prefilled_form_url
 from outreach_agent.google_forms_integration import parse_sheet_row
 
-REGISTRY_DB = Path("data/research_registry.db")
+REGISTRY_DB: Path | str = os.environ.get("OUTREACH_DATABASE_URL", Path("data/research_registry.db"))
 CONSENTED = "CONSENTED"
 CONSENT_VERSION = "geo-research-consent/v1"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -64,14 +65,16 @@ def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _connect(path: Path) -> sqlite3.Connection:
-    db = sqlite3.connect(path)
-    db.row_factory = sqlite3.Row
+def _connect(path: Path | str):
+    db = connect_database(path)
+    if not is_postgres_target(path):
+        db.row_factory = sqlite3.Row
     return db
 
 
-def init_registry(path: Path = REGISTRY_DB) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
+    if not is_postgres_target(path):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(path) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS research_records (
@@ -145,6 +148,24 @@ def init_registry(path: Path = REGISTRY_DB) -> Path:
           contract_version TEXT NOT NULL, consent_submission_id TEXT NOT NULL, scope_json TEXT NOT NULL,
           status TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(profile_id, profile_version)
         );
+        CREATE TABLE IF NOT EXISTS consent_reviews (
+          review_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+          decision TEXT NOT NULL, reviewer TEXT NOT NULL,
+          company_identity_verified INTEGER NOT NULL, representative_authorized INTEGER NOT NULL,
+          consent_version_verified INTEGER NOT NULL, website_scope_verified INTEGER NOT NULL,
+          withdrawal_checked INTEGER NOT NULL, notes TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS questionnaire_conflicts (
+          conflict_id TEXT PRIMARY KEY, invitation_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+          first_submission_id TEXT NOT NULL, conflicting_submission_id TEXT NOT NULL,
+          reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'QUARANTINED',
+          created_at TEXT NOT NULL, resolved_at TEXT, resolved_by TEXT
+        );
+        CREATE TABLE IF NOT EXISTS geo_handoff_attempts (
+          attempt_id TEXT PRIMARY KEY, handoff_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+          submission_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, status TEXT NOT NULL,
+          property_id INTEGER, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS research_filter_idx ON research_records(profile_type, recruitment_status, consent_status, geo_research_status);
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(questionnaire_submissions)")}
@@ -200,6 +221,15 @@ def init_registry(path: Path = REGISTRY_DB) -> Path:
         for name, definition in {"subject": "TEXT NOT NULL DEFAULT ''", "analysis_id": "TEXT", "invitation_id": "TEXT"}.items():
             if name not in draft_columns:
                 db.execute(f"ALTER TABLE email_drafts ADD COLUMN {name} {definition}")
+        record_columns = {row[1] for row in db.execute("PRAGMA table_info(research_records)")}
+        if "geo_integration_status" not in record_columns:
+            db.execute("ALTER TABLE research_records ADD COLUMN geo_integration_status TEXT NOT NULL DEFAULT 'NOT_STARTED'")
+        if "geo_integration_error" not in record_columns:
+            db.execute("ALTER TABLE research_records ADD COLUMN geo_integration_error TEXT")
+        handoff_columns = {row[1] for row in db.execute("PRAGMA table_info(geo_handoffs)")}
+        for name, definition in {"property_id": "INTEGER", "attempt_count": "INTEGER NOT NULL DEFAULT 0", "last_error": "TEXT", "updated_at": "TEXT"}.items():
+            if name not in handoff_columns:
+                db.execute(f"ALTER TABLE geo_handoffs ADD COLUMN {name} {definition}")
     return path
 
 
@@ -321,14 +351,16 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
         duplicate = db.execute("SELECT submission_id FROM questionnaire_submissions WHERE invitation_id=? AND response_hash=?", (invitation["invitation_id"], response_hash)).fetchone()
         if duplicate:
             return "DUPLICATE"
+        prior_submission = db.execute("SELECT submission_id FROM questionnaire_submissions WHERE invitation_id=? ORDER BY submitted_at LIMIT 1", (invitation["invitation_id"],)).fetchone()
         allowed_emails = {str(invitation_email[0]).casefold() for invitation_email in db.execute("SELECT recipient FROM email_drafts WHERE invitation_id=?", (invitation["invitation_id"],)).fetchall()}
         invitation_email_matches = parsed.contact_email.casefold() in allowed_emails if parsed.contact_email else False
         interest = parsed.research_interest
         authorization = parsed.research_authorization
         valid_pair = interest in {"YES", "NO"} and authorization in {"YES", "NO"}
-        if not valid_pair or not parsed.representative_name or not parsed.representative_role or not parsed.contact_email:
+        conflicting = prior_submission is not None
+        if conflicting or not valid_pair or not parsed.representative_name or not parsed.representative_role or not parsed.contact_email:
             outcome = "NEEDS_REVIEW"
-            review = "NEEDS_REVIEW"
+            review = "CONFLICT_QUARANTINED" if conflicting else "NEEDS_REVIEW"
         elif interest == "YES" and authorization == "YES":
             outcome = "NEEDS_REVIEW"
             review = "NEEDS_REVIEW"
@@ -349,8 +381,13 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
            site_modification_authorized,future_contact_permission,consent_wording_version,submitted_at,review_status,response_source,invitation_reference,
            research_interest,research_authorization,representative_full_name,representative_job_title,identity_review_status)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, 0, 0, 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, identity_review))
+        if conflicting:
+            conflict_id = "conflict-" + _hash(invitation["invitation_id"] + response_hash)[:20]
+            db.execute("""INSERT INTO questionnaire_conflicts
+              (conflict_id,invitation_id,profile_id,first_submission_id,conflicting_submission_id,reason,status,created_at)
+              VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (conflict_id) DO NOTHING""", (conflict_id, invitation["invitation_id"], invitation["profile_id"], prior_submission["submission_id"], submission_id, "multiple distinct responses for one invitation", "QUARANTINED", now()))
         db.execute("UPDATE questionnaire_invitations SET status='RESPONDED' WHERE invitation_id=?", (invitation["invitation_id"],))
-        db.execute("UPDATE research_records SET questionnaire_status='RESPONDED',consent_status=?,recruitment_status=?,updated_at=? WHERE profile_id=?", (outcome, "DECLINED" if outcome == "DECLINED" else "RESPONDED", now(), invitation["profile_id"]))
+        db.execute("UPDATE research_records SET questionnaire_status='RESPONDED',consent_status=?,recruitment_status=?,geo_research_status='PENDING_REVIEW',geo_integration_status=CASE WHEN ? THEN 'BLOCKED_CONFLICT' ELSE geo_integration_status END,updated_at=? WHERE profile_id=?", (outcome, "DECLINED" if outcome == "DECLINED" else "RESPONDED", int(conflicting), now(), invitation["profile_id"]))
     return outcome if outcome in {"DECLINED", "INTERESTED_NOT_AUTHORIZED"} else "NEEDS_REVIEW"
 
 
@@ -372,8 +409,11 @@ def get_record(profile_id: str, path: Path = REGISTRY_DB) -> dict[str, Any]:
         result = dict(record)
         result["screenings"] = [dict(row) for row in db.execute("SELECT * FROM screenings WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
         result["analysis_results"] = [dict(row) for row in db.execute("SELECT * FROM screening_analysis_results WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
-        result["email_drafts"] = [dict(row) for row in db.execute("SELECT * FROM email_drafts WHERE profile_id=? ORDER BY rowid DESC", (profile_id,))]
+        result["email_drafts"] = [dict(row) for row in db.execute("SELECT * FROM email_drafts WHERE profile_id=? ORDER BY draft_id DESC", (profile_id,))]
         result["handoffs"] = [dict(row) for row in db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
+        result["questionnaire_submissions"] = [dict(row) for row in db.execute("SELECT * FROM questionnaire_submissions WHERE invitation_id IN (SELECT invitation_id FROM questionnaire_invitations WHERE profile_id=?) ORDER BY submitted_at DESC", (profile_id,))]
+        result["questionnaire_conflicts"] = [dict(row) for row in db.execute("SELECT * FROM questionnaire_conflicts WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
+        result["consent_reviews"] = [dict(row) for row in db.execute("SELECT * FROM consent_reviews WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
         result["contact_channels"] = json.loads(result["contact_channels_json"] or "[]")
         return result
 
@@ -420,10 +460,10 @@ def ingest_reply(*, profile_id: str, thread_id: str, message_id: str, sender: st
     reply_id = "reply-" + _hash(message_id)[:16]
     classification = classify_reply(text)
     with _connect(path) as db:
-        db.execute("""INSERT OR IGNORE INTO replies(reply_id,profile_id,thread_id,sender,classification,classification_source,review_status,original_reference,created_at)
-          VALUES (?,?,?,?,?,?,?,?,?)""", (reply_id, profile_id, thread_id, sender, classification, "RULE_ADVISORY", review, message_id, now()))
+        db.execute("""INSERT INTO replies(reply_id,profile_id,thread_id,sender,classification,classification_source,review_status,original_reference,created_at)
+          VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT (reply_id) DO NOTHING""", (reply_id, profile_id, thread_id, sender, classification, "RULE_ADVISORY", review, message_id, now()))
         if classification == "UNSUBSCRIBE":
-            db.execute("INSERT OR REPLACE INTO suppressed_recipients VALUES (?,?,?)", (address, "reply_unsubscribe", now()))
+            db.execute("INSERT INTO suppressed_recipients VALUES (?,?,?) ON CONFLICT (recipient) DO UPDATE SET reason=EXCLUDED.reason,created_at=EXCLUDED.created_at", (address, "reply_unsubscribe", now()))
     return reply_id
 
 
@@ -434,6 +474,8 @@ def create_geo_handoff(profile_id: str, submission_id: str, *, scope: dict[str, 
         submission = db.execute("SELECT * FROM questionnaire_submissions WHERE submission_id=?", (submission_id,)).fetchone()
         if not row or row["consent_status"] != CONSENTED or not submission or submission["consent_status"] != CONSENTED or not submission["website_analysis_allowed"]:
             raise PermissionError("GEO handoff requires explicit website-analysis consent")
+        if submission["response_source"] == "GOOGLE_SHEETS" and submission["review_status"] != "APPROVED":
+            raise PermissionError("Google Sheets responses require an explicitly approved consent review")
         if row["profile_type"] != "owner_controlled_test" and not is_us_eligible(row["geographic_classification"]):
             raise PermissionError("GEO handoff requires VERIFIED_US geographic eligibility")
         if row["profile_type"] == "owner_controlled_test" and scope.get("fixture_protocol") != "OWNER_CONTROLLED_TEST_LOCAL_ONLY":
@@ -442,7 +484,7 @@ def create_geo_handoff(profile_id: str, submission_id: str, *, scope: dict[str, 
         if existing:
             return existing["handoff_id"]
         handoff_id = "handoff-" + secrets.token_urlsafe(10)
-        db.execute("INSERT INTO geo_handoffs VALUES (?,?,?,?,?,?,?,?)", (handoff_id, profile_id, row["profile_version"], CONTRACT_VERSION, submission_id, json.dumps(scope, sort_keys=True), "PENDING", now()))
+        db.execute("INSERT INTO geo_handoffs(handoff_id,profile_id,profile_version,contract_version,consent_submission_id,scope_json,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)", (handoff_id, profile_id, row["profile_version"], CONTRACT_VERSION, submission_id, json.dumps(scope, sort_keys=True), "PENDING", now(), now()))
         db.execute("UPDATE research_records SET consent_status='CONSENTED',geo_research_status='QUEUED',updated_at=? WHERE profile_id=?", (now(), profile_id))
     return handoff_id
 
@@ -529,7 +571,7 @@ def persist_combined_screening_and_draft(profile_id: str, *, result: dict[str, A
                 return {"analysis_id": prior["analysis_id"], "draft_id": existing["draft_id"], "invitation_id": existing["invitation_id"] or "", "invitation_reference": reference_row["invitation_reference"] if reference_row else "", "questionnaire_url": link_match.group(0).rstrip(")") if link_match else "", "status": "IDEMPOTENT_EXISTING"}
         db.execute("INSERT INTO screening_analysis_results(analysis_id,profile_id,profile_version,mode,content_hash,result_json,input_tokens,output_tokens,estimated_cost_usd,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (analysis_id, profile_id, record["profile_version"], str(result.get("mode", "RULE_BASED")), content_hash, result_text, int(result.get("input_tokens", 0)), int(result.get("output_tokens", 0)), float(result.get("estimated_cost_usd", 0)), now()))
         screening_id = "screening-" + _hash(analysis_id)[:20]
-        db.execute("INSERT OR IGNORE INTO screenings VALUES (?,?,?,?,?,?,?,?,?,?,?)", (screening_id, profile_id, record["profile_version"], "PRELIMINARY_UNVALIDATED", json.dumps(screening, sort_keys=True), json.dumps(result.get("evidence") or [], sort_keys=True), str(result.get("provider") or result.get("mode") or "RULE_BASED"), result.get("model"), result.get("prompt_version"), "combined-screening-and-draft/v1", now()))
+        db.execute("INSERT INTO screenings VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (screening_id) DO NOTHING", (screening_id, profile_id, record["profile_version"], "PRELIMINARY_UNVALIDATED", json.dumps(screening, sort_keys=True), json.dumps(result.get("evidence") or [], sort_keys=True), str(result.get("provider") or result.get("mode") or "RULE_BASED"), result.get("model"), result.get("prompt_version"), "combined-screening-and-draft/v1", now()))
         invitation_reference = make_invitation_reference(profile_id, nonce=invitation_id)
         db.execute("INSERT INTO questionnaire_invitations(invitation_id,profile_id,invitation_reference,token_hash,token_expires_at,status,created_at) VALUES (?,?,?,?,?,?,?)", (invitation_id, profile_id, invitation_reference, token_hash, expires_at, "DRAFTED", now()))
         subject = str(result.get("invitation", {}).get("subject") or f"Research invitation for {record['name']}")
@@ -568,7 +610,7 @@ def suppress_recipient(recipient: str, *, reason: str = "unsubscribe", path: Pat
         raise ValueError("recipient must be a valid email address")
     init_registry(path)
     with _connect(path) as db:
-        db.execute("INSERT OR REPLACE INTO suppressed_recipients VALUES (?,?,?)", (recipient.casefold(), reason, now()))
+        db.execute("INSERT INTO suppressed_recipients VALUES (?,?,?) ON CONFLICT (recipient) DO UPDATE SET reason=EXCLUDED.reason,created_at=EXCLUDED.created_at", (recipient.casefold(), reason, now()))
 
 
 def record_simulated_send(draft_id: str, *, expected_preview_hash: str | None = None, idempotency_key: str | None = None, path: Path = REGISTRY_DB) -> str:

@@ -42,6 +42,27 @@ HOTEL_CANDIDATE_DB = ROOT / "data/hotel_candidates.db"
 RESEARCH_REGISTRY_DB = ROOT / "data/research_registry.db"
 
 
+def cloud_dashboard_snapshot(registry: str | Path) -> dict[str, Any]:
+    """Return the non-SQLite dashboard shell used when running in Render.
+
+    The Research Queue endpoints query ``registry`` directly.  The legacy
+    Phase 5 company view is intentionally empty in cloud mode so the service
+    cannot silently fall back to bundled SQLite files.
+    """
+    from outreach_agent.research_lifecycle import list_records
+
+    total = list_records(registry, limit=1, offset=0)["total"]
+    return {
+        "summary": {"total_companies": total, "cloud_registry": True},
+        "companies": [],
+        "details": {},
+        "channel_presence": {},
+        "filters": {"sources": [], "website_verification": [], "eligibility": [], "geo_opportunity": [], "research_priority": [], "contact_channel": []},
+        "simulated_signup_url": DEMO_PARTICIPATION_FORM_URL,
+        "participation_form_configuration": {},
+    }
+
+
 def _hotel_candidate_summary(path: Path = HOTEL_CANDIDATE_DB) -> dict[str, int]:
     """Read the separate hotel-property pipeline without creating or migrating its DB."""
     empty = {"properties": 0, "processed": 0, "verified": 0, "geo_eligible": 0,

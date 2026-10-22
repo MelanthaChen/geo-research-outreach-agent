@@ -354,13 +354,44 @@ def run_hotel_batch(limit: int = 25, *, database: Path = HOTEL_DB, request_budge
 
 
 def select_hotel_pilot(database: Path = HOTEL_DB, limit: int = 25) -> list[str]:
-    """Choose a deterministic, domain-diverse sample balanced by chain signal."""
+    """Choose a deterministic, domain-diverse sample, suppressing denied domains.
+
+    A 403/429 or robots denial is domain-scoped evidence: querying another hotel
+    property on that same host is unlikely to improve identity evidence and can
+    aggravate site-side rate limits. Such domains remain in the candidate pool
+    and review exports, but are not automatically retried by this worker.
+    """
     with sqlite3.connect(f"file:{database.resolve()}?mode=ro", uri=True) as db:
         db.row_factory = sqlite3.Row
+        blocked_rows = [dict(row) for row in db.execute(
+            """SELECT canonical_domain,evidence_json FROM candidates
+               WHERE verification_status IN ('ACCESS_BLOCKED','ROBOTS_DENIED')""")]
         rows = [dict(row) for row in db.execute(
             """SELECT candidate_id,canonical_domain,location,chain_status FROM candidates
                WHERE verification_status='DISCOVERED_UNVERIFIED'
                ORDER BY location COLLATE NOCASE,candidate_id""")]
+    denied_hosts: set[str] = set()
+    for row in blocked_rows:
+        domain = str(row.get("canonical_domain") or "").casefold().rstrip(".")
+        if domain:
+            denied_hosts.add(domain)
+        try:
+            evidence = json.loads(row.get("evidence_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            evidence = {}
+        for page in evidence.get("pages", []) if isinstance(evidence, dict) else []:
+            final_url = page.get("final_url") if isinstance(page, dict) else ""
+            if final_url:
+                try:
+                    denied_hosts.add(normalize_domain(final_url))
+                except ValueError:
+                    continue
+
+    def host_is_denied(host: str) -> bool:
+        host = str(host or "").casefold().rstrip(".")
+        return bool(host) and any(host == denied or host.endswith("." + denied) for denied in denied_hosts)
+
+    rows = [row for row in rows if not host_is_denied(row["canonical_domain"])]
     buckets = {
         value: [row for row in rows if row["chain_status"] == value]
         for value in ("CHAIN_INDICATED", "INDEPENDENT_OR_UNKNOWN")
@@ -368,7 +399,11 @@ def select_hotel_pilot(database: Path = HOTEL_DB, limit: int = 25) -> list[str]:
     selected: list[str] = []
     domains: set[str] = set()
     while len(selected) < limit and any(buckets.values()):
-        for value in ("INDEPENDENT_OR_UNKNOWN", "CHAIN_INDICATED"):
+        # Independent/unknown properties verified at 3.5x the chain-indicated
+        # rate in the first 1,000 inspections (38.9% vs 11.2%). Preserve some
+        # chain representation while allocating three slots per independent.
+        for value in ("INDEPENDENT_OR_UNKNOWN", "INDEPENDENT_OR_UNKNOWN",
+                      "INDEPENDENT_OR_UNKNOWN", "CHAIN_INDICATED"):
             while buckets[value]:
                 row = buckets[value].pop(0)
                 domain = row["canonical_domain"]

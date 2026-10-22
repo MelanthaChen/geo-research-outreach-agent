@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import sqlite3
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from outreach_agent.dashboard_data import (
     DEFAULT_DB,
@@ -33,6 +35,15 @@ from outreach_agent.phase6f import PHASE6F_DB, dashboard_overlays as phase6f_ove
 from outreach_agent.phase6g import REVIEW_DB as PHASE6G_REVIEW_DB, review_rows as phase6g_review_rows, csv_text as phase6g_csv_text, record_channel_decision as phase6g_record_channel_decision, record_company_review as phase6g_record_company_review
 from outreach_agent.phase6h import PHASE6H_DB, dashboard_summary as phase6h_summary, dashboard_overlays as phase6h_overlays
 from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
+from outreach_agent.research_lifecycle import (
+    REGISTRY_DB, approve_email_batch, create_questionnaire_invitation, get_invitation_reference, create_geo_handoff, export_records_csv,
+    get_record, ingest_reply, list_records, personalized_recruitment_draft,
+    questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
+)
+from outreach_agent.sender_accounts import add_account, disconnect, list_accounts, set_default
+from outreach_agent.combined_screening import run_combined_analysis
+from outreach_agent.research_lifecycle import edit_email_draft
+from outreach_agent.google_forms_integration import prefilled_form_url, sync_sheet_rows
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -71,6 +82,9 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 except (OSError, ValueError) as exc:
                     self._json({"error": f"Test email configuration is invalid: {exc}"}, 503)
                 return
+            if parsed.path == "/api/sender-accounts":
+                self._json({"accounts": list_accounts(REGISTRY_DB), "production_oauth": False, "status": "CONFIGURATION_ONLY"})
+                return
             if parsed.path == "/api/test-email/events":
                 events = email_event_store.recent() if email_event_store else []
                 self._json({"events": events})
@@ -85,7 +99,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 return
             if parsed.path == "/api/companies/export.csv":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
-                filters = {key: value for key, value in params.items() if key in {"q", "source", "verification", "eligibility", "geo", "priority", "channel"}}
+                filters = {key: value for key, value in params.items() if key in {"q", "source", "verification", "eligibility", "geo", "priority", "channel", "geographic_status"}}
                 self._csv(export_companies_csv(data, filters, campaign_store), "companies.csv")
                 return
             smb_exports = {
@@ -250,6 +264,32 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 companies = companies[(page - 1) * page_size:page * page_size]
                 self._json({"companies": companies, "total": total, "page": page, "page_size": page_size})
                 return
+            if parsed.path in {"/api/research/records", "/api/research/records.csv"}:
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                filters = {key: params[key] for key in ("q", "profile_type", "consent_status", "identity_status", "contact_status", "screening_status", "recruitment_status", "geo_status", "geographic_status", "industry", "location", "sort") if key in params}
+                try:
+                    if parsed.path.endswith(".csv"):
+                        self._csv(export_records_csv(REGISTRY_DB, **filters), "research_registry.csv")
+                    else:
+                        page = max(1, int(params.get("page", "1")))
+                        page_size = max(1, min(100, int(params.get("page_size", "50"))))
+                        self._json(list_records(REGISTRY_DB, **filters, limit=page_size, offset=(page - 1) * page_size) | {"page": page, "page_size": page_size})
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    self._json({"error": str(exc)}, 400)
+                return
+            if parsed.path.startswith("/api/research/records/"):
+                profile_id = unquote(parsed.path.rsplit("/", 1)[-1])
+                try:
+                    self._json(get_record(profile_id, REGISTRY_DB))
+                except KeyError:
+                    self._json({"error": "Research record not found"}, 404)
+                return
+            if parsed.path == "/questionnaire":
+                token = parse_qs(parsed.query).get("token", [""])[0]
+                body = f"""<!doctype html><html><head><meta charset='utf-8'><title>GEO Research Questionnaire</title></head><body><main><h1>GEO research questionnaire</h1><p>Review the consent choices carefully. Website modification authorization is separate and is not requested here.</p><form method='post' action='/api/questionnaire'><input type='hidden' name='token' value='{escape(token)}'><label>Company identity confirmed <input type='checkbox' name='company_identity_confirmed' value='1' required></label><br><label>Respondent name <input name='respondent_name' required></label><br><label>Respondent role <input name='respondent_role' required></label><br><label>Contact email <input type='email' name='contact_email' required></label><br><label>Participate in research <select name='agree_research'><option value='true'>Yes</option><option value='false'>No</option></select></label><br><label>Permit public website analysis <input type='checkbox' name='website_analysis_allowed' value='1'></label><br><label>Receive recommendations <input type='checkbox' name='recommendations_requested' value='1'></label><br><label>Allow ongoing measurement <input type='checkbox' name='ongoing_measurement_allowed' value='1'></label><br><label>Optional future contact <input type='checkbox' name='future_contact_permission' value='1'></label><br><input type='hidden' name='consent_wording_version' value='geo-research-consent/v1'><button type='submit'>Submit questionnaire</button></form></main></body></html>"""
+                payload = body.encode("utf-8")
+                self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(payload))); self.send_header("X-Content-Type-Options", "nosniff"); self.end_headers(); self.wfile.write(payload)
+                return
             if parsed.path == "/api/company-ids":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
                 rows = filter_companies(data, params)
@@ -306,10 +346,74 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if length < 1 or length > 128_000:
                     self._json({"error": "Request body must be between 1 and 128000 bytes"}, 400)
                     return
-                body = json.loads(self.rfile.read(length))
+                raw_body = self.rfile.read(length)
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/x-www-form-urlencoded":
+                    body = {key: values[-1] for key, values in parse_qs(raw_body.decode("utf-8"), keep_blank_values=True).items()}
+                else:
+                    body = json.loads(raw_body)
                 if not isinstance(body, dict):
                     raise ValueError("JSON object required")
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/questionnaire":
+                    token = str(body.get("token") or "")
+                    response = dict(body); response.pop("token", None)
+                    response["agree_research"] = str(response.get("agree_research", "")).lower() == "true"
+                    secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
+                    if not secret:
+                        self._json({"error": "Questionnaire ingestion is disabled until RESEARCH_QUESTIONNAIRE_SECRET is configured"}, 503)
+                        return
+                    result = submit_questionnaire(token, secret=secret, response=response, path=REGISTRY_DB)
+                    self._json({"submission_id": result, "status": "RECEIVED_FOR_REVIEW"}, 202)
+                    return
+                if parsed.path == "/api/recruitment/draft":
+                    draft_id = personalized_recruitment_draft(str(body["profile_id"]), recipient=str(body["recipient"]), questionnaire_url=str(body["questionnaire_url"]), path=REGISTRY_DB)
+                    self._json({"draft_id": draft_id, "status": "PENDING_APPROVAL"}, 201)
+                    return
+                if parsed.path == "/api/recruitment/screen-and-draft":
+                    secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
+                    if not secret:
+                        self._json({"error": "Combined screening and invitation drafting requires RESEARCH_QUESTIONNAIRE_SECRET"}, 503)
+                        return
+                    result = run_combined_analysis(str(body["profile_id"]), mode=str(body.get("mode") or "RULE_BASED"), recipient=str(body["recipient"]), secret=secret, path=REGISTRY_DB, base_url=os.environ.get("RESEARCH_QUESTIONNAIRE_BASE_URL"), force_refetch=bool(body.get("force_refetch", False)))
+                    self._json({"analysis_id": result["analysis_id"], "draft_id": result["draft_id"], "invitation_id": result["invitation_id"], "status": result["status"], "mode": result["mode"]}, 201)
+                    return
+                if parsed.path.startswith("/api/recruitment/draft/") and parsed.path.endswith("/edit"):
+                    draft_id = unquote(parsed.path.split("/")[-2])
+                    edit_email_draft(draft_id, body=str(body.get("body") or ""), subject=body.get("subject"), path=REGISTRY_DB)
+                    self._json({"draft_id": draft_id, "status": "PENDING_APPROVAL"})
+                    return
+                if parsed.path == "/api/recruitment/invite":
+                    secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
+                    if not secret:
+                        self._json({"error": "Questionnaire invitations are disabled until RESEARCH_QUESTIONNAIRE_SECRET is configured"}, 503)
+                        return
+                    invitation_id, token = create_questionnaire_invitation(str(body["profile_id"]), secret=secret, path=REGISTRY_DB, expires_at=body.get("expires_at"))
+                    reference = get_invitation_reference(invitation_id, path=REGISTRY_DB)
+                    self._json({"invitation_id": invitation_id, "invitation_reference": reference, "questionnaire_url": prefilled_form_url(reference), "status": "INVITED"}, 201)
+                    return
+                if parsed.path == "/api/recruitment/approve-batch":
+                    self._json(approve_email_batch(list(body.get("draft_ids") or []), str(body.get("reviewer") or ""), path=REGISTRY_DB))
+                    return
+                if parsed.path == "/api/recruitment/send-simulated":
+                    self._json(record_simulated_send_batch(list(body.get("draft_ids") or []), path=REGISTRY_DB))
+                    return
+                if parsed.path == "/api/recruitment/replies":
+                    reply_id = ingest_reply(profile_id=str(body["profile_id"]), thread_id=str(body["thread_id"]), message_id=str(body["message_id"]), sender=str(body["sender"]), text=str(body.get("text") or ""), verified_sender=bool(body.get("verified_sender")), path=REGISTRY_DB)
+                    self._json({"reply_id": reply_id, "status": "RECORDED_FOR_REVIEW"}, 202)
+                    return
+                if parsed.path == "/api/research/withdraw":
+                    withdraw_consent(str(body["profile_id"]), reason=str(body.get("reason") or "withdrawn by participant"), path=REGISTRY_DB)
+                    self._json({"status": "WITHDRAWN"})
+                    return
+                if parsed.path == "/api/research/handoff":
+                    handoff_id = create_geo_handoff(
+                        str(body["profile_id"]),
+                        str(body["submission_id"]),
+                        scope=dict(body.get("scope") or {}),
+                        path=REGISTRY_DB,
+                    )
+                    self._json({"handoff_id": handoff_id, "status": "READY"}, 201)
+                    return
                 if parsed.path == "/api/phase6g/review/channel":
                     phase6g_record_channel_decision(str(body.get("candidate_id") or ""), str(body.get("channel_key") or ""),
                                                    str(body.get("decision") or ""), str(body.get("note") or ""),
@@ -435,6 +539,22 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         self._json({"error": f"Google authorization did not complete ({type(exc).__name__}); no credential was saved.", "authenticated": False}, 502)
                         return
                     self._json(result)
+                    return
+                if parsed.path == "/api/sender-accounts":
+                    account = add_account(str(body.get("email") or ""), display_name=str(body.get("display_name") or ""), provider=str(body.get("provider") or "GMAIL"), reply_to=str(body.get("reply_to") or ""), signature=str(body.get("signature") or ""), path=REGISTRY_DB)
+                    self._json({"account": account, "status": "NOT_CONNECTED", "message": "Account saved. OAuth connection requires configured Google credentials; no sender was connected."}, 201)
+                    return
+                if parsed.path.startswith("/api/sender-accounts/"):
+                    account_id = unquote(parsed.path.rsplit("/", 1)[-1])
+                    action = str(body.get("action") or "")
+                    if action == "set-default":
+                        self._json({"account": set_default(account_id, path=REGISTRY_DB), "status": "DEFAULT_SELECTED"})
+                    elif action == "disconnect":
+                        self._json({"account": disconnect(account_id, path=REGISTRY_DB), "status": "DISCONNECTED"})
+                    elif action == "connect":
+                        self._json({"status": "NOT_CONNECTED", "error": "Production OAuth is not configured; no credential was requested or saved."}, 503)
+                    else:
+                        self._json({"error": "Unknown sender account action"}, 400)
                     return
                 if campaign_store is None:
                     self._json({"error": "Campaign persistence is not enabled"}, 405)

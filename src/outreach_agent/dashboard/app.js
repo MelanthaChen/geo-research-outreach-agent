@@ -214,6 +214,11 @@ function renderTestEmailSettings(){
   loadTestEmailPreview().catch(showError);
   loadTestEmailEvents().catch(showError);
 }
+async function loadSenderAccounts(){
+  const result=await api("/api/sender-accounts");
+  $("sender-accounts").innerHTML=(result.accounts||[]).map(account=>`<div class="setting-item"><span>${esc(account.email)} · ${esc(account.provider)}${Number(account.is_default)?" · DEFAULT":""}</span><strong>${esc(account.connection_status)} · Reply sync ${esc(account.reply_sync_status)} <button class="button outline" data-sender-action="${esc(account.account_id)}" data-action="connect">Connect</button>${account.connection_status==="CONNECTED"?`<button class="button outline" data-sender-action="${esc(account.account_id)}" data-action="set-default">Set default</button>`:""}<button class="button outline" data-sender-action="${esc(account.account_id)}" data-action="disconnect">Disconnect</button></strong></div>`).join("")||"<p class='section-help'>No recruitment sender accounts configured.</p>";
+  $("sender-accounts").querySelectorAll("[data-sender-action]").forEach(button=>button.addEventListener("click",async()=>{try{const result=await apiWrite(`/api/sender-accounts/${encodeURIComponent(button.dataset.senderAction)}`,{action:button.dataset.action});$("sender-account-status").textContent=result.message||result.status||"Saved";await loadSenderAccounts();}catch(error){$("sender-account-status").textContent=error.message;}}));
+}
 async function loadTestEmailPreview(){
   const recipient=$("test-email-recipient").value;
   if(!recipient)return;
@@ -595,7 +600,12 @@ async function runCampaignAction(campaignId, action) {
   await loadCampaignWorkspace(); await showCampaign(campaignId);
 }
 function showError(error) { const host = $("app-error"); host.hidden = false; host.textContent = `Unable to load this view: ${error.message}`; }
-const pages = ["overview","companies","campaigns","interest-form","responses","analytics","settings"];
+const researchState={page:1,pageSize:25,selected:new Set(),total:0,filters:{}};
+async function reloadResearchQueue(){const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...researchState.filters});const result=await api(`/api/research/records?${query}`);researchState.total=result.total;const host=$("research-table");host.innerHTML=result.records.length?result.records.map(row=>`<article class="company-row ${researchState.selected.has(row.profile_id)?"selected":""}"><input type="checkbox" data-research-select="${esc(row.profile_id)}" ${researchState.selected.has(row.profile_id)?"checked":""}><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Consent</span>${pill(row.consent_status)}</span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.geo_research_status)}</small></button></article>`).join(""):`<div class="no-results">No research records match these filters.</div>`;host.querySelectorAll("[data-research-select]").forEach(box=>box.addEventListener("change",()=>{box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);updateResearchSelection();}));host.querySelectorAll("[data-research-detail]").forEach(button=>button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError)));$("research-page").textContent=`Page ${result.page} of ${Math.max(1,Math.ceil(result.total/result.page_size))} · ${result.total} records`;$("research-prev").disabled=result.page<=1;$("research-next").disabled=result.page>=Math.max(1,Math.ceil(result.total/result.page_size));updateResearchSelection();}
+function updateResearchSelection(){$("research-selected-count").textContent=`${researchState.selected.size} selected`;}
+async function loadResearchDetail(profileId){const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);$("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Screening evidence</h4>${listItems((row.screenings||[]).map(item=>JSON.parse(item.evidence_json||"[]")),"No screening evidence recorded.")}</div><div class="subsection"><h4>Drafts</h4>${listItems((row.email_drafts||[]).map(item=>`${item.draft_id} · ${item.approval_status} · ${item.recipient}`),"No recruitment drafts.")}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>`;}
+async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
+const pages = ["overview","companies","research-queue","campaigns","interest-form","responses","analytics","settings"];
 function navigate() {
   const requested = location.hash.slice(1) || "overview";
   const page = pages.includes(requested) ? requested : "overview";
@@ -603,6 +613,7 @@ function navigate() {
   document.querySelectorAll("[data-page]").forEach((link)=>{const active=link.dataset.page===page;link.classList.toggle("active",active);if(active)link.setAttribute("aria-current","page");else link.removeAttribute("aria-current");});
   document.title = `${page.replaceAll("-"," ").replace(/\b\w/g,(c)=>c.toUpperCase())} · GEO Research Outreach Platform`;
   if(page==="responses") renderResponsesFromApi().catch(showError);
+  if(page==="research-queue") reloadResearchQueue().catch(showError);
   if(page==="interest-form") renderFormTokens(state.campaignSummaries).catch(showError);
 }
 async function start() {
@@ -612,6 +623,7 @@ async function start() {
   state.summary = result.summary; state.participationFormUrl = result.simulated_signup_url || "https://research.example.invalid/participation-interest";
   state.formConfiguration = result.participation_form_configuration || {};
   renderSettings(state.formConfiguration);
+  loadSenderAccounts().catch(showError);
   renderSummary({...result.summary, filters: result.filters});
   await reloadCompanies();
   await loadCampaignWorkspace();
@@ -656,5 +668,15 @@ $("connect-gmail").addEventListener("click",async()=>{
   }catch(error){$("gmail-connection-status").textContent=error.message;}
   finally{$("connect-gmail").disabled=!state.emailConfiguration?.oauth_client_configured;}
 });
+$("add-sender-account").addEventListener("click",async()=>{try{const result=await apiWrite("/api/sender-accounts",{email:$('sender-email').value,display_name:$('sender-display-name').value,reply_to:$('sender-reply-to').value,signature:$('sender-signature').value,provider:"GMAIL"});$("sender-account-status").textContent=result.message||"Sender account saved";await loadSenderAccounts();}catch(error){$("sender-account-status").textContent=error.message;}});
 $("analytics-campaign-filter").addEventListener("change",()=>api("/api/campaign-analytics").then(result=>renderAnalytics(result,state.campaignSummaries)).catch(showError));
+$("research-search").addEventListener("input",()=>{researchState.filters.q=$("research-search").value;researchState.page=1;reloadResearchQueue().catch(showError);});
+["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;reloadResearchQueue().catch(showError);}));
+$("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});
+$("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});
+$("research-select-all").addEventListener("change",()=>{$("research-table").querySelectorAll("[data-research-select]").forEach(box=>{box.checked=$("research-select-all").checked;box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);});updateResearchSelection();});
+$("research-create-draft").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;const recipient=window.prompt("Approved recipient address for this draft:");if(!recipient)return;try{await researchAction("/api/recruitment/screen-and-draft",{profile_id:id,recipient,mode:"RULE_BASED"});}catch(error){showError(error);}});
+$("research-invite").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;try{await researchAction("/api/recruitment/invite",{profile_id:id});}catch(error){showError(error);}});
+$("research-approve").addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name:");if(!reviewer)return;try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="PENDING").map(item=>item.draft_id));if(!drafts.length)throw new Error("No pending drafts selected");await researchAction("/api/recruitment/approve-batch",{draft_ids:drafts,reviewer});}catch(error){showError(error);}});
+$("research-send").addEventListener("click",async()=>{try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="APPROVED").map(item=>item.draft_id));if(!drafts.length)throw new Error("No approved drafts selected");await researchAction("/api/recruitment/send-simulated",{draft_ids:drafts});}catch(error){showError(error);}});
 start().catch(showError);

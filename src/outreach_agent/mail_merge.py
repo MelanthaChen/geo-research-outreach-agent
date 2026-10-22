@@ -159,6 +159,7 @@ def assess_company_mail_merge(
         )
         company_status = str(detail.get("review_status") or "PENDING").upper()
         identity = str(detail.get("identity_verification_status") or "UNKNOWN").upper()
+        geographic = str(detail.get("geographic_classification") or "COUNTRY_UNKNOWN").upper()
         eligibility = str(detail.get("eligibility") or "NEEDS_REVIEW").upper()
         chosen = candidates[0] if candidates else None
         email = ""
@@ -167,7 +168,7 @@ def assess_company_mail_merge(
                 email = validate_recipient(chosen.get("email"))
             except ValueError:
                 chosen = None
-        if chosen and identity == "VERIFIED" and eligibility == "ELIGIBLE":
+        if chosen and geographic == "VERIFIED_US" and identity == "VERIFIED" and eligibility == "ELIGIBLE":
             try:
                 preview = make_draft_preview(data, company_id, int(chosen["id"]))
             except (KeyError, ValueError, OSError):
@@ -187,6 +188,8 @@ def assess_company_mail_merge(
         # Count each blocker independently so the report shows every missing requirement.
         if identity != "VERIFIED":
             reasons.append("IDENTITY_NOT_VERIFIED")
+        if geographic != "VERIFIED_US":
+            reasons.append("GEOGRAPHY_NOT_VERIFIED_US")
         elif eligibility != "ELIGIBLE":
             reasons.append("ELIGIBILITY_NOT_APPROVED")
         if company_status != "APPROVED":

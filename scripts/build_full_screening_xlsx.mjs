@@ -1,0 +1,20 @@
+import fs from "node:fs/promises";
+import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
+
+const csvPath = "data/full_screening/full_us_outreach_screening.csv";
+const outputPath = "data/full_screening/full_us_outreach_screening.xlsx";
+const csvText = await fs.readFile(csvPath, "utf8");
+const workbook = await Workbook.fromCSV(csvText, { sheetName: "Screening Results" });
+const sheet = workbook.worksheets.getItem("Screening Results");
+const used = sheet.getUsedRange();
+const header = sheet.getRange("A1:W1");
+header.format.fill = "#1F4E78";
+header.format.font = { bold: true, color: "#FFFFFF" };
+header.format.wrapText = true;
+header.format.rowHeight = 30;
+sheet.freezePanes.freezeRows(1);
+sheet.showGridLines = false;
+await fs.mkdir("data/full_screening", { recursive: true });
+const file = await SpreadsheetFile.exportXlsx(workbook);
+await file.save(outputPath);
+console.log(JSON.stringify({ output: outputPath, rows: used.rowCount - 1, columns: used.columnCount }));

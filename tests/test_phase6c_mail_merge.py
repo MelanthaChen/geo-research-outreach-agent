@@ -35,6 +35,7 @@ def data_fixture(tmp_path: Path):
     detail = {
         "id": 1, "company_name": "Actual Business", "website": "https://actual.example",
         "normalized_domain": "actual.example", "eligibility": "ELIGIBLE",
+        "geographic_classification": "VERIFIED_US",
         "identity_verification_status": "VERIFIED", "review_status": "APPROVED",
         "contact_channels": [{"id": 11, "channel_type": "GENERAL_BUSINESS_EMAIL", "email": "research@actual.example",
                               "source_url": "https://actual.example/contact", "review_status": "APPROVED",

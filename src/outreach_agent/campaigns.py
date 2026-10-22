@@ -145,6 +145,7 @@ class CampaignStore:
                     continue
                 eligibility = str(detail.get("eligibility") or "NEEDS_REVIEW").upper()
                 identity = str(detail.get("identity_verification_status") or "UNKNOWN").upper()
+                geographic = str(detail.get("geographic_classification") or "COUNTRY_UNKNOWN").upper()
                 suitable = [c for c in detail.get("contact_channels", []) if c.get("is_suitable_first_party")]
                 emails = [c for c in suitable if c.get("channel_type") != "CONTACT_FORM"]
                 forms = [c for c in suitable if c.get("channel_type") == "CONTACT_FORM"]
@@ -157,6 +158,8 @@ class CampaignStore:
                     status = "EXCLUDED_IDENTITY_UNVERIFIED"
                 elif not suitable:
                     status = "EXCLUDED_NO_SUITABLE_CHANNEL"
+                elif geographic != "VERIFIED_US":
+                    status = "EXCLUDED_GEOGRAPHICALLY_INELIGIBLE"
                 elif emails:
                     chosen = sorted(emails, key=lambda c: (c.get("review_status") != "APPROVED", int(c["id"])))[0]
                     # A prior simulated delivery suppresses duplicate invitations across campaigns.

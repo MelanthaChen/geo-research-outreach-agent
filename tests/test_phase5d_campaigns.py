@@ -47,11 +47,11 @@ def cohort_fixture(tmp_path: Path):
             );
             CREATE TABLE outreach (id INTEGER PRIMARY KEY, status TEXT);
             INSERT INTO companies VALUES
-              (1,'Fixture Co','https://fixture.test','fixture.test','Software','Test City',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',91,'PENDING',NULL),
+              (1,'Fixture Co','https://fixture.test','fixture.test','Software','Austin, TX',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',91,'PENDING',NULL),
               (2,'No Channel Co','https://no-channel.test','no-channel.test',NULL,NULL,NULL,NULL,NULL,NULL,'ELIGIBLE','UNKNOWN','NEEDS_REVIEW',NULL,'PENDING',NULL),
-              (3,'Form Co','https://form.test','form.test','Software','Test City',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',90,'PENDING',NULL),
-              (4,'Unverified Co','https://unknown.test','unknown.test','Software','Test City',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',90,'PENDING',NULL),
-              (5,'Needs Review Co','https://review.test','review.test','Software','Test City',NULL,'["Evidence"]','Reason','GEO reason','NEEDS_REVIEW','LOW','LOW',40,'PENDING',NULL);
+              (3,'Form Co','https://form.test','form.test','Software','Austin, TX',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',90,'PENDING',NULL),
+              (4,'Unverified Co','https://unknown.test','unknown.test','Software','Austin, TX',NULL,'["Evidence"]','Reason','GEO reason','ELIGIBLE','HIGH','HIGH',90,'PENDING',NULL),
+              (5,'Needs Review Co','https://review.test','review.test','Software','Austin, TX',NULL,'["Evidence"]','Reason','GEO reason','NEEDS_REVIEW','LOW','LOW',40,'PENDING',NULL);
             INSERT INTO contacts VALUES
               (10,1,NULL,'hello@fixture.test','https://fixture.test/contact','PUBLISHED','PENDING','GENERAL_BUSINESS_EMAIL',NULL,'','Published address'),
               (20,2,NULL,NULL,'https://no-channel.test','UNKNOWN','PENDING','SUPPORT_EMAIL',NULL,'','Support only'),
@@ -190,6 +190,7 @@ def response_fixture_store(tmp_path):
         detail = data["details"][company_id]
         detail["identity_verification_status"] = "VERIFIED"
         detail["eligibility"] = "ELIGIBLE"
+        detail["geographic_classification"] = "VERIFIED_US"
         detail["contact_channels"] = [{
             "id": 100 + company_id, "channel_type": "GENERAL_BUSINESS_EMAIL",
             "email": f"team@{detail['normalized_domain']}", "source_url": detail["website"],

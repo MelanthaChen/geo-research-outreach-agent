@@ -31,12 +31,14 @@ from outreach_agent.candidate_pool import candidate_summary
 from outreach_agent.phase6e_screening import PHASE6E_DB, phase6e_summary
 from outreach_agent.contact_channel_model import classify_contact_channels
 from outreach_agent.phase7_smb import PHASE7_DB, phase7_smb_summary
+from outreach_agent.geographic_eligibility import classify_geography
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = ROOT / "data/phase6a_experimental.db"
 DEFAULT_VERIFICATION = ROOT / "data/phase4f_website_verification.csv"
 PRIOR_VERIFICATION = ROOT / "data/phase4e_website_verification.csv"
 HOTEL_CANDIDATE_DB = ROOT / "data/hotel_candidates.db"
+RESEARCH_REGISTRY_DB = ROOT / "data/research_registry.db"
 
 
 def _hotel_candidate_summary(path: Path = HOTEL_CANDIDATE_DB) -> dict[str, int]:
@@ -110,6 +112,35 @@ def _suitable_channel(company: dict[str, Any], contact: dict[str, Any]) -> bool:
 def _domain(url: str) -> str:
     parsed = urlparse(url if "://" in url else "https://" + url)
     return (parsed.hostname or "").casefold().removeprefix("www.")
+
+
+def _registry_geography(path: Path = RESEARCH_REGISTRY_DB) -> dict[str, str]:
+    """Read geographic classifications from the separate registry, fail closed."""
+    if not path.exists():
+        return {}
+    with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(research_records)")}
+        if "geographic_classification" not in columns:
+            return {}
+        grouped: dict[str, set[str]] = {}
+        for row in db.execute("SELECT official_website,geographic_classification FROM research_records WHERE profile_type IN ('business_company','hotel_property')"):
+            domain = _domain(row[0] or "")
+            if domain:
+                grouped.setdefault(domain, set()).add(row[1] or "COUNTRY_UNKNOWN")
+    return {domain: next(iter(values)) if len(values) == 1 else "COUNTRY_CONFLICT" for domain, values in grouped.items()}
+
+
+def _registry_us_targets(path: Path = RESEARCH_REGISTRY_DB) -> dict[str, int]:
+    if not path.exists():
+        return {"companies": 0, "hotels": 0}
+    with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True) as db:
+        rows = db.execute("""SELECT profile_type,COUNT(*) FROM research_records
+            WHERE profile_type IN ('business_company','hotel_property')
+              AND geographic_classification='VERIFIED_US'
+              AND identity_verification_status='VERIFIED'
+              AND qualification_status='ELIGIBLE'
+            GROUP BY profile_type""").fetchall()
+    return {"companies": next((row[1] for row in rows if row[0] == "business_company"), 0), "hotels": next((row[1] for row in rows if row[0] == "hotel_property"), 0)}
 
 
 def _company_data(connection: sqlite3.Connection, verification_paths: tuple[Path, ...]) -> tuple[list[dict[str, Any]], dict[int, list[dict[str, Any]]]]:
@@ -236,6 +267,10 @@ def load_dashboard_data(
             )
             for company in companies
         }
+        geographic_by_domain = _registry_geography()
+        for detail in details.values():
+            fallback, _ = classify_geography(location=detail.get("location"), profile_type="business_company")
+            detail["geographic_classification"] = geographic_by_domain.get(_domain(detail.get("website") or ""), fallback)
         channel_presence = {
             company_id: any(item["is_suitable_first_party"] for item in detail["contact_channels"])
             for company_id, detail in details.items()
@@ -264,6 +299,7 @@ def load_dashboard_data(
                 ),
             },
             "outreach": _outreach_counts(connection, delivery_path),
+            "us_geographic_targets": _registry_us_targets(),
         }
         pool = phase6e_summary() if PHASE6E_DB.exists() else candidate_summary()
         email_companies = sum(
@@ -346,6 +382,7 @@ def filter_companies(data: dict[str, Any], params: dict[str, str]) -> list[dict[
             ("eligibility", [_eligibility(company)]),
             ("geo", [(company.get("geo_opportunity") or "UNKNOWN").upper()]),
             ("priority", [(company.get("priority_tier") or "NEEDS_REVIEW").upper()]),
+            ("geographic_status", [detail.get("geographic_classification", "COUNTRY_UNKNOWN")]),
         )
         if any(params.get(key) and params[key] not in values for key, values in checks):
             continue
@@ -362,6 +399,7 @@ def filter_companies(data: dict[str, Any], params: dict[str, str]) -> list[dict[
             "location": company.get("location") or "Unknown",
             "discovery_sources": detail["discovery_sources"],
             "identity_verification_status": company["identity_verification_status"],
+            "geographic_classification": detail.get("geographic_classification", "COUNTRY_UNKNOWN"),
             "eligibility": _eligibility(company),
             "geo_opportunity": (company.get("geo_opportunity") or "UNKNOWN").upper(),
             "research_priority": (company.get("priority_tier") or "NEEDS_REVIEW").upper(),
@@ -455,6 +493,8 @@ def make_draft_preview(data: dict[str, Any], company_id: int, contact_id: int | 
     channels = [channel for channel in detail["contact_channels"] if channel["is_suitable_first_party"]]
     if not channels:
         return {"status": "NO_SUITABLE_CHANNEL", "label": "Draft unavailable · no suitable channel", "reason": "No suitable first-party email or official contact form is stored. No address is inferred."}
+    if detail.get("geographic_classification") != "VERIFIED_US":
+        return {"status": "BLOCKED_GEOGRAPHY", "label": "Draft unavailable · US geography not verified", "reason": "Email campaign selection requires VERIFIED_US geographic evidence."}
     selected = next((channel for channel in channels if int(channel["id"]) == contact_id), None)
     if not selected:
         return {"status": "CHANNEL_NOT_FOUND", "label": "Draft unavailable · select saved evidence", "reason": "The selected channel is not a suitable first-party channel for this company."}

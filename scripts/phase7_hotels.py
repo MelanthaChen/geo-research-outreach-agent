@@ -152,12 +152,12 @@ def run_worker(database: Path, request_cap: int, time_cap: int, batch_size: int)
                 allowance = max(1, min(250, request_cap - attempts))
                 batch_ids = select_hotel_pilot(database, min(batch_size, 25))
                 if not batch_ids:
-                    reason = "candidate_pool_exhausted"
+                    reason = "eligible_domain_pool_exhausted_after_denial_suppression"
                     break
                 result = run_hotel_batch(len(batch_ids), database=database,
                     request_budget=allowance, time_budget_seconds=min(1800, max(1, int(time_cap - elapsed))),
                     concurrency=1, candidate_ids=batch_ids)
-                result["sampling_strategy"] = "Deterministic round-robin of independent/unknown and chain-indicated properties, at most one per canonical domain, sorted by location and stable OSM ID"
+                result["sampling_strategy"] = "Deterministic 3:1 rotation favoring independent/unknown properties by measured yield; at most one per canonical domain; permanently suppress domains with prior ACCESS_BLOCKED/ROBOTS_DENIED; stable location/OSM ordering"
                 attempts += int(result.get("requests_attempted", 0))
                 elapsed = prior_elapsed + (time.monotonic() - started)
                 current = hotel_summary(database)
@@ -242,7 +242,7 @@ def main() -> None:
         result = run_hotel_batch(len(selected), database=args.database, request_budget=args.request_budget,
             time_budget_seconds=1800, concurrency=1, candidate_ids=selected)
         result["selection_candidate_ids"] = selected
-        result["sampling_strategy"] = "Deterministic round-robin of chain-indicated and unknown/independent properties, one per canonical domain, sorted by location and stable OSM property ID"
+        result["sampling_strategy"] = "Deterministic 3:1 rotation favoring independent/unknown properties by measured yield; at most one per canonical domain; suppress domains with prior ACCESS_BLOCKED/ROBOTS_DENIED; stable location/OSM ordering"
         with sqlite3.connect(args.database) as db:
             db.execute("UPDATE hotel_runs SET report_json=? WHERE run_id=(SELECT MAX(run_id) FROM hotel_runs)",
                        (json.dumps(result, sort_keys=True),))

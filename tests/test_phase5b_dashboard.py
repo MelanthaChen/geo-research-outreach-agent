@@ -46,7 +46,7 @@ def fixture_db(path: Path) -> Path:
             );
             CREATE TABLE outreach (id INTEGER PRIMARY KEY, status TEXT);
             INSERT INTO companies VALUES
-              (1,'Fixture Co','https://fixture.test','fixture.test','Software','Test City',NULL,
+              (1,'Fixture Co','https://fixture.test','fixture.test','Software','Austin, TX',NULL,
                '["Published product page", "Company descriptions"]','Accessible company evidence','Content gap evidence','ELIGIBLE','HIGH','HIGH',91,'PENDING',NULL),
               (2,'No Channel Co','https://no-channel.test','no-channel.test',NULL,NULL,NULL,NULL,NULL,NULL,'ELIGIBLE','UNKNOWN','NEEDS_REVIEW',NULL,'PENDING',NULL);
             INSERT INTO contacts VALUES

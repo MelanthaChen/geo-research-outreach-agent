@@ -163,3 +163,31 @@ def test_hotel_batch_selection_is_repeatable_domain_diverse_and_balanced(tmp_pat
     assert len(domains) == len(set(domains))
     assert "CHAIN_INDICATED" in classes
     assert "INDEPENDENT_OR_UNKNOWN" in classes
+
+
+def test_hotel_batch_selection_suppresses_domains_after_access_or_robots_denial(tmp_path):
+    database = tmp_path / "hotels.db"
+    init_hotel_db(database)
+    with sqlite3.connect(database) as db:
+        rows = [
+            ("blocked", "Blocked Chain Downtown", "blocked.example", "ACCESS_BLOCKED"),
+            ("blocked-sibling", "Blocked Chain Airport", "blocked.example", "DISCOVERED_UNVERIFIED"),
+            ("robots", "Robots Chain", "robots.example", "ROBOTS_DENIED"),
+            ("robots-sibling", "Robots Chain Annex", "robots.example", "DISCOVERED_UNVERIFIED"),
+            ("redirect-blocked", "Redirected Chain", "legacy.example", "ACCESS_BLOCKED"),
+            ("redirect-sibling", "Redirected Chain Property", "property.brand.example", "DISCOVERED_UNVERIFIED"),
+            ("available", "Independent Inn", "available.example", "DISCOVERED_UNVERIFIED"),
+        ]
+        for candidate_id, name, domain, status in rows:
+            db.execute("""INSERT INTO candidates(candidate_id,company_name,website,canonical_domain,industry,location,
+              source_name,source_url,source_record_id,source_license_or_permission,discovery_timestamp,
+              verification_status,source_batch,chain_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (candidate_id, name, f"https://{domain}", domain, "hotel", "Example City", "OSM",
+               f"https://www.openstreetmap.org/node/{candidate_id}", candidate_id, "ODbL", "2026-10-21",
+               status, "fixture", "CHAIN_INDICATED"))
+        db.execute("UPDATE candidates SET evidence_json=? WHERE candidate_id='redirect-blocked'",
+                   (json.dumps({"pages": [{"final_url": "https://www.brand.example/blocked"}]}),))
+
+    selected = select_hotel_pilot(database, 10)
+
+    assert selected == ["available"]

@@ -61,6 +61,10 @@ def import_geo_result(
             (result["record_id"],),
         ).fetchone()
         if existing:
+            db.execute(
+                "UPDATE research_records SET geo_property_id=COALESCE(geo_property_id,?), geo_research_status=CASE WHEN geo_research_status NOT IN ('BLOCKED_WITHDRAWN','WITHDRAWN') THEN 'REPORT_READY' ELSE geo_research_status END, updated_at=? WHERE profile_id=?",
+                (result["property_id"], now(), result["source_profile_id"]),
+            )
             return {"status": "EXISTING", "report_id": existing["report_id"], "report_path": existing["report_path"], "delivery_status": existing["delivery_status"]}
         conflicting = db.execute(
             "SELECT report_id FROM research_reports WHERE profile_id=? AND source_profile_version=?",

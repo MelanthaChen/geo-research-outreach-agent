@@ -33,3 +33,25 @@ def test_select_all_matching_has_explicit_large_scope_confirmation():
     source = APP.read_text(encoding="utf-8")
     assert "result.total>researchState.pageSize" in source
     assert "This will select ${result.total} matching records across all pages" in source
+
+
+def test_small_select_all_is_local_and_does_not_reload_or_call_selection_api():
+    source = APP.read_text(encoding="utf-8")
+    start = source.index("async function selectAllMatchingResearch()")
+    end = source.index("async function generateResearchBatch()", start)
+    small_path = source[start:end]
+    assert "if(researchState.total<=researchState.pageSize)" in small_path
+    assert "selectVisibleResearchRows(true)" in small_path
+    assert small_path.index("selectVisibleResearchRows(true)") < small_path.index("apiWrite(\"/api/recruitment/selection\"")
+    assert "reloadResearchQueue().catch(showError)" not in small_path.split("const result=", 1)[0]
+
+
+def test_visible_selection_updates_only_loaded_ids_and_preserves_other_pages():
+    source = APP.read_text(encoding="utf-8")
+    start = source.index("function selectVisibleResearchRows")
+    end = source.index("async function selectAllMatchingResearch", start)
+    helper = source[start:end]
+    assert "querySelectorAll(\"[data-research-select]\")" in helper
+    assert "researchState.selected.add(box.dataset.researchSelect)" in helper
+    assert "researchState.selected.delete(box.dataset.researchSelect)" in helper
+    assert "researchState.selected=new Set" not in helper

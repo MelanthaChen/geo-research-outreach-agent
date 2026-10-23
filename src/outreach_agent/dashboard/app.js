@@ -696,7 +696,24 @@ function renderResearchBatchSummary(result){
   $("research-batch-export").disabled=true;
   $("research-batch-approve").disabled=true;
 }
+function selectVisibleResearchRows(checked){
+  const boxes=[...$("research-table").querySelectorAll("[data-research-select]")];
+  boxes.forEach(box=>{
+    box.checked=checked;
+    if(checked) researchState.selected.add(box.dataset.researchSelect);
+    else researchState.selected.delete(box.dataset.researchSelect);
+  });
+  researchState.selectionScope="Current page";
+  updateResearchSelection();
+}
 async function selectAllMatchingResearch(){
+  // A bounded result set is already present in the DOM. Keep this path local:
+  // selecting three visible rows must not perform a database round trip or
+  // rebuild the table. Larger scopes retain the explicit, server-side flow.
+  if(researchState.total<=researchState.pageSize){
+    selectVisibleResearchRows(true);
+    return;
+  }
   const result=await apiWrite("/api/recruitment/selection",{filters:researchState.filters});
   if(result.total>researchState.pageSize && !window.confirm(`This will select ${result.total} matching records across all pages. Continue?`))return;
   researchState.selected=new Set(result.profile_ids||[]); researchState.selectionScope=`All ${result.total} matching records`; reloadResearchQueue().catch(showError); updateResearchSelection();
@@ -899,7 +916,7 @@ function syncResearchSearchFromDom(){
 $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});
 $("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});
 $("research-sort").addEventListener("change",()=>{researchState.filters.sort=$("research-sort").value;researchState.page=1;reloadResearchQueue().catch(showError);});
-$("research-select-all").addEventListener("change",()=>{$("research-table").querySelectorAll("[data-research-select]").forEach(box=>{box.checked=$("research-select-all").checked;box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);});researchState.selectionScope="Current page";updateResearchSelection();});
+$("research-select-all").addEventListener("change",()=>selectVisibleResearchRows($("research-select-all").checked));
 $("research-select-all-matching").addEventListener("click",()=>selectAllMatchingResearch().catch(showError));
 $("research-clear-selection").addEventListener("click",()=>{researchState.selected.clear();researchState.selectionScope="Current page";researchState.batch=null;$("research-batch-summary").hidden=true;$("research-batch-actions").hidden=true;updateResearchSelection();reloadResearchQueue().catch(showError);});
 $("research-generate-batch").addEventListener("click",()=>generateResearchBatch().catch(showError));

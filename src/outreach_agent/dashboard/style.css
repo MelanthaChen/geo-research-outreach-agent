@@ -385,6 +385,7 @@ body.app-shell { display: grid; grid-template-columns: 248px minmax(0,1fr); min-
 .selection-toolbar input,.company-row>input { accent-color: var(--green); width: 16px; height: 16px; }
 .selection-toolbar a { margin-left: auto; color: var(--green); font-weight: 650; text-decoration: none; }
 .company-row { grid-template-columns: 20px minmax(0,1fr); padding: 0 12px; gap: 9px; }
+.company-row.public-company-row { grid-template-columns: minmax(0,1fr); padding: 0; gap: 0; }
 .company-row>input { margin: 0; }
 .company-choice { min-width: 0; width: 100%; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 13px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .company-choice:focus-visible { outline: 2px solid #8db49b; outline-offset: -2px; }

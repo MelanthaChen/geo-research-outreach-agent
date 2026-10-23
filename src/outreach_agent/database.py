@@ -120,6 +120,13 @@ def _qmark_to_postgres(sql: str) -> str:
     return sql.replace("?", "%s")
 
 
+def _params_to_postgres(sql: str, params):
+    """Translate the registry's SQLite qmarks and named mappings for psycopg."""
+    if isinstance(params, dict):
+        return re.sub(r":([A-Za-z_]\w*)", r"%(\1)s", sql)
+    return _qmark_to_postgres(sql)
+
+
 class PostgresConnection:
     def __init__(self, url: str):
         try:
@@ -127,7 +134,11 @@ class PostgresConnection:
             from psycopg.rows import dict_row
         except ImportError as exc:  # pragma: no cover - exercised in deployment
             raise RuntimeError("PostgreSQL support requires: pip install 'psycopg[binary]>=3.2,<4'") from exc
-        self._connection = psycopg.connect(url, row_factory=dict_row)
+        # Render/Blueprint secret fields can preserve a final newline when a
+        # connection URL is pasted from a downloaded .env file.  Strip only
+        # surrounding whitespace so valid query parameters and credentials are
+        # otherwise left untouched before handing the URL to psycopg.
+        self._connection = psycopg.connect(url.strip(), row_factory=dict_row)
 
     def __enter__(self):
         return self
@@ -152,7 +163,7 @@ class PostgresConnection:
                 (table,),
             )
             return PostgresCursor(cursor)
-        cursor = self._connection.execute(_qmark_to_postgres(sql), params)
+        cursor = self._connection.execute(_params_to_postgres(sql, params), params)
         return PostgresCursor(cursor)
 
     def executemany(self, sql: str, params):

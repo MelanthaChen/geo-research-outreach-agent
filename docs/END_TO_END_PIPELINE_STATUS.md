@@ -131,6 +131,15 @@ The controlled provider is explicitly labelled `CONTROLLED_FIXTURE`; no paid
 model call, citation test, deployment, monitoring job, or website mutation is
 performed.
 
+Test evidence for this implementation pass:
+
+- Outreach: `uv run pytest -q` completed successfully with 336 passing tests.
+- GEO Engine integration: `PYTHONPATH=. uv run pytest -q
+  tests/test_geo_research_integration.py tests/test_cross_repository_owner_fixture.py`
+  completed with 10 passing tests.
+- The focused report-delivery tests verify DOCX preview persistence,
+  preview-only email generation, and duplicate-import idempotency.
+
 ## Staging deployment state
 
 The Outreach changes are deployed to the existing Render staging service:

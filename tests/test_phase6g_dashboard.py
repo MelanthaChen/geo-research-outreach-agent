@@ -94,6 +94,28 @@ def test_questionnaire_ingestion_is_not_blocked_by_dashboard_auth(monkeypatch):
         thread.join(timeout=2)
 
 
+def test_geo_result_auth_rejects_non_ascii_header_without_proxy_error(monkeypatch):
+    """Malformed service credentials must produce 401, never a handler crash."""
+    monkeypatch.setenv("GEO_ENGINE_HANDOFF_TOKEN", "ascii-service-token")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler({"summary": {}, "details": {}}))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/api/integration/results",
+            data=b"{}",
+            headers={"Content-Type": "application/json", "Authorization": "Bearer caf\N{LATIN SMALL LETTER E WITH ACUTE}"},
+            method="POST",
+        )
+        with __import__("pytest").raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request)
+        assert error.value.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_public_operational_pages_have_safe_read_projections(monkeypatch):
     monkeypatch.setenv("OUTREACH_DASHBOARD_TOKEN", "operator-secret-sentinel")
     def records(*args, **kwargs):

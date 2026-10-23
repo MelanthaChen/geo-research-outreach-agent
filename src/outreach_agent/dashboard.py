@@ -206,7 +206,10 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             if supplied.lower().startswith("bearer "):
                 supplied = supplied[7:].strip()
             supplied = supplied or self.headers.get("X-GEO-Engine-Handoff-Token", "")
-            return bool(expected) and hmac.compare_digest(supplied, expected)
+            # Compare encoded bytes so malformed/non-ASCII header values are
+            # rejected as an ordinary authentication failure instead of
+            # raising TypeError and terminating the request with a 502.
+            return bool(expected) and hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)

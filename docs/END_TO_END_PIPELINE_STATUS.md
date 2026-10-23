@@ -18,13 +18,13 @@ This document records the implemented pipeline as it exists in the repository an
 | Confirmation policy | IMPLEMENTED / TESTED LOCALLY | `OUTREACH_CONFIRMATION_POLICY`; safe default `AFFIRMATIVE_REPLY_REQUIRED`; invalid values fail closed | Production policy still requires deployment/configuration review |
 | Outlook reply evidence | IMPLEMENTED / TESTED LOCALLY | `.eml` importer preserves sender, recipient, subject, Message-ID, threading headers, timestamp, and raw content | No real `.eml` was supplied in this run; importer never grants consent automatically |
 | GEO Engine property handoff | IMPLEMENTED / TESTED LOCALLY | Versioned adapter and idempotent `process_geo_handoff()` | Current GeoAIResume response cannot be handed off while conflict remains quarantined |
-| GEO Engine property registration | VERIFIED LOCALLY / ISOLATED ONLY | Mock bridge and prior isolated owner-controlled fixture tests | No live property mutation was performed in this run |
+| GEO Engine property registration | VERIFIED LOCALLY / LIVE API READY | Mock bridge and prior isolated owner-controlled fixture tests; deployed integration health is ready | No authenticated property mutation was performed because the live Render service is not confirmed as an isolated test database |
 | Website audit | IMPLEMENTED IN GEO ENGINE / NOT RUN | GEO Engine audit routes and services exist | Consent-gated execution was not authorized |
 | Query universe and baseline | IMPLEMENTED COMPONENTS / NOT RUN | GEO Engine research services exist | No research job or paid/model call was started |
 | Strategy evaluation and experiments | IMPLEMENTED COMPONENTS / NOT RUN | GEO Engine experiment/citation services exist | Requires separate operator authorization and budget/provider approval |
 | Report generation and delivery | IMPLEMENTED / TESTED LOCALLY (PREVIEW ONLY) | `src/outreach_agent/geo_result_delivery.py`, existing DOCX renderer, `research_reports` table | No email delivery is enabled or claimed |
 | Background polling | IMPLEMENTED / MANUAL OR SCHEDULER-READY | Single-run Sheets sync and watcher configuration exist | Managed cloud scheduler deployment remains required |
-| Deployment | VERIFIED STAGING | Render deployment `dep-dbdegpvavr4c739ppic0`, live commit `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`, `/health` returned HTTP 200 | GEO Engine commit is pushed but its corresponding staging deployment/API verification remains outstanding |
+| Deployment | VERIFIED STAGING | Outreach deployment `dep-dbdegpvavr4c739ppic0` at `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`; GEO Engine deployment `dep-dbdej16i0phs739he920` at `79329452b9726220618e4adf9f603084abd8b624` | Authenticated cross-service write requires a confirmed isolated GEO database and a configured shared handoff secret |
 
 ## Live owner-controlled evidence
 
@@ -39,6 +39,44 @@ The prior live Sheets synchronization observed three records:
 | `GEO-E3F846249F9D5B44` | `submission-7bbe3d76f3c1cd968bd5` | YES / NO; `yuxaun.chen.1031@outlook.com`; 2026-10-22 23:47:24 | `INTERESTED_NOT_AUTHORIZED` |
 
 The public GeoAIResume homepage was inspected read-only. It exposed website/organization metadata and descriptive content, but no public email address. The live registry record had `contact_verification_status=NOT_VERIFIED` and an empty contact-channel list. Therefore no post-form confirmation draft can be addressed safely yet.
+
+## Deployed cross-service verification (2026-10-23)
+
+The existing Render GEO Engine service was manually deployed, without creating a
+second service, from the requested commit:
+
+- Service: `geo-engine` (`srv-d8g7ucu7r5hc73aq03q0`)
+- URL: `https://geo-engine.onrender.com`
+- Deployment: `dep-dbdej16i0phs739he920`
+- Live commit: `79329452b9726220618e4adf9f603084abd8b624`
+- Render result: `Deploy succeeded | Live`
+- Source: `MelanthaChen/geo-engine`, branch `main`
+
+The live API checks were read-only or deliberately unauthorized:
+
+| Request | Result | Meaning |
+|---|---:|---|
+| `GET /health` | HTTP 200, `{"status":"healthy"}` | Service is reachable and healthy |
+| `GET /api/v1/integration/health` | HTTP 200, `{"status":"ready","scope":"property_registration_only"}` | Integration routes are deployed and advertise the restricted scope |
+| `POST /api/v1/integration/profile-import` without a token | HTTP 401, `authenticated handoff token required` | Unauthenticated handoff is rejected before mutation |
+| `POST /api/v1/integration/profile-import` with a deliberately invalid token | HTTP 401, `authenticated handoff token required` | Invalid credentials are rejected |
+| `GET /api/v1/integration/research-results/fixture-company` without a token | HTTP 401, `authenticated result access required` | Result retrieval is protected |
+| Outreach `GET /health` | HTTP 200, `{"status":"healthy","service":"outreach-dashboard"}` | Outreach service is reachable |
+| Outreach protected API with a deliberately invalid token | HTTP 401 | Dashboard authentication remains enforced |
+
+The deployment environment inspection found `GEO_ENGINE_API_URL` on Outreach,
+but no visible `GEO_ENGINE_HANDOFF_TOKEN` variable on either Render service.
+Values were not revealed, copied, logged, or placed in source control. The
+repository configuration requires both `GEO_ENGINE_API_URL` and
+`GEO_ENGINE_HANDOFF_TOKEN` together (`src/outreach_agent/geo_engine_handoff.py`;
+`render.yaml`). Consequently, a real authenticated handoff could not be
+executed safely from the deployed services in this run.
+
+Even if a secret were available, `geo-engine` is the existing service rather
+than a separately confirmed isolated test service/database. A profile import,
+research pipeline call, or report retrieval could therefore mutate its actual
+configured database. No such write was attempted. This is a safety blocker,
+not an authentication failure claim.
 
 ## Confirmation workflow rules
 
@@ -157,10 +195,32 @@ The Outreach changes are deployed to the existing Render staging service:
 No database records were changed by this implementation pass. The additive
 registry initialization is backward-compatible, but a direct authenticated
 read of the staging schema was not performed because no dashboard token was
-exposed or retrieved. The GEO Engine integration commit `7932945` is pushed
-to `codex/render-internal-database-config`, but no corresponding live GEO
-Engine deployment or authenticated cross-service request is claimed.
+exposed or retrieved. The GEO Engine integration commit `7932945` is deployed
+live as `dep-dbdej16i0phs739he920`, and its public health and protected-route
+behavior were verified. No authenticated cross-service mutation is claimed
+because the shared handoff secret was not available for safe use and the live
+GEO database was not independently confirmed as an isolated staging database.
 
-Therefore the current evidence is: Outreach staging is live and protected;
-the complete cross-repository execution is verified in isolated local tests,
-not yet as a live two-service staging run.
+Therefore the current evidence is: both services are live on the requested
+commits, their public health endpoints work, and their protected integration
+boundaries reject unauthenticated requests. The complete authenticated
+cross-repository execution remains verified in isolated local tests, not yet as
+a live two-service mutation test.
+
+## Exact remaining acceptance steps
+
+1. Configure the same handoff secret in both staging services without revealing
+   it in logs or source control.
+2. Confirm that the GEO Engine database and integration store are isolated
+   staging resources, not the existing production database.
+3. Seed one clean owner-controlled fixture in the isolated Outreach staging
+   database with explicit verified consent; do not use the historical
+   GeoAIResume conflict records.
+4. Call the authenticated profile-import endpoint once, run the controlled
+   fixture research pipeline, retrieve the result envelope, and persist one
+   Outreach report preview.
+5. Repeat the same request and verify one Property, one research result, one
+   Outreach report, and no duplicate records.
+
+Until steps 1-3 are complete, no live property or research records should be
+created.

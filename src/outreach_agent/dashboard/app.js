@@ -884,7 +884,12 @@ $("add-sender-account").addEventListener("click",async()=>{try{const result=awai
 $("analytics-campaign-filter").addEventListener("change",()=>api("/api/campaign-analytics").then(result=>renderAnalytics(result,state.campaignSummaries)).catch(showError));
 $("hotel-discovery-pause").addEventListener("click",()=>apiWrite("/api/hotel-discovery/pause",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
 $("hotel-discovery-resume").addEventListener("click",()=>apiWrite("/api/hotel-discovery/resume",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
-$("research-search").addEventListener("input",()=>{researchState.filters.q=$("research-search").value;researchState.page=1;researchState.selectionScope="Current filtered view";resetResearchBatchOnly();scheduleResearchQueueReload();});
+function applyResearchSearch(value){
+  const next=String(value??"");
+  if(next===String(researchState.filters.q||""))return;
+  researchState.filters.q=next;researchState.page=1;researchState.selectionScope="Current filtered view";resetResearchBatchOnly();scheduleResearchQueueReload();
+}
+["input","change","keyup"].forEach(eventName=>$('research-search').addEventListener(eventName,event=>applyResearchSearch(event.target.value)));
 ["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;researchState.selectionScope="Current filtered view";resetResearchBatchOnly();scheduleResearchQueueReload();}));
 $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});
 $("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});

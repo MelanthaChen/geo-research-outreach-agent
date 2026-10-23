@@ -244,6 +244,7 @@ def test_research_queue_record_click_has_protected_detail_path_and_auth_prompt()
     assert 'await api(`/api/research/records/${encodeURIComponent(profileId)}`)' in js
     assert 'fetch("/api/auth/session"' in js
     assert "sessionStorage" not in js
+    assert ".auth-gate[hidden] { display: none; }" in (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")
 
 
 def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():

@@ -36,10 +36,11 @@ class HttpGeoEngineBridge:
     def import_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
         import httpx
 
+        headers = _handoff_headers(self.token)
         response = httpx.post(
             self.api_url.rstrip("/") + "/api/v1/integration/profile-import",
             json=profile,
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers=headers,
             timeout=self.timeout_seconds,
         )
         if response.status_code >= 400:
@@ -56,12 +57,26 @@ class HttpGeoEngineBridge:
         response = httpx.get(
             self.api_url.rstrip("/") + f"/api/v1/integration/research-results/{source_profile_id}",
             params=params,
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers=_handoff_headers(self.token),
             timeout=self.timeout_seconds,
         )
         if response.status_code >= 400:
             raise RuntimeError(f"GEO Engine result retrieval failed ({response.status_code})")
         return response.json()
+
+
+def _handoff_headers(token: str) -> dict[str, str]:
+    """Build the authenticated bridge headers.
+
+    Authorization is the canonical contract. The explicit integration header
+    is sent as a compatibility fallback for managed proxies that strip or
+    rewrite Authorization headers; GEO Engine accepts either header but still
+    validates the same shared secret.
+    """
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-GEO-Engine-Handoff-Token": token,
+    }
 
 
 @dataclass

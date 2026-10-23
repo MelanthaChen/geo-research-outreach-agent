@@ -1,8 +1,9 @@
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
-from outreach_agent.geo_engine_handoff import process_geo_handoff, review_questionnaire_submission
+from outreach_agent.geo_engine_handoff import HttpGeoEngineBridge, _handoff_headers, process_geo_handoff, review_questionnaire_submission
 from outreach_agent.research_lifecycle import create_email_draft, create_questionnaire_invitation, get_invitation_reference, ingest_google_form_response, register_profile
 
 
@@ -111,3 +112,26 @@ def test_representative_email_can_differ_from_invitation_recipient_when_reviewed
     assert result["status"] == "HANDED_OFF"
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT identity_review_status FROM questionnaire_submissions").fetchone()[0] == "VERIFIED"
+
+
+def test_http_bridge_sends_canonical_and_proxy_safe_auth_headers(monkeypatch):
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append(("post", url, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: {"property_id": 9})
+
+    def fake_get(url, **kwargs):
+        calls.append(("get", url, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: {"record_type": "research_result_export"})
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    bridge = HttpGeoEngineBridge("https://geo.example", "test-secret")
+    bridge.import_profile({"profile_id": "p"})
+    bridge.get_research_result("p")
+    for _, _, kwargs in calls:
+        assert kwargs["headers"] == _handoff_headers("test-secret")
+    assert calls[0][2]["headers"]["Authorization"] == "Bearer test-secret"
+    assert calls[0][2]["headers"]["X-GEO-Engine-Handoff-Token"] == "test-secret"

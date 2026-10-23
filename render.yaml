@@ -46,3 +46,29 @@ services:
         sync: false
       - key: GEO_RESEARCH_SHEETS_RANGE
         value: "Form Responses 1!A:Z"
+
+  # Prepared but disabled by default. Enabling requires staging, source-term,
+  # rate-limit, and yield review.
+  - type: cron
+    name: geo-hotel-prospect-discovery
+    runtime: python
+    plan: starter
+    schedule: "17 * * * *"
+    buildCommand: pip install '.[cloud]'
+    startCommand: 'if [ "$HOTEL_DISCOVERY_ENABLED" = "true" ]; then python scripts/hotel_prospect_job.py run --registry "$OUTREACH_DATABASE_URL" --source-mode "$HOTEL_DISCOVERY_SOURCE_MODE"; else echo "hotel discovery disabled"; fi'
+    autoDeploy: false
+    envVars:
+      - key: OUTREACH_DATABASE_URL
+        sync: false
+      - key: OUTREACH_REGISTRY_MODE
+        value: "LEAN"
+      - key: HOTEL_DISCOVERY_ENABLED
+        value: "false"
+      - key: HOTEL_DISCOVERY_SOURCE_MODE
+        value: "OVERPASS"
+      - key: HOTEL_PROSPECT_TARGET
+        value: "1000"
+      - key: HOTEL_DISCOVERY_BATCH_SIZE
+        value: "25"
+      - key: HOTEL_DISCOVERY_SOURCE
+        sync: false

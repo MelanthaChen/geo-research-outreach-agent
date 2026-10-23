@@ -17,6 +17,7 @@ from typing import Any
 
 from outreach_agent.database import connect_database
 from outreach_agent.geographic_eligibility import VERIFIED_US, classify_geography
+from outreach_agent.google_forms_integration import make_invitation_reference
 from outreach_agent.integration import PROFILE_VERSION
 from outreach_agent.research_lifecycle import init_registry
 
@@ -176,6 +177,16 @@ def _copy_owner_fixture(source_path: str | Path, target) -> int:
                 copied += 1
         if "questionnaire_invitations" in tables:
             rows = [dict(row) for row in source.execute("SELECT * FROM questionnaire_invitations WHERE profile_id IN (SELECT profile_id FROM research_records WHERE profile_type='owner_controlled_test')")]
+            # Older isolated owner fixtures predate the durable invitation-reference
+            # column.  Derive the same opaque reference format used by new
+            # invitations instead of inserting NULL into the PostgreSQL contract.
+            # This is scoped to owner-controlled fixtures; production invitations
+            # must always carry their stored reference.
+            for row in rows:
+                if not row.get("invitation_reference"):
+                    row["invitation_reference"] = make_invitation_reference(
+                        str(row["profile_id"]), nonce=str(row["invitation_id"])
+                    )
             invitation_ids = {str(row["invitation_id"]) for row in rows}
             _copy_rows(source, target, "questionnaire_invitations", rows, key="invitation_id")
         if "email_drafts" in tables:

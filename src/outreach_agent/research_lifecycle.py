@@ -767,6 +767,18 @@ def _manual_observations(record: dict[str, Any]) -> list[dict[str, Any]]:
     return observations[:2]
 
 
+def _synthetic_personalization(record: dict[str, Any]) -> dict[str, Any]:
+    """Read explicitly tagged demo personalization from existing screenings."""
+    for item in record.get("screenings", [])[:1]:
+        try:
+            payload = json.loads(item.get("opportunities_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("evidence_status") == "DEMO_SYNTHETIC":
+            return payload
+    return {}
+
+
 def create_manual_invitation_draft(
     profile_id: str,
     *,
@@ -829,6 +841,7 @@ def create_manual_invitation_draft(
     reference = get_invitation_reference(invitation_id, path=path)
     form_url = prefilled_form_url(reference)
     observations = _manual_observations(record)
+    personalization = _synthetic_personalization(record)
     evidence = []
     try:
         evidence.extend(json.loads(record.get("verification_evidence_json") or "[]"))
@@ -843,9 +856,15 @@ def create_manual_invitation_draft(
         observation_lines.append(f"- {title}{(' (' + urls + ')') if urls else ''}")
     if not observation_lines:
         observation_lines.append("- No preliminary GEO observation is established in the current registry.")
+    synthetic_label = "DEMO_SYNTHETIC: metrics and observations are workflow fixtures, not website measurements.\n\n" if personalization else ""
+    introduction = str(personalization.get("introduction") or "")
+    description = str(personalization.get("business_description") or "")
     label = "OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n" if test_override else ""
     body = (f"{label}Hello,\n\n"
+            f"{synthetic_label}"
+            f"{introduction + chr(10) + chr(10) if introduction else ''}"
             f"We are inviting {record['name']} to participate in a research study about how public website information is represented in AI search. The website in this record is {record['official_website']}.\n\n"
+            f"{('Business description: ' + description + chr(10) + chr(10)) if description else ''}"
             "Preliminary website observations already recorded in the research registry:\n" + "\n".join(observation_lines) + "\n\n"
             "These are observations and research hypotheses, not measured AI visibility results or guaranteed improvements. The proposed work is read-only public-website analysis; no website changes, experiments, or monitoring begin from this invitation.\n\n"
             f"Questionnaire: {form_url}\nInvitation reference: {reference}\n\n"

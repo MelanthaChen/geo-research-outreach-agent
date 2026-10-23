@@ -234,13 +234,16 @@ def test_dashboard_assets_do_not_load_external_resources_or_submit_forms():
 
 def test_research_queue_record_click_has_protected_detail_path_and_auth_prompt():
     js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     assert 'button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError))' in js
-    assert 'id="research-inline-login"' in js
-    assert 'id="research-inline-token"' in js
+    assert 'id="dashboard-login-form"' in html
+    assert 'id="dashboard-email"' in html
+    assert 'fetch("/api/auth/login"' in js
     assert 'detail.style.position="fixed"' in js
     assert 'detail.style.maxHeight="calc(100vh - 112px)"' in js
     assert 'await api(`/api/research/records/${encodeURIComponent(profileId)}`)' in js
-    assert "Authentication failed. Check the token and try again." in js
+    assert 'fetch("/api/auth/session"' in js
+    assert "sessionStorage" not in js
 
 
 def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():

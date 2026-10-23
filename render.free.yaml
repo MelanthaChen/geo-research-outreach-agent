@@ -23,6 +23,12 @@ services:
         sync: false
       - key: OUTREACH_DASHBOARD_TOKEN
         generateValue: true
+      - key: OUTREACH_ADMIN_EMAIL
+        value: "chen.yuxuan9@northeastern.edu"
+      - key: OUTREACH_ADMIN_PASSWORD_HASH
+        sync: false
+      - key: OUTREACH_COOKIE_SECURE
+        value: "true"
       - key: RESEARCH_QUESTIONNAIRE_SECRET
         generateValue: true
       - key: RESEARCH_QUESTIONNAIRE_BASE_URL

@@ -33,7 +33,7 @@ def test_post_form_confirmation_api_uses_isolated_fixture_and_stays_draft(tmp_pa
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
 
-def test_public_dashboard_queue_is_read_only_and_redacted(monkeypatch):
+def test_dashboard_queue_and_public_projections_require_admin_session(monkeypatch):
     monkeypatch.setenv("OUTREACH_DASHBOARD_TOKEN", "operator-secret-sentinel")
     monkeypatch.setattr(dashboard, "list_records", lambda *args, **kwargs: {
         "records": [{
@@ -51,22 +51,10 @@ def test_public_dashboard_queue_is_read_only_and_redacted(monkeypatch):
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
-        summary = json.load(urllib.request.urlopen(base + "/api/public/summary"))
-        assert summary["public"] is True
-        assert "contact_channel_coverage" in summary["summary"]
-        assert summary["summary"]["contact_channel_coverage"] == {}
-        queue = json.load(urllib.request.urlopen(base + "/api/public/research/records?page=1&page_size=1"))
-        assert queue["public"] is True
-        assert queue["records"][0]["name"] == "Public Example"
-        assert "contact_channels_json" not in queue["records"][0]
-        assert "consent_status" not in queue["records"][0]
-        assert "questionnaire_submissions" not in queue["records"][0]
-        with __import__("pytest").raises(urllib.error.HTTPError) as error:
-            urllib.request.urlopen(base + "/api/research/records")
-        assert error.value.code == 401
-        with __import__("pytest").raises(urllib.error.HTTPError) as error:
-            urllib.request.urlopen(base + "/api/summary")
-        assert error.value.code == 401
+        for path in ("/api/public/summary", "/api/public/research/records?page=1&page_size=1", "/api/research/records", "/api/summary"):
+            with __import__("pytest").raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + path)
+            assert error.value.code == 401
     finally:
         server.shutdown()
         server.server_close()
@@ -116,7 +104,7 @@ def test_geo_result_auth_rejects_non_ascii_header_without_proxy_error(monkeypatc
         thread.join(timeout=2)
 
 
-def test_public_operational_pages_have_safe_read_projections(monkeypatch):
+def test_public_operational_pages_are_private(monkeypatch):
     monkeypatch.setenv("OUTREACH_DASHBOARD_TOKEN", "operator-secret-sentinel")
     def records(*args, **kwargs):
         profile_type = kwargs.get("profile_type") or "business_company"
@@ -133,18 +121,10 @@ def test_public_operational_pages_have_safe_read_projections(monkeypatch):
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
-        for path in ("/api/public/companies", "/api/public/hotels"):
-            payload = json.load(urllib.request.urlopen(base + path))
-            assert payload["public"] is True
-            assert payload["records"][0]["profile_type"] in {"business_company", "hotel_property"}
-            assert "contact_channels_json" not in payload["records"][0]
-        for path in ("/api/public/campaigns", "/api/public/responses", "/api/public/analytics"):
-            payload = json.load(urllib.request.urlopen(base + path))
-            assert payload["public"] is True
-            assert "private@example.com" not in json.dumps(payload)
-        with __import__("pytest").raises(urllib.error.HTTPError) as error:
-            urllib.request.urlopen(base + "/api/campaigns")
-        assert error.value.code == 401
+        for path in ("/api/public/companies", "/api/public/hotels", "/api/public/campaigns", "/api/public/responses", "/api/public/analytics", "/api/campaigns"):
+            with __import__("pytest").raises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + path)
+            assert error.value.code == 401
     finally:
         server.shutdown()
         server.server_close()

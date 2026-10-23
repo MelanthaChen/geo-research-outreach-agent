@@ -1,7 +1,11 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", dashboardToken: "" };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", authenticated: "" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
+function authorizedTestOverrideOptions() {
+  return (state.emailConfiguration?.authorized_test_recipients || [])
+    .map(email => `<option value="${esc(email)}">${esc(email)} · owner test override</option>`).join("");
+}
 function displayCampaignName(value) {
   const name = String(value || "Research Outreach Campaign").replace(/\s*[—–-]\s*DEMO(?:\s+ONLY)?$/i, "").trim();
   return /^Professor Walkthrough$/i.test(name) || !name ? "Research Outreach Campaign" : name;
@@ -15,9 +19,14 @@ const websiteDomain = (value) => {
 };
 const pillClass = (value) => ["VERIFIED","ELIGIBLE","HIGH","APPROVED","HAS_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "good" : ["UNKNOWN","NEEDS REVIEW","NEEDS_REVIEW","PENDING","BASELINE_NOT_RECHECKED","MEDIUM"].includes(String(value).toUpperCase()) ? "warn" : ["REJECTED_MISMATCH","REJECTED","LOW","NO_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "bad" : "neutral";
 
+function csrfCookie() {
+  const item=document.cookie.split(";").map(value=>value.trim()).find(value=>value.startsWith("geo_outreach_csrf="));
+  return item ? decodeURIComponent(item.slice("geo_outreach_csrf=".length)) : "";
+}
 function authHeaders(headers={}) {
   const result = {...headers};
-  if (state.dashboardToken) result.Authorization = `Bearer ${state.dashboardToken}`;
+  const csrf=csrfCookie();
+  if (csrf) result["X-CSRF-Token"]=csrf;
   return result;
 }
 function showAuthPrompt(message="This action requires protected operator access.") {
@@ -637,11 +646,11 @@ function showError(error) { const host = $("app-error"); host.hidden = false; ho
 const researchState={page:1,pageSize:25,selected:new Set(),total:0,filters:{promotion_state:"OPERATIONAL_WITH_TEST"}};
 async function reloadResearchQueue(){const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...researchState.filters});const result=await api(`/api/research/records?${query}`);researchState.total=result.total;const host=$("research-table");host.innerHTML=result.records.length?result.records.map(row=>`<article class="company-row ${researchState.selected.has(row.profile_id)?"selected":""}"><input type="checkbox" data-research-select="${esc(row.profile_id)}" ${researchState.selected.has(row.profile_id)?"checked":""}><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Consent</span>${pill(row.consent_status)}</span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.geo_research_status)}</small></button></article>`).join(""):`<div class="no-results">No research records match these filters.</div>`;host.querySelectorAll("[data-research-select]").forEach(box=>box.addEventListener("change",()=>{box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);updateResearchSelection();}));host.querySelectorAll("[data-research-detail]").forEach(button=>button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError)));$("research-page").textContent=`Page ${result.page} of ${Math.max(1,Math.ceil(result.total/result.page_size))} · ${result.total} records`;$("research-prev").disabled=result.page<=1;$("research-next").disabled=result.page>=Math.max(1,Math.ceil(result.total/result.page_size));updateResearchSelection();}
 async function reloadResearchQueue(){
-  const publicMode=!state.dashboardToken;
+  const publicMode=false;
   const filters={...researchState.filters};
   if(publicMode) delete filters.consent_status;
   const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...filters});
-  const result=publicMode?await publicApi(`/api/public/research/records?${query}`):await api(`/api/research/records?${query}`);
+  const result=await api(`/api/research/records?${query}`);
   researchState.total=result.total;
   const host=$("research-table");
   host.innerHTML=result.records.length?result.records.map(row=>publicMode
@@ -679,37 +688,12 @@ async function loadResearchDetail(profileId){const row=await api(`/api/research/
 async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
 function focusResearchDetail(){const detail=$("research-detail");if(detail){const rect=detail.getBoundingClientRect();detail.style.position="fixed";detail.style.top="88px";detail.style.left=`${Math.max(16,rect.left)}px`;detail.style.right=`${Math.max(16,window.innerWidth-rect.right)}px`;detail.style.maxHeight="calc(100vh - 112px)";detail.style.overflowY="auto";detail.style.zIndex="30";}}
 async function loadResearchDetail(profileId){
-  if(!state.dashboardToken){
-    $("research-detail").innerHTML=`<div class="empty-state"><h3>Operator sign-in required</h3><p>This record's website evidence, screening observations, contact evidence, invitations, and manual controls require protected operator access.</p><form id="research-inline-login" class="dashboard-login-form"><label class="field-label">Operator dashboard token<input id="research-inline-token" type="password" autocomplete="off" required></label><button class="button primary" type="submit">Open protected details</button></form><p id="research-inline-login-status" class="inline-status" role="status"></p></div>`;
-    focusResearchDetail();
-    const form=$("research-inline-login");
-    form.addEventListener("submit",async(event)=>{
-      event.preventDefault();
-      const token=$("research-inline-token").value.trim();
-      const status=$("research-inline-login-status");
-      if(!token)return;
-      state.dashboardToken=token;
-      status.textContent="Authenticating…";
-      try{
-        await api(`/api/research/records/${encodeURIComponent(profileId)}`);
-        sessionStorage.setItem("geo_outreach_dashboard_token",token);
-        await reloadResearchQueue();
-        await loadResearchDetail(profileId);
-      }catch(error){
-        state.dashboardToken="";
-        sessionStorage.removeItem("geo_outreach_dashboard_token");
-        status.textContent="Authentication failed. Check the token and try again.";
-        showError(error);
-      }
-    });
-    return;
-  }
   const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);
   const drafts=row.email_drafts||[];
   const official=(row.contact_channels||[]).filter(item=>item.email&&["APPROVED","VERIFIED","CONTACT_VERIFIED"].includes(String(item.review_status||"").toUpperCase()));
   const evidence=(row.verification_evidence_json&&JSON.parse(row.verification_evidence_json||"[]"))||[];
   const draftHtml=drafts.length?drafts.map(item=>`<div class="draft-card"><strong>${esc(item.subject||"Invitation draft")}</strong><div>${esc(item.approval_status)} · delivery: ${esc(item.delivery_recipient||item.recipient)} · intended: ${esc(item.intended_recipient||"Not established")}</div><div>${item.test_override?"OWNER-CONTROLLED TEST OVERRIDE · ":""}${esc(item.invitation_id||"")}</div><details><summary>Preview</summary><pre>${esc(item.body||"")}</pre></details>${item.approval_status==="PENDING"?`<button class="button outline" data-approve-draft="${esc(item.draft_id)}">Approve for manual send</button>`:""}${item.approval_status==="APPROVED"?`<div class="manual-reconcile"><p class="section-help">After the operator sends this exact preview through Word Mail Merge/Outlook, reconcile it with evidence from Sent Items. This does not send.</p><input data-send-message="${esc(item.draft_id)}" placeholder="Outlook Message-ID"><input data-send-evidence="${esc(item.draft_id)}" placeholder="Sent Items evidence reference"><button class="button outline" data-reconcile-send="${esc(item.draft_id)}">Record provider acceptance</button></div>`:""}</div>`).join(""):"<p class=section-help>No invitation drafts.</p>";
-  $("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Verified website/contact evidence</h4>${listItems(evidence.map(item=>`${item.text||item.description||"Evidence recorded"}${item.source_url?` · ${item.source_url}`:""}`),"No verification evidence recorded.")}<div>${official.length?official.map(item=>`<div>${esc(item.channel_type||"OFFICIAL_CONTACT")} · ${esc(item.email)} · ${esc(item.source_url||"source URL not recorded")} · ${esc(item.review_status)}</div>`).join(""):"No verified official company email. Test delivery overrides do not change this."}</div></div><div class="subsection"><h4>Preliminary GEO observations</h4>${listItems((row.screenings||[]).flatMap(item=>{try{const value=JSON.parse(item.opportunities_json||"[]");return (value.opportunities||value||[]).map(x=>x.title||x.observation||JSON.stringify(x));}catch(_){return [];}}),"No preliminary screening evidence recorded.")}</div><div class="subsection"><h4>Prepare manual invitation</h4><p class="section-help">Creates a draft only. Sending remains an explicit Word Mail Merge/Outlook action and is reconciled only from provider evidence.</p><label class="field-label">Delivery recipient<select id="manual-delivery-recipient"><option value="">Select a verified official email</option>${official.map(item=>`<option value="${esc(item.email)}">${esc(item.email)} · official</option>`).join("")}<option value="yuxuan.chen.1031@outlook.com">yuxuan.chen.1031@outlook.com · owner test override</option><option value="yuxaun.chen.1031@outlook.com">yuxaun.chen.1031@outlook.com · owner test override</option></select></label><label><input type="checkbox" id="manual-test-override"> Owner-controlled test override (required for test inboxes)</label><button class="button primary" id="manual-create-draft">Create invitation draft</button></div><div class="subsection"><h4>Invitation drafts</h4>${draftHtml}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
+  $("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Verified website/contact evidence</h4>${listItems(evidence.map(item=>`${item.text||item.description||"Evidence recorded"}${item.source_url?` · ${item.source_url}`:""}`),"No verification evidence recorded.")}<div>${official.length?official.map(item=>`<div>${esc(item.channel_type||"OFFICIAL_CONTACT")} · ${esc(item.email)} · ${esc(item.source_url||"source URL not recorded")} · ${esc(item.review_status)}</div>`).join(""):"No verified official company email. Test delivery overrides do not change this."}</div></div><div class="subsection"><h4>Preliminary GEO observations</h4>${listItems((row.screenings||[]).flatMap(item=>{try{const value=JSON.parse(item.opportunities_json||"[]");return (value.opportunities||value||[]).map(x=>x.title||x.observation||JSON.stringify(x));}catch(_){return [];}}),"No preliminary screening evidence recorded.")}</div><div class="subsection"><h4>Prepare manual invitation</h4><p class="section-help">Creates a draft only. Sending remains an explicit Word Mail Merge/Outlook action and is reconciled only from provider evidence.</p><label class="field-label">Delivery recipient<select id="manual-delivery-recipient"><option value="">Select a verified official email</option>${official.map(item=>`<option value="${esc(item.email)}">${esc(item.email)} · official</option>`).join("")}${authorizedTestOverrideOptions()}</select></label><label><input type="checkbox" id="manual-test-override"> Owner-controlled test override (required for test inboxes)</label><button class="button primary" id="manual-create-draft">Create invitation draft</button></div><div class="subsection"><h4>Invitation drafts</h4>${draftHtml}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
   const createButton=$("manual-create-draft"); if(createButton) createButton.addEventListener("click",async()=>{const recipient=$("manual-delivery-recipient").value;if(!recipient){showError(new Error("Select a delivery recipient"));return;}try{await researchAction("/api/recruitment/manual-draft",{profile_id:profileId,delivery_recipient:recipient,test_override:$("manual-test-override").checked});await loadResearchDetail(profileId);}catch(error){showError(error);}});
   $("research-detail").querySelectorAll("[data-approve-draft]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name for manual-send approval:");if(!reviewer)return;try{await researchAction("/api/recruitment/approve-batch",{draft_ids:[button.dataset.approveDraft],reviewer});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
   $("research-detail").querySelectorAll("[data-reconcile-send]").forEach(button=>button.addEventListener("click",async()=>{const id=button.dataset.reconcileSend;const message=$("research-detail").querySelector(`[data-send-message="${CSS.escape(id)}"]`).value.trim();const evidence=$("research-detail").querySelector(`[data-send-evidence="${CSS.escape(id)}"]`).value.trim();if(!message||!evidence){showError(new Error("Message-ID and Sent Items evidence are required"));return;}try{await researchAction("/api/recruitment/manual-send-reconcile",{draft_id:id,provider:"OUTLOOK_WORD_MAIL_MERGE",provider_message_id:message,evidence_ref:evidence});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
@@ -727,7 +711,7 @@ function navigate() {
   if(page==="interest-form") renderFormTokens(state.campaignSummaries).catch(showError);
 }
 async function start() {
-  if (state.dashboardToken) $("dashboard-login").hidden=true;
+  if (state.authenticated) $("dashboard-login").hidden=true;
   wireFilters();
   state.emailConfiguration=await api("/api/test-email/config");
   const result = await api("/api/summary");
@@ -741,15 +725,17 @@ async function start() {
   navigate();
 }
 async function start() {
-  if(!state.dashboardToken){
-    const result=await publicApi("/api/public/summary");
-    state.summary=result.summary; state.participationFormUrl=""; state.formConfiguration={};
-    renderSummary({...result.summary, filters: result.filters||{}});
-    const protectedActions=$("research-protected-actions"); if(protectedActions) protectedActions.hidden=true;
-    await loadPublicOverview();
-    navigate();
+  const sessionResponse=await fetch("/api/auth/session",{headers:{"Accept":"application/json"},cache:"no-store"});
+  const sessionState=await sessionResponse.json();
+  if(!sessionState.authenticated){
+    document.body.classList.add("auth-locked");
+    $("auth-gate").hidden=false;
+    if(!sessionState.admin_configured) $("dashboard-login-status").textContent="Administrator authentication is not configured for this environment. An operator must initialize the Argon2id password hash in the hosting secret manager.";
     return;
   }
+  state.authenticated="session";
+  document.body.classList.remove("auth-locked");
+  $("auth-gate").hidden=true;
   const result=await api("/api/summary");
   state.summary=result.summary; state.participationFormUrl=result.simulated_signup_url||""; state.formConfiguration=result.participation_form_configuration||{};
   renderSettings(state.formConfiguration); renderSummary({...result.summary, filters: result.filters}); await reloadCompanies(); await loadCampaignWorkspace(); navigate();
@@ -757,22 +743,35 @@ async function start() {
 window.addEventListener("hashchange",navigate);
 const loginForm=$("dashboard-login-form"); if(loginForm) loginForm.addEventListener("submit",async(event)=>{
   event.preventDefault();
-  const token=$("dashboard-token").value.trim();
-  if(!token)return;
-  state.dashboardToken=token;
-  sessionStorage.setItem("geo_outreach_dashboard_token",token);
+  const email=$("dashboard-email").value.trim();
+  const password=$("dashboard-password").value;
+  if(!email||!password)return;
   $("dashboard-login-status").textContent="Authenticating…";
   try{
+    const response=await fetch("/api/auth/login",{method:"POST",headers:{"Accept":"application/json","Content-Type":"application/json"},body:JSON.stringify({email,password}),credentials:"same-origin",cache:"no-store"});
+    const result=await response.json();
+    if(!response.ok) throw new Error(result.error||"Authentication failed");
+    state.authenticated="session";
     await start();
-    $("dashboard-login").hidden=true;
-    $("app-error").textContent="Protected operator access is configured for this browser session.";
+    $("dashboard-password").value="";
     $("app-error").hidden=true;
-    $("dashboard-token").value="";
   }catch(error){
-    state.dashboardToken="";
-    sessionStorage.removeItem("geo_outreach_dashboard_token");
-    $("dashboard-login-status").textContent="Authentication failed. Check the token and try again.";
+    state.authenticated="";
+    $("dashboard-login-status").textContent=error.message;
     showError(error);
+  }
+});
+const logoutButton=$("logout-button"); if(logoutButton) logoutButton.addEventListener("click",async()=>{
+  logoutButton.disabled=true;
+  try{
+    await fetch("/api/auth/logout",{method:"POST",headers:authHeaders({"Accept":"application/json","Content-Type":"application/json"}),body:"{}",credentials:"same-origin",cache:"no-store"});
+  } finally {
+    state.authenticated="";
+    document.body.classList.add("auth-locked");
+    $("auth-gate").hidden=false;
+    location.hash="";
+    $("dashboard-login-status").textContent="Signed out.";
+    logoutButton.disabled=false;
   }
 });
 let responseSearchTimer;
@@ -879,7 +878,7 @@ function navigate() {
   document.querySelectorAll("[data-view]").forEach((view) => { view.hidden = view.dataset.view !== page; });
   document.querySelectorAll("[data-page]").forEach((link) => { const active = link.dataset.page === page; link.classList.toggle("active", active); if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
   document.title = `${page.replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())} · GEO Research Outreach Platform`;
-  if (state.dashboardToken) {
+  if (state.authenticated) {
     if (page === "responses") renderResponsesFromApi().catch(showError);
     if (page === "research-queue") reloadResearchQueue().catch(showError);
     if (page === "interest-form") renderFormTokens(state.campaignSummaries).catch(showError);

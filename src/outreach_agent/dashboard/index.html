@@ -7,7 +7,20 @@
   <title>GEO Research Outreach</title>
   <link rel="stylesheet" href="/style.css?v=public-layout-1">
 </head>
-<body class="app-shell">
+<body class="app-shell auth-locked">
+  <section id="auth-gate" class="auth-gate" aria-labelledby="login-title">
+    <div class="auth-card">
+      <p class="eyebrow">PRIVATE OPERATOR WORKSPACE</p>
+      <h1 id="login-title">Sign in to GEO Research Outreach</h1>
+      <p>Use the authorized Northeastern University administrator account. Research records, contacts, invitations, consent, and GEO handoffs are not available before sign-in.</p>
+      <form id="dashboard-login-form" class="dashboard-login-form" autocomplete="on">
+        <label class="field-label">Administrator email<input id="dashboard-email" type="email" autocomplete="username" required value="chen.yuxuan9@northeastern.edu"></label>
+        <label class="field-label">Password<input id="dashboard-password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary" type="submit">Sign in</button>
+      </form>
+      <p id="dashboard-login-status" class="inline-status" role="status"></p>
+    </div>
+  </section>
   <aside class="sidebar">
     <a class="brand" href="#overview" aria-label="GEO Research Outreach Platform overview"><span class="brandmark">G</span><span><b>Research Outreach</b><small>GEO research workspace</small></span></a>
     <div class="nav-caption">WORKSPACE</div>
@@ -24,9 +37,9 @@
     <div class="sidebar-bottom"><a href="#settings" data-page="settings"><span>⚙</span>Settings</a><div class="transport"><i></i><span>Test</span></div></div>
   </aside>
   <main class="main-shell">
-    <header class="topbar"><div><span class="topbar-label">UNIVERSITY RESEARCH · GEO</span></div><div class="env-chip" title="Local test transport"><i></i> Test</div></header>
+    <header class="topbar"><div><span class="topbar-label">UNIVERSITY RESEARCH · GEO</span></div><div class="topbar-actions"><div class="env-chip" title="Local test transport"><i></i> Test</div><button type="button" id="logout-button" class="button outline">Sign out</button></div></header>
     <div id="app-error" class="app-error" role="alert" hidden></div>
-    <section class="panel public-access-notice" aria-label="Public dashboard access"><p class="eyebrow">PUBLIC READ-ONLY VIEW</p><p>Browse non-sensitive prospect and screening information without signing in. Contact details, invitations, questionnaire responses, consent review, approvals, and GEO handoffs remain protected operator actions.</p></section>
+    <section class="panel public-access-notice" aria-label="Private dashboard access"><p class="eyebrow">PRIVATE OPERATOR VIEW</p><p>All dashboard data and operational actions require an authenticated administrator session.</p></section>
     <section class="page-view" id="page-overview" data-view="overview">
       <div class="page-heading"><div><p class="eyebrow">OVERVIEW</p><h1>Research outreach at a glance</h1><p>Understand the cohort, campaign activity, and items awaiting review.</p></div><a class="button primary link-button" href="#campaigns">Manage campaigns <span>→</span></a></div>
       <section class="metrics" id="metrics" aria-live="polite"></section><section class="panel candidate-scale-overview"><div class="section-head"><div><p class="eyebrow">SMB/SME RECONCILIATION</p><h2>Small and medium business target</h2><p class="section-help">Size is counted only when saved source evidence supports it. Unknown-size businesses remain candidates for review. Hotels are tracked separately and excluded from this target.</p></div></div><section id="phase7-smb-metrics" class="secondary-metrics" aria-live="polite"></section><div class="candidate-export-links"><a class="button outline" href="/api/phase7/smb/contactable.csv">Contactable companies</a><a class="button outline" href="/api/phase7/smb/size-review.csv">Size review queue</a><a class="button outline" href="/api/phase7/smb/reconciliation.csv">Full reconciliation</a><a class="button outline" href="/api/phase7/smb/cohort-overlap.csv">Potential cohort overlaps</a></div></section><section class="panel candidate-scale-overview"><div class="section-head"><div><p class="eyebrow">CANDIDATE VERIFICATION</p><h2>Priority-ordered candidate shortlist</h2><p class="section-help">The shortlist prioritizes research candidates; it is not a count of verified SMBs. Contact evidence remains pending human review, and outreach readiness still requires existing approvals.</p></div></div><section id="candidate-scale-metrics" class="secondary-metrics" aria-live="polite"></section></section><section class="campaign-overview-metrics" id="overview-campaign-metrics" aria-live="polite"></section>
@@ -73,6 +86,6 @@
     <section class="page-view" id="page-settings" data-view="settings" hidden><div class="page-heading"><div><p class="eyebrow">CONFIGURATION</p><h1>Settings</h1><p>Review research identity, participation form, sender, and delivery configuration.</p></div></div><section class="panel settings-card"><div class="settings-banner"><span>Delivery configuration</span><small>Company outreach remains disabled. Only allowlisted controlled test sends can use Gmail.</small></div><section class="email-settings-block"><p class="eyebrow">EMAIL CONFIGURATION</p><h2>Gmail test sender and recipients</h2><p>Addresses are stored locally. The optional OAuth client JSON and tokens stay outside the repository.</p><div id="email-test-settings" class="settings-grid"></div><button type="button" class="button outline" id="connect-gmail">Connect Gmail</button><p id="gmail-connection-status" class="inline-status" role="status"></p><p id="email-settings-prerequisite" class="campaign-safety"></p></section><section class="email-settings-block"><p class="eyebrow">SENDER ACCOUNTS</p><h2>Recruitment sender accounts</h2><p>Account configuration is persistent, but connection is fail-closed until administrator-approved Gmail OAuth credentials are configured. No arbitrary From-address is accepted.</p><div id="sender-accounts" class="settings-grid"></div><div class="field-row"><input id="sender-email" type="email" placeholder="sender@example.com"><input id="sender-display-name" placeholder="Display name"><input id="sender-reply-to" type="email" placeholder="Reply-To (optional)"></div><textarea id="sender-signature" placeholder="Signature (optional)"></textarea><button type="button" class="button outline" id="add-sender-account">Save sender account</button><p id="sender-account-status" class="inline-status" role="status"></p></section><div id="settings-grid" class="settings-grid"></div><p class="campaign-safety">Gmail sending is limited to the two exact test recipients and requires confirmation for each message. Company campaign delivery remains disabled.</p></section></section>
     <footer><span>GEO Research Outreach Platform</span><span>Local research workspace · test/live activity remains separate</span></footer>
   </main>
-  <script src="/app.js?v=c6fc489" defer></script>
+  <script src="/app.js?v=admin-auth-1" defer></script>
 </body>
 </html>

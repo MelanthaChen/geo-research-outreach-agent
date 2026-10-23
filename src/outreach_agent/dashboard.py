@@ -57,6 +57,10 @@ from outreach_agent.research_lifecycle import edit_email_draft
 from outreach_agent.google_forms_integration import prefilled_form_url, sync_sheet_rows
 from outreach_agent.lean_registry import review_contact
 from outreach_agent.hotel_prospect_job import pause as pause_hotel_discovery, resume as resume_hotel_discovery, status as hotel_discovery_status
+from outreach_agent.admin_auth import (
+    CSRF_COOKIE, SESSION_COOKIE, authenticate, clear_cookie_header, cookie_header,
+    csrf_valid, init_auth_store, password_hash_configured, revoke, session as auth_session,
+)
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -193,7 +197,10 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             token = os.environ.get("OUTREACH_DASHBOARD_TOKEN") or os.environ.get("OUTREACH_REVIEW_TOKEN", "")
             user = os.environ.get("OUTREACH_BASIC_AUTH_USER", "")
             password = os.environ.get("OUTREACH_BASIC_AUTH_PASSWORD", "")
-            if loopback and not token and not (user and password):
+            # Keep the historical loopback developer convenience only when no
+            # hosted authentication configuration exists.  A configured
+            # Argon2id admin hash disables this escape hatch even on localhost.
+            if loopback and os.environ.get("OUTREACH_ENV", "local").casefold() == "local" and not token and not (user and password) and not password_hash_configured():
                 return True
             supplied = self.headers.get("Authorization", "")
             if supplied.lower().startswith("bearer ") and token:
@@ -205,6 +212,28 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return False
                 return hmac.compare_digest(decoded, f"{user}:{password}")
             return False
+
+        def _cookie(self, name: str) -> str:
+            values = {}
+            for item in self.headers.get("Cookie", "").split(";"):
+                if "=" in item:
+                    key, value = item.strip().split("=", 1)
+                    values[key] = value
+            return values.get(name, "")
+
+        def _browser_session(self):
+            return auth_session(REGISTRY_DB, self._cookie(SESSION_COOKIE))
+
+        def _dashboard_authenticated(self) -> bool:
+            return bool(self._browser_session() or self._dashboard_auth_ok())
+
+        def _secure_cookie(self) -> bool:
+            if os.environ.get("OUTREACH_COOKIE_SECURE", "").casefold() in {"0", "false", "no"}:
+                return False
+            return self.headers.get("X-Forwarded-Proto", "https").casefold() == "https"
+
+        def _send_auth_cookie(self, name: str, value: str, *, max_age: int | None = None) -> None:
+            self.send_header("Set-Cookie", cookie_header(name, value, secure=self._secure_cookie(), max_age=max_age))
 
         def _geo_service_auth_ok(self) -> bool:
             expected = os.environ.get("GEO_ENGINE_HANDOFF_TOKEN", "")
@@ -219,19 +248,20 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/api/auth/session":
+                current = self._browser_session()
+                self._json({"authenticated": bool(current), "email": current["email"] if current else None,
+                            "expires_at": current["expires_at"] if current else None,
+                            "admin_configured": password_hash_configured()})
+                return
             if parsed.path == "/health":
                 self._json({"status": "healthy", "service": "outreach-dashboard"})
                 return
-            public_paths = {
-                "/api/public/summary", "/api/public/research/records", "/api/public/companies",
-                "/api/public/hotels", "/api/public/campaigns", "/api/public/responses",
-                "/api/public/analytics",
-            }
-            if parsed.path.startswith("/api/") and parsed.path not in public_paths and not self._dashboard_auth_ok():
+            if parsed.path.startswith("/api/") and not self._dashboard_authenticated():
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
             if parsed.path == "/api/public/summary":
-                self._json(_public_summary(data))
+                self._json({"error": "dashboard authentication required"}, 401)
                 return
             if parsed.path == "/api/public/research/records":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
@@ -539,8 +569,11 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
-            internal_result_import = urlparse(self.path).path == "/api/integration/results"
-            if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not internal_result_import and not self._dashboard_auth_ok():
+            parsed_path = urlparse(self.path).path
+            internal_result_import = parsed_path == "/api/integration/results"
+            auth_login = parsed_path == "/api/auth/login"
+            auth_logout = parsed_path == "/api/auth/logout"
+            if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not internal_result_import and not auth_login and not self._dashboard_authenticated():
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
             if internal_result_import and not self._geo_service_auth_ok():
@@ -564,6 +597,36 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 if not isinstance(body, dict):
                     raise ValueError("JSON object required")
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/auth/login":
+                    email = str(body.get("email") or "")
+                    password = str(body.get("password") or "")
+                    result = authenticate(REGISTRY_DB, email, password, self.client_address[0])
+                    if not result:
+                        self._json({"error": "Invalid administrator email or password"}, 401)
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self._send_auth_cookie(SESSION_COOKIE, result["token"], max_age=7 * 24 * 60 * 60)
+                    self._send_auth_cookie(CSRF_COOKIE, result["csrf"], max_age=7 * 24 * 60 * 60)
+                    payload = json.dumps({"authenticated": True, "email": result["email"], "expires_at": result["expires_at"]}).encode()
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers(); self.wfile.write(payload)
+                    return
+                if parsed.path == "/api/auth/logout":
+                    current = self._browser_session()
+                    if current and not csrf_valid(current, self.headers.get("X-CSRF-Token")):
+                        self._json({"error": "CSRF validation failed"}, 403); return
+                    revoke(REGISTRY_DB, self._cookie(SESSION_COOKIE), self.client_address[0])
+                    self.send_response(200); self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self._send_auth_cookie(SESSION_COOKIE, "", max_age=0); self._send_auth_cookie(CSRF_COOKIE, "", max_age=0)
+                    payload = b'{"authenticated":false}'; self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
+                    return
+                current_browser_session = self._browser_session()
+                if parsed.path.startswith("/api/") and not internal_result_import and parsed.path != "/api/questionnaire" and current_browser_session and not csrf_valid(current_browser_session, self.headers.get("X-CSRF-Token")):
+                    self._json({"error": "CSRF validation failed"}, 403)
+                    return
                 if parsed.path == "/api/questionnaire":
                     token = str(body.get("token") or "")
                     response = dict(body); response.pop("token", None)
@@ -960,6 +1023,7 @@ def serve(host: str = "127.0.0.1", port: int = 8765, db: Path = DEFAULT_DB,
         if not (os.environ.get("OUTREACH_DASHBOARD_TOKEN") or (os.environ.get("OUTREACH_BASIC_AUTH_USER") and os.environ.get("OUTREACH_BASIC_AUTH_PASSWORD"))):
             raise ValueError("remote dashboard binding requires dashboard token or basic-auth credentials")
     cloud_registry = os.environ.get("OUTREACH_DATABASE_URL")
+    init_auth_store(REGISTRY_DB)
     data = cloud_dashboard_snapshot(cloud_registry) if cloud_registry else load_dashboard_data(db, verification, delivery)
     campaign_store = CampaignStore(DEFAULT_CAMPAIGN_DB)
     email_event_store = EmailEventStore()

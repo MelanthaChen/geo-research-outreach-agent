@@ -108,6 +108,31 @@ def test_bound_owner_test_recipients_use_normal_batch_workflow(tmp_path):
     assert [row[0] for row in rows] == ["yuxuan.chen.1031@outlook.com", "yuxaun.chen.1031@outlook.com"]
 
 
+def test_owner_test_batch_preserves_approved_history_and_refreshes_current_draft(tmp_path):
+    path = tmp_path / "registry.db"
+    register_profile(profile("owner-one", owner_test=True), path)
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO owner_test_recipient_bindings(profile_id,recipient,label,created_at,updated_at) VALUES (?,?,?,?,?)", ("owner-one", "yuxuan.chen.1031@outlook.com", "GeoAIResume demo", "now", "now"))
+
+    first = generate_invitation_batch(["owner-one"], secret="test-secret", path=path)
+    approve_invitation_batch(first["batch_id"], "operator", path=path)
+
+    refreshed = generate_invitation_batch(["owner-one"], secret="test-secret", path=path)
+    assert refreshed["summary"]["ready_for_approval"] == 1
+    assert refreshed["generated"][0]["status"] == "DRAFTED"
+    assert refreshed["draft_ids"] != first["draft_ids"]
+
+    record = get_record("owner-one", path)
+    assert len(record["email_drafts"]) == 2
+    assert {draft["approval_status"] for draft in record["email_drafts"]} == {"APPROVED", "PENDING"}
+
+    repeated = generate_invitation_batch(["owner-one"], secret="test-secret", path=path)
+    assert repeated["summary"]["duplicate_already_invited"] == 1
+    assert repeated["draft_ids"] == refreshed["draft_ids"]
+    with sqlite3.connect(path) as db:
+        assert db.execute("select count(*) from email_drafts").fetchone()[0] == 2
+
+
 def test_batch_approval_requires_explicit_reviewer_and_is_idempotent(tmp_path):
     path = tmp_path / "registry.db"
     register_profile(profile("company-ready"), path)

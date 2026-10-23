@@ -801,6 +801,7 @@ def create_manual_invitation_draft(
     path: Path = REGISTRY_DB,
     test_override: bool = False,
     expires_at: str | None = None,
+    force_new: bool = False,
 ) -> dict[str, Any]:
     """Create or return one reviewed, manual-send invitation draft.
 
@@ -841,7 +842,7 @@ def create_manual_invitation_draft(
             "AND d.approval_status IN ('PENDING','APPROVED') AND COALESCE(i.status,'INVITED') NOT IN ('SENT','EXPIRED') ORDER BY d.draft_id DESC LIMIT 1",
             (profile_id, recipient),
         ).fetchone()
-        if existing:
+        if existing and not force_new:
             if test_override and not existing["test_override"]:
                 with _connect(path) as update_db:
                     update_db.execute("UPDATE email_drafts SET intended_recipient=NULL,delivery_recipient=?,recipient_mode='TEST_OVERRIDE',test_override=1 WHERE draft_id=?", (recipient, existing["draft_id"]))
@@ -927,11 +928,14 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
                 existing = next((item for item in record.get("email_drafts", [])
                                  if str(item.get("approval_status")) in {"PENDING", "APPROVED"}
                                  and str(item.get("delivery_recipient") or item.get("recipient") or "").casefold() == recipient), None)
-                if existing:
+                if existing and str(existing.get("approval_status")) == "PENDING":
                     categories["duplicate_already_invited"].append(profile_id)
                     generated.append({"profile_id": profile_id, "draft_id": existing["draft_id"], "status": "EXISTING"})
                     continue
-                result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=path, test_override=True)
+                # Preserve historical approved drafts, but prepare a fresh
+                # pending draft for the operator's current staging run. The
+                # force is limited to the explicit owner-test binding branch.
+                result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=path, test_override=True, force_new=True)
                 generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
                 categories["ready_for_approval"].append(profile_id)
                 continue

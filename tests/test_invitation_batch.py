@@ -44,6 +44,7 @@ def test_batch_generation_is_bounded_idempotent_and_never_sends(tmp_path):
         "total_selected": 3,
         "successfully_generated": 1,
         "ready_for_approval": 1,
+        "discovered_unverified_recipient": 0,
         "missing_verified_recipient": 1,
         "insufficient_verified_evidence": 0,
         "duplicate_already_invited": 0,
@@ -61,6 +62,35 @@ def test_batch_generation_is_bounded_idempotent_and_never_sends(tmp_path):
     assert repeated["draft_ids"] == result["draft_ids"]
     with sqlite3.connect(path) as db:
         assert db.execute("select count(*) from email_drafts").fetchone()[0] == 1
+
+
+def test_pending_first_party_business_email_can_prepare_draft_without_verification(tmp_path):
+    path = tmp_path / "registry.db"
+    pending = profile("company-pending")
+    pending["contact_channels"][0]["review_status"] = "PENDING"
+    register_profile(pending, path)
+
+    result = generate_invitation_batch(["company-pending"], secret="test-secret", path=path)
+
+    assert result["summary"]["successfully_generated"] == 1
+    assert result["summary"]["ready_for_approval"] == 1
+    assert result["summary"]["discovered_unverified_recipient"] == 1
+    record = get_record("company-pending", path)
+    assert record["contact_channels"][0]["review_status"] == "PENDING"
+    assert record["email_drafts"][0]["approval_status"] == "PENDING"
+
+
+def test_purpose_specific_email_is_excluded_from_draft_preparation(tmp_path):
+    path = tmp_path / "registry.db"
+    blocked = profile("company-blocked", email="careers@cedar.example")
+    blocked["contact_channels"][0]["review_status"] = "PENDING"
+    register_profile(blocked, path)
+
+    result = generate_invitation_batch(["company-blocked"], secret="test-secret", path=path)
+
+    assert result["summary"]["successfully_generated"] == 0
+    assert result["summary"]["missing_verified_recipient"] == 1
+    assert get_record("company-blocked", path)["email_drafts"] == []
 
 
 def test_batch_approval_requires_explicit_reviewer_and_is_idempotent(tmp_path):

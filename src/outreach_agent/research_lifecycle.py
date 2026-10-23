@@ -24,6 +24,7 @@ from email.utils import parseaddr
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from outreach_agent.integration import CONTRACT_VERSION, PROFILE_VERSION, OWNER_CONTROLLED_TEST
 from outreach_agent.database import connect_database, is_postgres_target
@@ -36,6 +37,53 @@ CONSENTED = "CONSENTED"
 CONSENT_VERSION = "geo-research-consent/v1"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CONFIRMATION_POLICIES = {"AFFIRMATIVE_REPLY_REQUIRED", "NOTICE_ONLY"}
+_DISCOVERED_EMAIL_TYPES = {
+    "GENERAL_BUSINESS_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL",
+    "PARTNERSHIP_EMAIL", "SALES_MARKETING_EMAIL",
+}
+_EXCLUDED_EMAIL_PURPOSES = {
+    "abuse", "career", "careers", "hr", "job", "jobs", "legal",
+    "privacy", "recruit", "recruiting", "security",
+}
+
+
+def _same_first_party_site(website: str, source_url: str) -> bool:
+    """Return whether evidence was captured from the recorded official site."""
+    try:
+        site = (urlsplit(website).hostname or "").lower().removeprefix("www.")
+        source = (urlsplit(source_url).hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return False
+    return bool(site and source and (source == site or source.endswith("." + site)))
+
+
+def _discovered_official_email_channels(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return public business emails eligible for draft preparation.
+
+    This is deliberately not a verification decision.  A verified official
+    site plus first-party evidence is enough to prepare a human-reviewable
+    draft, while the contact remains CONTACT_REVIEW_PENDING/NOT_VERIFIED.
+    """
+    if str(record.get("identity_verification_status", "")).upper() != "VERIFIED":
+        return []
+    website = str(record.get("official_website") or "").strip()
+    channels = record.get("contact_channels") or []
+    eligible: dict[str, dict[str, Any]] = {}
+    for item in channels:
+        if not isinstance(item, dict) or str(item.get("channel_type") or "").upper() not in _DISCOVERED_EMAIL_TYPES:
+            continue
+        email = str(item.get("email") or "").strip().casefold()
+        source_url = str(item.get("source_url") or item.get("channel_url") or "").strip()
+        if not EMAIL_RE.match(email) or not _same_first_party_site(website, source_url):
+            continue
+        local_part = email.split("@", 1)[0].replace(".", " ").replace("-", " ").replace("_", " ")
+        purpose = " ".join(str(item.get(key) or "").casefold() for key in ("purpose", "evidence", "email"))
+        if any(re.search(rf"\b{re.escape(token)}\b", local_part + " " + purpose) for token in _EXCLUDED_EMAIL_PURPOSES):
+            continue
+        if str(item.get("review_status") or "").upper() == "REJECTED":
+            continue
+        eligible[email] = item
+    return [eligible[email] for email in sorted(eligible)]
 
 
 def configured_confirmation_policy() -> str:
@@ -747,15 +795,14 @@ def create_manual_invitation_draft(
     if record.get("suppression_status") == "SUPPRESSED" or record.get("withdrawal_status") == "WITHDRAWN":
         raise PermissionError("company is suppressed or withdrawn")
 
-    # Prefer an explicitly verified official email, but never substitute a
-    # representative or invitation address when it is absent.
-    channels = record.get("contact_channels") or []
-    official = sorted({str(item.get("email", "")).strip().casefold() for item in channels
-                       if item.get("email") and str(item.get("review_status", "")).upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"}
-                       and EMAIL_RE.match(str(item.get("email", "")).strip())})
+    # A first-party, general-purpose email on a verified official site may
+    # prepare a draft before contact review. It remains unverified and still
+    # requires explicit draft approval before any manual send.
+    discovered = _discovered_official_email_channels(record)
+    official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})
     intended = official[0] if len(official) == 1 else None
     if not test_override and not intended:
-        raise PermissionError("no single verified official company email is available")
+        raise PermissionError("no single eligible first-party company email is available")
 
     with _connect(path) as db:
         existing = db.execute(
@@ -827,7 +874,7 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
     batch_id = "batch-invitations-" + _hash("|".join(sorted(unique_ids)))[:20]
     generated: list[dict[str, Any]] = []
     categories = {key: [] for key in (
-        "ready_for_approval", "missing_verified_recipient", "insufficient_verified_evidence",
+        "ready_for_approval", "discovered_unverified_recipient", "missing_verified_recipient", "insufficient_verified_evidence",
         "duplicate_already_invited", "owner_controlled_test_excluded", "generation_failed",
     )}
     for profile_id in unique_ids:
@@ -836,10 +883,8 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
             if record.get("profile_type") == "owner_controlled_test":
                 categories["owner_controlled_test_excluded"].append(profile_id)
                 continue
-            channels = record.get("contact_channels") or []
-            official = sorted({str(item.get("email", "")).strip().casefold() for item in channels
-                               if item.get("email") and str(item.get("review_status", "")).upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"}
-                               and EMAIL_RE.match(str(item.get("email", "")).strip())})
+            discovered = _discovered_official_email_channels(record)
+            official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})
             if len(official) != 1:
                 categories["missing_verified_recipient"].append(profile_id)
                 continue
@@ -853,6 +898,8 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
             result = create_manual_invitation_draft(profile_id, delivery_recipient=official[0], secret=secret, path=path)
             generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
             categories["ready_for_approval"].append(profile_id)
+            if not any(str(item.get("review_status") or "").upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"} for item in discovered if str(item.get("email") or "").strip().casefold() == official[0]):
+                categories["discovered_unverified_recipient"].append(profile_id)
         except PermissionError:
             categories["insufficient_verified_evidence"].append(profile_id)
         except (KeyError, ValueError, RuntimeError, sqlite3.Error) as exc:
@@ -862,6 +909,7 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
         "total_selected": len(unique_ids),
         "successfully_generated": len(generated),
         "ready_for_approval": len(categories["ready_for_approval"]),
+        "discovered_unverified_recipient": len(categories["discovered_unverified_recipient"]),
         "missing_verified_recipient": len(categories["missing_verified_recipient"]),
         "insufficient_verified_evidence": len(categories["insufficient_verified_evidence"]),
         "duplicate_already_invited": len(categories["duplicate_already_invited"]),

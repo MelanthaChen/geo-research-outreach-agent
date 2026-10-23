@@ -24,7 +24,7 @@ This document records the implemented pipeline as it exists in the repository an
 | Strategy evaluation and experiments | IMPLEMENTED COMPONENTS / NOT RUN | GEO Engine experiment/citation services exist | Requires separate operator authorization and budget/provider approval |
 | Report generation and delivery | IMPLEMENTED / TESTED LOCALLY (PREVIEW ONLY) | `src/outreach_agent/geo_result_delivery.py`, existing DOCX renderer, `research_reports` table | No email delivery is enabled or claimed |
 | Background polling | IMPLEMENTED / MANUAL OR SCHEDULER-READY | Single-run Sheets sync and watcher configuration exist | Managed cloud scheduler deployment remains required |
-| Deployment | VERIFIED STAGING FOR PRIOR VERSION / NOT VERIFIED FOR THIS CHANGE | Earlier staging health and Neon connectivity checks | Confirmation schema/API changes are not claimed live until deployed and migrated |
+| Deployment | VERIFIED STAGING | Render deployment `dep-dbdegpvavr4c739ppic0`, live commit `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`, `/health` returned HTTP 200 | GEO Engine commit is pushed but its corresponding staging deployment/API verification remains outstanding |
 
 ## Live owner-controlled evidence
 
@@ -133,11 +133,25 @@ performed.
 
 ## Staging deployment state
 
-At the time of this update, no Render deployment or Neon mutation has been
-performed by this implementation pass. The Render configuration already
-defines separate Outreach runtime/migration URLs and the authenticated GEO
-Engine URL/token boundary. Applying the additive `init_registry()` migration
-and deploying these changes requires authenticated Render/Neon access; it must
-be verified by the resulting deployment SHA, migration output, `/health`,
-authenticated integration health, and a staging-only fixture run before being
-labelled VERIFIED STAGING.
+The Outreach changes are deployed to the existing Render staging service:
+
+- Service: `geo-research-outreach-staging`
+- URL: `https://geo-research-outreach-staging.onrender.com`
+- Deployment: `dep-dbdegpvavr4c739ppic0`
+- Live commit: `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`
+- Render result: `Deploy succeeded | Live`
+- Health check: `GET /health` returned HTTP 200 with
+  `{"status":"healthy","service":"outreach-dashboard"}`.
+- Unauthenticated protected-route check: `GET
+  /api/recruitment/post-form-confirmation` returned HTTP 401.
+
+No database records were changed by this implementation pass. The additive
+registry initialization is backward-compatible, but a direct authenticated
+read of the staging schema was not performed because no dashboard token was
+exposed or retrieved. The GEO Engine integration commit `7932945` is pushed
+to `codex/render-internal-database-config`, but no corresponding live GEO
+Engine deployment or authenticated cross-service request is claimed.
+
+Therefore the current evidence is: Outreach staging is live and protected;
+the complete cross-repository execution is verified in isolated local tests,
+not yet as a live two-service staging run.

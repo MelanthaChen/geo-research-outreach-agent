@@ -161,6 +161,9 @@ def run_job(job_id: str, path: Path | str, *, config: ScreeningConfig | None = N
         if not job:
             raise KeyError(job_id)
         db.execute("UPDATE personalization_backfill_jobs SET status='RUNNING',started_at=COALESCE(started_at,?) WHERE job_id=? AND status IN ('PLANNED','PAUSED','RUNNING')", (now(), job_id))
+        # Publish the running state before the first potentially slow network
+        # request so an operator can observe and resume the job.
+        db.commit()
         queue = db.execute("SELECT q.*,r.* FROM personalization_backfill_queue q JOIN research_records r USING(profile_id) WHERE q.job_id=? AND q.status IN ('PENDING','RETRY') ORDER BY q.profile_id", (job_id,)).fetchall()
         counts = Counter(); processed = 0
         for item in queue:
@@ -186,6 +189,10 @@ def run_job(job_id: str, path: Path | str, *, config: ScreeningConfig | None = N
                 db.execute("UPDATE personalization_backfill_queue SET status='FAILED',completed_at=?,last_error=? WHERE job_id=? AND profile_id=?", (now(), f"{type(exc).__name__}:{exc}", job_id, profile_id))
                 db.execute("UPDATE research_records SET personalization_status='FAILED',personalization_error=?,updated_at=? WHERE profile_id=?", (f"{type(exc).__name__}:{exc}", now(), profile_id))
                 counts["failed"] += 1
+            # Each candidate is its own recovery boundary.  A timeout or
+            # process restart must not hide all prior progress in one long
+            # transaction.
+            db.commit()
             processed += 1
         remaining = db.execute("SELECT COUNT(*) FROM personalization_backfill_queue WHERE job_id=? AND status IN ('PENDING','RETRY','RUNNING')", (job_id,)).fetchone()[0]
         status = "PAUSED" if pause_after is not None and remaining else ("COMPLETE" if not remaining else "RUNNING")

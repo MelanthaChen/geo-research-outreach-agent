@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hmac
+import io
 import json
 import mimetypes
 import os
 import sqlite3
+import tempfile
+import zipfile
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +35,7 @@ from outreach_agent.gmail_integration import (
 )
 from outreach_agent.mail_merge import (
     DEFAULT_EXPORT_DIR, ExportLedger, assess_company_mail_merge, make_test_mail_merge, safe_file_component, save_export,
+    research_mail_merge_rows, save_research_mail_merge_xlsx, save_word_mail_merge_template,
 )
 from outreach_agent.candidate_pool import export_candidate_csv
 from outreach_agent.phase6e_screening import PHASE6E_DB, list_phase6e_candidates, phase6e_summary
@@ -601,6 +606,43 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         expires_at=body.get("expires_at"),
                     )
                     self._json(result, 200 if result.get("status") == "EXISTING" else 201)
+                    return
+                if parsed.path == "/api/research/mail-merge/package":
+                    profile_ids = [str(value) for value in (body.get("profile_ids") or []) if str(value).strip()]
+                    requested_recipients = body.get("allowed_recipients")
+                    allowed_recipients = None
+                    if isinstance(requested_recipients, list):
+                        allowed_recipients = {str(value).strip() for value in requested_recipients if str(value).strip()}
+                    with tempfile.TemporaryDirectory(prefix="geo-research-mail-merge-") as directory:
+                        export_dir = Path(directory)
+                        rows = research_mail_merge_rows(
+                            REGISTRY_DB,
+                            profile_ids=profile_ids or None,
+                            allowed_recipients=allowed_recipients,
+                        )
+                        if not rows:
+                            self._json({"error": "No approved invitation drafts matched the selected records"}, 409)
+                            return
+                        xlsx_path, xlsx_digest = save_research_mail_merge_xlsx(export_dir, "research_queue.xlsx", rows)
+                        docx_path, docx_digest = save_word_mail_merge_template(export_dir)
+                        csv_path = export_dir / "research_queue.csv"
+                        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+                            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), extrasaction="ignore")
+                            writer.writeheader()
+                            writer.writerows(rows)
+                        archive = io.BytesIO()
+                        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                            bundle.write(xlsx_path, arcname=xlsx_path.name)
+                            bundle.write(docx_path, arcname=docx_path.name)
+                            bundle.write(csv_path, arcname=csv_path.name)
+                        payload = archive.getvalue()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Disposition", 'attachment; filename="geo-research-mail-merge-package.zip"')
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    self.wfile.write(payload)
                     return
                 if parsed.path == "/api/recruitment/screen-and-draft":
                     secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")

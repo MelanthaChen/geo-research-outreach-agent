@@ -655,6 +655,12 @@ async function reloadResearchQueue(){
 function updateResearchSelection(){
   $("research-selected-count").textContent=`${researchState.selected.size} selected`;
 }
+async function downloadResearchMailMergePackage(){
+  if(!researchState.selected.size){showError(new Error("Select at least one approved invitation draft"));return;}
+  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected]})});
+  if(!response.ok){let detail="Mail Merge package export failed";try{detail=(await response.json()).error||detail;}catch(_){ }throw new Error(detail);}
+  const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded approved Word Mail Merge package (DOCX + XLSX + CSV).";
+}
 function reviewHeaders(){return `<label class="field-label">Review token (only required off localhost)<input id="consent-review-token" type="password" value="${esc(state.reviewToken)}" autocomplete="off"></label>`;}
 function renderConsentReview(row, profileId){
   const submissions=row.questionnaire_submissions||[], conflicts=row.questionnaire_conflicts||[], reviews=row.consent_reviews||[];
@@ -794,6 +800,7 @@ $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,r
 $("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});
 $("research-select-all").addEventListener("change",()=>{$("research-table").querySelectorAll("[data-research-select]").forEach(box=>{box.checked=$("research-select-all").checked;box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);});updateResearchSelection();});
 $("research-create-draft").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;const recipient=window.prompt("Approved recipient address for this draft:");if(!recipient)return;try{await researchAction("/api/recruitment/screen-and-draft",{profile_id:id,recipient,mode:"RULE_BASED"});}catch(error){showError(error);}});
+$("research-mail-merge-package").addEventListener("click",()=>downloadResearchMailMergePackage().catch(showError));
 $("research-invite").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;try{await researchAction("/api/recruitment/invite",{profile_id:id});}catch(error){showError(error);}});
 $("research-approve").addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name:");if(!reviewer)return;try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="PENDING").map(item=>item.draft_id));if(!drafts.length)throw new Error("No pending drafts selected");await researchAction("/api/recruitment/approve-batch",{draft_ids:drafts,reviewer});}catch(error){showError(error);}});
 $("research-send").addEventListener("click",async()=>{try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="APPROVED").map(item=>item.draft_id));if(!drafts.length)throw new Error("No approved drafts selected");await researchAction("/api/recruitment/send-simulated",{draft_ids:drafts});}catch(error){showError(error);}});

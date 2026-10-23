@@ -726,6 +726,8 @@ def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "
             clauses.append(field + "=?"); args.append(value)
     if promotion_state == "OPERATIONAL":
         clauses.append("promotion_state IN ('PROSPECT','OUTREACH_READY','INVITED','RESEARCH_PARTICIPANT')")
+    elif promotion_state == "OPERATIONAL_WITH_TEST":
+        clauses.append("(promotion_state IN ('PROSPECT','OUTREACH_READY','INVITED','RESEARCH_PARTICIPANT') OR profile_type='owner_controlled_test')")
     elif promotion_state:
         clauses.append("promotion_state=?"); args.append(promotion_state)
     for field, value in (("industry", industry), ("location", location)):

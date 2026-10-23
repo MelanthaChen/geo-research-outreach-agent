@@ -171,3 +171,17 @@ def test_research_queue_pagination_and_status_filters(tmp_path):
     assert filtered["total"] == 1
     assert filtered["records"][0]["profile_id"] == "company-b"
 
+
+def test_operational_queue_can_include_owner_fixture_without_changing_formal_filter(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile("company-a"), db)
+    register_profile(profile("owner-test", "owner_controlled_test"), db)
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE research_records SET promotion_state='PROSPECT' WHERE profile_id='company-a'")
+        connection.commit()
+    formal = list_records(db, promotion_state="OPERATIONAL")
+    visible = list_records(db, promotion_state="OPERATIONAL_WITH_TEST")
+    assert formal["total"] == 1
+    assert visible["total"] == 2
+    assert {row["profile_id"] for row in visible["records"]} == {"company-a", "owner-test"}
+

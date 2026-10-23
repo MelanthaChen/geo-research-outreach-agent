@@ -677,9 +677,11 @@ async function loadResearchDetail(profileId){const row=await api(`/api/research/
   $("research-detail").querySelectorAll("[data-consent-decision]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=$("research-detail").querySelector("#consent-reviewer").value.trim();if(!reviewer){showError(new Error("Reviewer name is required"));return;}const checks={};$("research-detail").querySelectorAll("[data-review-check]").forEach(input=>checks[input.dataset.reviewCheck]=input.checked);try{await researchAction("/api/research/consent-review",{profile_id:profileId,submission_id:(row.questionnaire_submissions||[])[0]?.submission_id,reviewer,approve:button.dataset.consentDecision==="approve",notes:$("research-detail").querySelector("#consent-review-notes").value,...checks});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
 }
 async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
+function focusResearchDetail(){const detail=$("research-detail");if(detail)detail.scrollIntoView({behavior:"smooth",block:"start"});}
 async function loadResearchDetail(profileId){
   if(!state.dashboardToken){
     $("research-detail").innerHTML=`<div class="empty-state"><h3>Operator sign-in required</h3><p>This record's website evidence, screening observations, contact evidence, invitations, and manual controls require protected operator access.</p><form id="research-inline-login" class="dashboard-login-form"><label class="field-label">Operator dashboard token<input id="research-inline-token" type="password" autocomplete="off" required></label><button class="button primary" type="submit">Open protected details</button></form><p id="research-inline-login-status" class="inline-status" role="status"></p></div>`;
+    focusResearchDetail();
     const form=$("research-inline-login");
     form.addEventListener("submit",async(event)=>{
       event.preventDefault();
@@ -711,6 +713,7 @@ async function loadResearchDetail(profileId){
   const createButton=$("manual-create-draft"); if(createButton) createButton.addEventListener("click",async()=>{const recipient=$("manual-delivery-recipient").value;if(!recipient){showError(new Error("Select a delivery recipient"));return;}try{await researchAction("/api/recruitment/manual-draft",{profile_id:profileId,delivery_recipient:recipient,test_override:$("manual-test-override").checked});await loadResearchDetail(profileId);}catch(error){showError(error);}});
   $("research-detail").querySelectorAll("[data-approve-draft]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name for manual-send approval:");if(!reviewer)return;try{await researchAction("/api/recruitment/approve-batch",{draft_ids:[button.dataset.approveDraft],reviewer});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
   $("research-detail").querySelectorAll("[data-reconcile-send]").forEach(button=>button.addEventListener("click",async()=>{const id=button.dataset.reconcileSend;const message=$("research-detail").querySelector(`[data-send-message="${CSS.escape(id)}"]`).value.trim();const evidence=$("research-detail").querySelector(`[data-send-evidence="${CSS.escape(id)}"]`).value.trim();if(!message||!evidence){showError(new Error("Message-ID and Sent Items evidence are required"));return;}try{await researchAction("/api/recruitment/manual-send-reconcile",{draft_id:id,provider:"OUTLOOK_WORD_MAIL_MERGE",provider_message_id:message,evidence_ref:evidence});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
+  focusResearchDetail();
 }
 const pages = ["overview","companies","hotels","research-queue","campaigns","interest-form","responses","analytics","settings"];
 function navigate() {

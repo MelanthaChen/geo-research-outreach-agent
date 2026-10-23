@@ -232,6 +232,15 @@ def test_dashboard_assets_do_not_load_external_resources_or_submit_forms():
     assert "Test handoff recorded" in js
 
 
+def test_research_queue_record_click_has_protected_detail_path_and_auth_prompt():
+    js = (ROOT / "src/outreach_agent/dashboard/app.js").read_text(encoding="utf-8")
+    assert 'button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError))' in js
+    assert 'id="research-inline-login"' in js
+    assert 'id="research-inline-token"' in js
+    assert 'await api(`/api/research/records/${encodeURIComponent(profileId)}`)' in js
+    assert "Authentication failed. Check the token and try again." in js
+
+
 def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():
     html = (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")
     css = (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")

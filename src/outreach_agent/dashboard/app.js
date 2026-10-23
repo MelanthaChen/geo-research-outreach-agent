@@ -679,7 +679,27 @@ async function loadResearchDetail(profileId){const row=await api(`/api/research/
 async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
 async function loadResearchDetail(profileId){
   if(!state.dashboardToken){
-    $("research-detail").innerHTML=`<div class="empty-state"><h3>Protected operational details</h3><p>This public view shows non-sensitive prospect information only. Contact details, questionnaire responses, consent review, invitations, and GEO handoff records require protected operator access.</p></div>`;
+    $("research-detail").innerHTML=`<div class="empty-state"><h3>Operator sign-in required</h3><p>This record's website evidence, screening observations, contact evidence, invitations, and manual controls require protected operator access.</p><form id="research-inline-login" class="dashboard-login-form"><label class="field-label">Operator dashboard token<input id="research-inline-token" type="password" autocomplete="off" required></label><button class="button primary" type="submit">Open protected details</button></form><p id="research-inline-login-status" class="inline-status" role="status"></p></div>`;
+    const form=$("research-inline-login");
+    form.addEventListener("submit",async(event)=>{
+      event.preventDefault();
+      const token=$("research-inline-token").value.trim();
+      const status=$("research-inline-login-status");
+      if(!token)return;
+      state.dashboardToken=token;
+      status.textContent="Authenticating…";
+      try{
+        await api(`/api/research/records/${encodeURIComponent(profileId)}`);
+        sessionStorage.setItem("geo_outreach_dashboard_token",token);
+        await reloadResearchQueue();
+        await loadResearchDetail(profileId);
+      }catch(error){
+        state.dashboardToken="";
+        sessionStorage.removeItem("geo_outreach_dashboard_token");
+        status.textContent="Authentication failed. Check the token and try again.";
+        showError(error);
+      }
+    });
     return;
   }
   const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);

@@ -123,7 +123,14 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     self._json({"error": f"Test email configuration is invalid: {exc}"}, 503)
                 return
             if parsed.path == "/api/sender-accounts":
-                self._json({"accounts": list_accounts(REGISTRY_DB), "production_oauth": False, "status": "CONFIGURATION_ONLY"})
+                # Sender-account settings are currently SQLite-backed and are
+                # intentionally not part of the hosted Neon registry.  Keep
+                # the read-only dashboard bootstrap path healthy in cloud
+                # mode instead of surfacing a misleading 502.
+                if os.environ.get("OUTREACH_DATABASE_URL"):
+                    self._json({"accounts": [], "production_oauth": False, "status": "CONFIGURATION_ONLY", "storage": "cloud_registry_not_configured"})
+                else:
+                    self._json({"accounts": list_accounts(REGISTRY_DB), "production_oauth": False, "status": "CONFIGURATION_ONLY"})
                 return
             if parsed.path == "/api/test-email/events":
                 events = email_event_store.recent() if email_event_store else []

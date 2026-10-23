@@ -38,3 +38,18 @@ def test_phase6g_dashboard_review_api_is_paginated_filterable_and_scoped(monkeyp
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_cloud_sender_accounts_bootstrap_is_non_failing(monkeypatch):
+    monkeypatch.setenv("OUTREACH_DATABASE_URL", "postgresql://cloud-registry.example/outreach")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler({"summary": {}, "details": {}}))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        payload = json.load(urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/sender-accounts"))
+        assert payload["accounts"] == []
+        assert payload["storage"] == "cloud_registry_not_configured"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

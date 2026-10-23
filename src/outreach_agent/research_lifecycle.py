@@ -361,7 +361,7 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
         if "geo_integration_error" not in record_columns:
             db.execute("ALTER TABLE research_records ADD COLUMN geo_integration_error TEXT")
         handoff_columns = {row[1] for row in db.execute("PRAGMA table_info(geo_handoffs)")}
-        for name, definition in {"property_id": "INTEGER", "attempt_count": "INTEGER NOT NULL DEFAULT 0", "last_error": "TEXT", "updated_at": "TEXT"}.items():
+        for name, definition in {"property_id": "INTEGER", "attempt_count": "INTEGER NOT NULL DEFAULT 0", "last_error": "TEXT", "updated_at": "TEXT", "research_run_status": "TEXT NOT NULL DEFAULT 'NOT_STARTED'", "research_result_record_id": "TEXT", "research_error": "TEXT", "research_started_at": "TEXT", "research_completed_at": "TEXT"}.items():
             if name not in handoff_columns:
                 db.execute(f"ALTER TABLE geo_handoffs ADD COLUMN {name} {definition}")
     return path
@@ -473,7 +473,7 @@ def submit_questionnaire(token: str, *, secret: str, response: dict[str, Any], p
     return submission_id
 
 
-def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB) -> str:
+def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB, bridge: Any | None = None) -> str:
     """Import one authenticated Sheets row without granting automatic consent."""
     parsed = parse_sheet_row(row)
     init_registry(path)
@@ -486,18 +486,21 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
         if duplicate:
             return "DUPLICATE"
         prior_submission = db.execute("SELECT submission_id FROM questionnaire_submissions WHERE invitation_id=? ORDER BY submitted_at LIMIT 1", (invitation["invitation_id"],)).fetchone()
+        record = db.execute("SELECT profile_id,profile_type,withdrawal_status FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone()
         allowed_emails = {str(invitation_email[0]).casefold() for invitation_email in db.execute("SELECT recipient FROM email_drafts WHERE invitation_id=?", (invitation["invitation_id"],)).fetchall()}
         invitation_email_matches = parsed.contact_email.casefold() in allowed_emails if parsed.contact_email else False
         interest = parsed.research_interest
         authorization = parsed.research_authorization
         valid_pair = interest in {"YES", "NO"} and authorization in {"YES", "NO"}
         conflicting = prior_submission is not None
+        from outreach_agent.geo_engine_handoff import owner_test_automation_enabled
+        auto_test = bool(record and record["profile_type"] == "owner_controlled_test" and owner_test_automation_enabled(record["profile_id"]))
         if conflicting or not valid_pair or not parsed.representative_name or not parsed.representative_role or not parsed.contact_email:
             outcome = "NEEDS_REVIEW"
             review = "CONFLICT_QUARANTINED" if conflicting else "NEEDS_REVIEW"
         elif interest == "YES" and authorization == "YES":
-            outcome = "NEEDS_REVIEW"
-            review = "NEEDS_REVIEW"
+            outcome = "CONSENTED" if auto_test and record["withdrawal_status"] != "WITHDRAWN" else "NEEDS_REVIEW"
+            review = "APPROVED" if outcome == "CONSENTED" else "NEEDS_REVIEW"
         elif interest == "YES" and authorization == "NO":
             outcome = "INTERESTED_NOT_AUTHORIZED"
             review = "NEEDS_REVIEW" if not invitation_email_matches else "PENDING"
@@ -516,7 +519,7 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
            site_modification_authorized,future_contact_permission,consent_wording_version,submitted_at,review_status,response_source,invitation_reference,
            research_interest,research_authorization,representative_full_name,representative_job_title,identity_review_status,
            invitation_recipient_email,representative_email)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, 0, 0, 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, identity_review, invitation_recipient_email, parsed.contact_email))
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, int(outcome == "CONSENTED"), int(outcome == "CONSENTED"), 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, "VERIFIED" if outcome == "CONSENTED" else identity_review, invitation_recipient_email, parsed.contact_email))
         if conflicting:
             conflict_id = "conflict-" + _hash(invitation["invitation_id"] + response_hash)[:20]
             db.execute("""INSERT INTO questionnaire_conflicts
@@ -526,6 +529,17 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
         # PostgreSQL requires a boolean for CASE WHEN; SQLite accepts either
         # representation, so keep the semantic value intact across backends.
         db.execute("UPDATE research_records SET questionnaire_status='RESPONDED',consent_status=?,recruitment_status=?,geo_research_status='PENDING_REVIEW',geo_integration_status=CASE WHEN ? THEN 'BLOCKED_CONFLICT' ELSE geo_integration_status END,updated_at=? WHERE profile_id=?", (outcome, "DECLINED" if outcome == "DECLINED" else "RESPONDED", bool(conflicting), now(), invitation["profile_id"]))
+        if outcome == "CONSENTED":
+            db.execute("UPDATE research_records SET consent_status='CONSENTED',promotion_state='RESEARCH_PARTICIPANT',geo_research_status='HANDOFF_PENDING',geo_integration_status='HANDOFF_PENDING',updated_at=? WHERE profile_id=?", (now(), invitation["profile_id"]))
+            review_id = "review-auto-owner-test-" + _hash(submission_id)[:20]
+            db.execute("INSERT INTO consent_reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (review_id) DO NOTHING", (review_id, submission_id, invitation["profile_id"], "APPROVED", "OWNER_CONTROLLED_TEST_AUTOMATION", 1, 1, 1, 1, 1, "Explicit staging automation allowlist; owner-controlled test only", now()))
+    if outcome == "CONSENTED":
+        from outreach_agent.geo_engine_handoff import process_geo_handoff, start_controlled_research
+        handoff = process_geo_handoff(submission_id, path=path, bridge=bridge)
+        if handoff.get("status") != "HANDED_OFF":
+            return "AUTO_HANDOFF_FAILED"
+        research = start_controlled_research(submission_id, path=path, bridge=bridge)
+        return "AUTO_RESEARCH_COMPLETED" if research.get("status") == "COMPLETED" else "AUTO_RESEARCH_FAILED"
     return outcome if outcome in {"DECLINED", "INTERESTED_NOT_AUTHORIZED"} else "NEEDS_REVIEW"
 
 

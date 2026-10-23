@@ -21,10 +21,15 @@ def owner_profile():
 class FakeBridge:
     def __init__(self):
         self.calls = []
+        self.research_calls = []
 
     def import_profile(self, profile):
         self.calls.append(profile)
         return {"property_id": 77, "source_profile_id": profile["profile_id"]}
+
+    def run_controlled_research(self, profile):
+        self.research_calls.append(profile)
+        return {"status": "COMPLETED", "result": {"record_id": "result:owner-fixture:v1"}}
 
 
 def setup_response(tmp_path):
@@ -56,6 +61,45 @@ def test_explicit_review_automatically_registers_property_and_is_idempotent(tmp_
         row = db.execute("SELECT consent_status,geo_property_id,geo_integration_status,geo_research_status FROM research_records").fetchone()
         assert row == ("CONSENTED", 77, "HANDED_OFF", "HANDED_OFF")
         assert db.execute("SELECT COUNT(*) FROM geo_handoff_attempts").fetchone()[0] == 1
+
+
+def test_allowlisted_owner_fixture_auto_handoff_and_research_is_idempotent(tmp_path, monkeypatch):
+    path, _, _ = setup_response(tmp_path)
+    monkeypatch.setenv("OUTREACH_OWNER_TEST_AUTOMATION_ENABLED", "true")
+    bridge = FakeBridge()
+    # A fresh row is required because setup_response has already inserted one.
+    with sqlite3.connect(path) as db:
+        invitation_id = db.execute("SELECT invitation_id FROM questionnaire_invitations LIMIT 1").fetchone()[0]
+        reference = db.execute("SELECT invitation_reference FROM questionnaire_invitations LIMIT 1").fetchone()[0]
+        db.execute("DELETE FROM questionnaire_submissions")
+        db.execute("DELETE FROM questionnaire_conflicts")
+        db.execute("UPDATE research_records SET consent_status='NOT_ASKED',promotion_state='EXCLUDED',geo_research_status='NOT_ELIGIBLE',geo_integration_status='NOT_STARTED' WHERE profile_id='geoairesume-owner-test-v1'")
+    row = {"Timestamp": "2026-10-22T19:00:00Z", "Invitation Reference": reference, "Is your company interested in participating in this research?": "Yes", "Does your company authorize our research team to conduct the research described above?": "Yes", "Full Name of the Authorized Company Representative": "Owner Test", "Job Title of the Authorized Company Representative": "Founder", "Business Email Address of the Authorized Company Representative": "owner@geoairesume.test"}
+    assert ingest_google_form_response(row, path=path, bridge=bridge) == "AUTO_RESEARCH_COMPLETED"
+    assert len(bridge.calls) == 1
+    assert len(bridge.research_calls) == 1
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT geo_research_status FROM research_records").fetchone()[0] == "RESEARCH_COMPLETED"
+        assert db.execute("SELECT research_run_status,research_result_record_id FROM geo_handoffs").fetchone() == ("COMPLETED", "result:owner-fixture:v1")
+    # A replay is a duplicate sheet row and cannot start another run.
+    assert ingest_google_form_response(row, path=path, bridge=bridge) == "DUPLICATE"
+    assert len(bridge.calls) == 1
+    assert len(bridge.research_calls) == 1
+
+
+def test_owner_automation_does_not_apply_to_no_response_or_other_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTREACH_OWNER_TEST_AUTOMATION_ENABLED", "true")
+    path = tmp_path / "registry.db"
+    profile = owner_profile()
+    profile["profile_id"] = "another-owner-test"
+    register_profile(profile, path)
+    invitation_id, _ = create_questionnaire_invitation(profile["profile_id"], secret="secret", path=path)
+    reference = get_invitation_reference(invitation_id, path=path)
+    draft_id = create_email_draft(profile["profile_id"], "owner@test.example", "test", path=path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft_id))
+    row = {"Timestamp": "2026-10-22T19:01:00Z", "Invitation Reference": reference, "Is your company interested in participating in this research?": "Yes", "Does your company authorize our research team to conduct the research described above?": "No", "Full Name of the Authorized Company Representative": "Owner Test", "Job Title of the Authorized Company Representative": "Founder", "Business Email Address of the Authorized Company Representative": "owner@test.example"}
+    assert ingest_google_form_response(row, path=path) == "INTERESTED_NOT_AUTHORIZED"
 
 
 def test_distinct_sheet_responses_are_quarantined(tmp_path):

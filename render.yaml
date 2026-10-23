@@ -32,6 +32,8 @@ services:
         generateValue: true
       - key: RESEARCH_QUESTIONNAIRE_BASE_URL
         sync: false
+      - key: OUTREACH_OWNER_TEST_AUTOMATION_ENABLED
+        value: "true"
       - key: GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64
         sync: false
 

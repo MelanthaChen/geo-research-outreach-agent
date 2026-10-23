@@ -64,6 +64,20 @@ class HttpGeoEngineBridge:
             raise RuntimeError(f"GEO Engine result retrieval failed ({response.status_code})")
         return response.json()
 
+    def run_controlled_research(self, profile: dict[str, Any]) -> dict[str, Any]:
+        """Run only the GEO Engine's explicit owner-fixture route."""
+        import httpx
+
+        response = httpx.post(
+            self.api_url.rstrip("/") + "/api/v1/integration/research-run",
+            json=profile,
+            headers=_handoff_headers(self.token),
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"GEO Engine controlled research failed ({response.status_code})")
+        return response.json()
+
 
 def _handoff_headers(token: str) -> dict[str, str]:
     """Build the authenticated bridge headers.
@@ -149,6 +163,64 @@ def _profile_for_handoff(record: Any, submission: Any) -> dict[str, Any]:
         },
     }
     return profile
+
+
+OWNER_TEST_AUTOMATION_PROFILES = frozenset({
+    "geoairesume-owner-test-v1",
+    "whisker-haven-owner-demo-20261023-v1",
+})
+
+
+def owner_test_automation_enabled(profile_id: str) -> bool:
+    """Fail closed unless the staging-only switch and exact IDs both match."""
+    return (
+        os.environ.get("OUTREACH_OWNER_TEST_AUTOMATION_ENABLED", "false").lower() == "true"
+        and profile_id in OWNER_TEST_AUTOMATION_PROFILES
+    )
+
+
+def start_controlled_research(submission_id: str, *, path: Path, bridge: PropertyBridge | None = None) -> dict[str, Any]:
+    """Start the existing controlled GEO run for the two staging fixtures only."""
+    init_registry(path)
+    with _connect(path) as db:
+        submission = db.execute("SELECT * FROM questionnaire_submissions WHERE submission_id=?", (submission_id,)).fetchone()
+        invitation = db.execute("SELECT * FROM questionnaire_invitations WHERE invitation_id=?", (submission["invitation_id"],)).fetchone() if submission else None
+        record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone() if invitation else None
+        if not submission or not invitation or not record:
+            raise ValueError("controlled research submission is not linked to a registered profile")
+        if not owner_test_automation_enabled(record["profile_id"]):
+            raise PermissionError("controlled automation is not enabled for this profile")
+        if record["profile_type"] != "owner_controlled_test" or submission["review_status"] != "APPROVED" or submission["consent_status"] != CONSENTED:
+            raise PermissionError("controlled research requires an approved owner test consent")
+        handoff = db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? AND profile_version=?", (record["profile_id"], record["profile_version"])).fetchone()
+        if not handoff or handoff["status"] != "HANDED_OFF" or not handoff["property_id"]:
+            raise PermissionError("controlled research requires a completed GEO handoff")
+        if handoff["research_run_status"] == "COMPLETED":
+            return {"status": "COMPLETED", "idempotent": True, "property_id": handoff["property_id"], "result_record_id": handoff["research_result_record_id"]}
+        if record["withdrawal_status"] == "WITHDRAWN":
+            raise PermissionError("controlled research is blocked by withdrawal")
+        db.execute("UPDATE geo_handoffs SET research_run_status='RUNNING',research_started_at=?,research_error=NULL,updated_at=? WHERE handoff_id=?", (now(), now(), handoff["handoff_id"]))
+        db.execute("UPDATE research_records SET geo_research_status='RESEARCH_RUNNING',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
+        db.commit()
+        profile = _profile_for_handoff(record, submission)
+        profile.update({"property_id": handoff["property_id"], "controlled_fixture": True})
+    try:
+        runner = getattr(bridge or default_bridge(), "run_controlled_research", None)
+        if runner is None:
+            raise RuntimeError("configured GEO Engine bridge does not support controlled research")
+        result = runner(profile)
+        nested = result.get("result") if isinstance(result, dict) else None
+        result_record_id = (nested or {}).get("record_id") if isinstance(nested, dict) else None
+        result_record_id = result_record_id or (result.get("record_id") if isinstance(result, dict) else None)
+    except Exception as exc:
+        with _connect(path) as db:
+            db.execute("UPDATE geo_handoffs SET research_run_status='FAILED',research_error=?,updated_at=? WHERE handoff_id=?", (str(exc), now(), handoff["handoff_id"]))
+            db.execute("UPDATE research_records SET geo_research_status='RESEARCH_FAILED',geo_integration_error=?,updated_at=? WHERE profile_id=?", (str(exc), now(), record["profile_id"]))
+        return {"status": "FAILED", "property_id": handoff["property_id"], "error": str(exc), "retryable": True}
+    with _connect(path) as db:
+        db.execute("UPDATE geo_handoffs SET research_run_status='COMPLETED',research_result_record_id=?,research_completed_at=?,updated_at=? WHERE handoff_id=?", (result_record_id, now(), now(), handoff["handoff_id"]))
+        db.execute("UPDATE research_records SET geo_research_status='RESEARCH_COMPLETED',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
+    return {"status": "COMPLETED", "idempotent": False, "property_id": handoff["property_id"], "result_record_id": result_record_id, "result": result}
 
 
 def process_geo_handoff(submission_id: str, *, path: Path, bridge: PropertyBridge | None = None) -> dict[str, Any]:

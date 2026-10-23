@@ -262,7 +262,16 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
         if "idempotency_key" not in email_columns:
             db.execute("ALTER TABLE email_events ADD COLUMN idempotency_key TEXT")
         draft_columns = {row[1] for row in db.execute("PRAGMA table_info(email_drafts)")}
-        for name, definition in {"subject": "TEXT NOT NULL DEFAULT ''", "analysis_id": "TEXT", "invitation_id": "TEXT"}.items():
+        for name, definition in {
+            "subject": "TEXT NOT NULL DEFAULT ''", "analysis_id": "TEXT", "invitation_id": "TEXT",
+            # Keep the intended company contact distinct from a deliberately
+            # selected owner-controlled test delivery address.
+            "intended_recipient": "TEXT",
+            "delivery_recipient": "TEXT",
+            "recipient_mode": "TEXT NOT NULL DEFAULT 'OFFICIAL_CONTACT'",
+            "test_override": "INTEGER NOT NULL DEFAULT 0",
+            "evidence_json": "TEXT NOT NULL DEFAULT '[]'",
+        }.items():
             if name not in draft_columns:
                 db.execute(f"ALTER TABLE email_drafts ADD COLUMN {name} {definition}")
         reply_columns = {row[1] for row in db.execute("PRAGMA table_info(replies)")}
@@ -678,6 +687,139 @@ def create_email_draft(profile_id: str, recipient: str, body: str, *, path: Path
             raise PermissionError("email draft requires VERIFIED_US geographic eligibility")
         db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (draft_id, profile_id, draft_version, template_version, recipient, _hash(body), body, "PENDING", None, None))
     return draft_id
+
+
+MANUAL_TEST_RECIPIENTS = frozenset({
+    "yuxuan.chen.1031@outlook.com",
+    "yuxaun.chen.1031@outlook.com",
+})
+
+
+def _manual_observations(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only observations already persisted by the screening pipeline."""
+    observations: list[dict[str, Any]] = []
+    for item in record.get("screenings", [])[:1]:
+        try:
+            payload = json.loads(item.get("opportunities_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        values = payload.get("opportunities", []) if isinstance(payload, dict) else payload
+        if isinstance(values, list):
+            observations.extend(value for value in values[:2] if isinstance(value, dict))
+    return observations[:2]
+
+
+def create_manual_invitation_draft(
+    profile_id: str,
+    *,
+    delivery_recipient: str,
+    secret: str,
+    path: Path = REGISTRY_DB,
+    test_override: bool = False,
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    """Create or return one reviewed, manual-send invitation draft.
+
+    This function prepares a Word/Outlook-compatible draft only.  It never
+    contacts a provider.  Test delivery addresses are explicit overrides and
+    are never written into the source contact record.
+    """
+    recipient = delivery_recipient.strip().casefold()
+    if not EMAIL_RE.match(recipient):
+        raise ValueError("delivery recipient must be a valid email address")
+    if test_override and recipient not in MANUAL_TEST_RECIPIENTS:
+        raise PermissionError("test recipient is not on the owner-controlled allowlist")
+    if not secret:
+        raise RuntimeError("RESEARCH_QUESTIONNAIRE_SECRET is required")
+    init_registry(path)
+    record = get_record(profile_id, path)
+    if record["profile_type"] != "owner_controlled_test":
+        if not is_us_eligible(record["geographic_classification"]):
+            raise PermissionError("manual invitation requires VERIFIED_US eligibility")
+        if record["qualification_status"] not in {"ELIGIBLE", "QUALIFIED"}:
+            raise PermissionError("company is not qualified for outreach")
+    if record.get("suppression_status") == "SUPPRESSED" or record.get("withdrawal_status") == "WITHDRAWN":
+        raise PermissionError("company is suppressed or withdrawn")
+
+    # Prefer an explicitly verified official email, but never substitute a
+    # representative or invitation address when it is absent.
+    channels = record.get("contact_channels") or []
+    official = sorted({str(item.get("email", "")).strip().casefold() for item in channels
+                       if item.get("email") and str(item.get("review_status", "")).upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"}
+                       and EMAIL_RE.match(str(item.get("email", "")).strip())})
+    intended = official[0] if len(official) == 1 else None
+    if not test_override and not intended:
+        raise PermissionError("no single verified official company email is available")
+
+    with _connect(path) as db:
+        existing = db.execute(
+            "SELECT d.*,i.invitation_reference FROM email_drafts d LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id "
+            "WHERE d.profile_id=? AND lower(COALESCE(d.delivery_recipient,d.recipient))=? AND d.test_override=? "
+            "AND d.approval_status IN ('PENDING','APPROVED') AND COALESCE(i.status,'INVITED') NOT IN ('SENT','EXPIRED') ORDER BY d.draft_id DESC LIMIT 1",
+            (profile_id, recipient, int(test_override)),
+        ).fetchone()
+        if existing:
+            return {"status": "EXISTING", "draft_id": existing["draft_id"], "invitation_id": existing["invitation_id"],
+                    "invitation_reference": existing["invitation_reference"], "questionnaire_url": prefilled_form_url(existing["invitation_reference"]),
+                    "subject": existing["subject"], "body": existing["body"], "delivery_recipient": recipient,
+                    "intended_recipient": existing["intended_recipient"], "test_override": bool(existing["test_override"]),
+                    "evidence": json.loads(existing["evidence_json"] or "[]")}
+
+    invitation_id, _token = create_questionnaire_invitation(profile_id, secret=secret, path=path, expires_at=expires_at)
+    reference = get_invitation_reference(invitation_id, path=path)
+    form_url = prefilled_form_url(reference)
+    observations = _manual_observations(record)
+    evidence = []
+    try:
+        evidence.extend(json.loads(record.get("verification_evidence_json") or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        pass
+    evidence.extend({"type": "screening_observation", "observation": item, "source_urls": item.get("source_urls", [])} for item in observations)
+    subject = f"GEO research participation invitation - {record['name']}"
+    observation_lines = []
+    for item in observations:
+        title = item.get("title") or item.get("observation") or "Preliminary observation"
+        urls = ", ".join(item.get("source_urls", [])) if isinstance(item.get("source_urls"), list) else ""
+        observation_lines.append(f"- {title}{(' (' + urls + ')') if urls else ''}")
+    if not observation_lines:
+        observation_lines.append("- No preliminary GEO observation is established in the current registry.")
+    label = "OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n" if test_override else ""
+    body = (f"{label}Hello,\n\n"
+            f"We are inviting {record['name']} to participate in a research study about how public website information is represented in AI search. The website in this record is {record['official_website']}.\n\n"
+            "Preliminary website observations already recorded in the research registry:\n" + "\n".join(observation_lines) + "\n\n"
+            "These are observations and research hypotheses, not measured AI visibility results or guaranteed improvements. The proposed work is read-only public-website analysis; no website changes, experiments, or monitoring begin from this invitation.\n\n"
+            f"Questionnaire: {form_url}\nInvitation reference: {reference}\n\n"
+            "Please review the questionnaire carefully. Any response remains subject to human review and explicit authorization.\n\n"
+            "Best regards\nGEO Research Outreach")
+    draft_id = "draft-manual-" + secrets.token_urlsafe(12)
+    with _connect(path) as db:
+        db.execute("UPDATE email_drafts SET intended_recipient=?,delivery_recipient=?,recipient_mode=?,test_override=?,evidence_json=? WHERE invitation_id=?", (intended, recipient, "TEST_OVERRIDE" if test_override else "OFFICIAL_CONTACT", int(test_override), json.dumps(evidence, sort_keys=True), invitation_id))
+        db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,invitation_id,intended_recipient,delivery_recipient,recipient_mode,test_override,evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (draft_id, profile_id, "manual-draft-v1", "manual-invitation-v1", recipient, _hash(subject + "\n" + body), body, "PENDING", None, None, subject, invitation_id, intended, recipient, "TEST_OVERRIDE" if test_override else "OFFICIAL_CONTACT", int(test_override), json.dumps(evidence, sort_keys=True)))
+    return {"status": "DRAFTED", "draft_id": draft_id, "invitation_id": invitation_id, "invitation_reference": reference,
+            "questionnaire_url": form_url, "subject": subject, "body": body, "delivery_recipient": recipient,
+            "intended_recipient": intended, "test_override": test_override, "evidence": evidence}
+
+
+def reconcile_manual_send(draft_id: str, *, provider: str, provider_message_id: str, evidence_ref: str, sent_at: str | None = None, path: Path = REGISTRY_DB) -> dict[str, Any]:
+    """Reconcile an already completed Outlook/Word send; never sends itself."""
+    if not provider_message_id.strip() or not evidence_ref.strip():
+        raise ValueError("provider message ID and Sent Items evidence reference are required")
+    init_registry(path)
+    with _connect(path) as db:
+        draft = db.execute("SELECT * FROM email_drafts WHERE draft_id=?", (draft_id,)).fetchone()
+        if not draft or draft["approval_status"] != "APPROVED":
+            raise PermissionError("an approved draft is required")
+        key = "manual-provider:" + draft_id + ":" + provider_message_id.strip()
+        prior = db.execute("SELECT event_id FROM email_events WHERE idempotency_key=?", (key,)).fetchone()
+        if prior:
+            return {"status": "EXISTING", "event_id": prior["event_id"], "draft_id": draft_id}
+        event_id = "email-event-" + secrets.token_urlsafe(10)
+        db.execute("INSERT INTO email_events(event_id,draft_id,event_type,provider,provider_enabled,message_id,error,created_at,idempotency_key) VALUES (?,?,?,?,?,?,?,?,?)", (event_id, draft_id, "MANUAL_PROVIDER_ACCEPTED", provider, 1, provider_message_id.strip(), evidence_ref.strip(), sent_at or now(), key))
+        if draft["invitation_id"]:
+            db.execute("UPDATE questionnaire_invitations SET status='SENT' WHERE invitation_id=? AND status NOT IN ('SENT','RESPONDED')", (draft["invitation_id"],))
+        db.execute("UPDATE research_records SET recruitment_status='INVITED',questionnaire_status='INVITED',updated_at=? WHERE profile_id=?", (sent_at or now(), draft["profile_id"]))
+    return {"status": "RECONCILED", "event_id": event_id, "draft_id": draft_id, "provider": provider, "provider_message_id": provider_message_id.strip()}
 
 
 def create_post_form_confirmation_draft(submission_id: str, *, path: Path = REGISTRY_DB) -> dict[str, Any]:

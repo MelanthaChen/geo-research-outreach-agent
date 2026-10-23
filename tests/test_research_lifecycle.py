@@ -21,6 +21,8 @@ from outreach_agent.research_lifecycle import (
     save_preliminary_screening,
     submit_questionnaire,
     questionnaire_url,
+    create_manual_invitation_draft,
+    reconcile_manual_send,
 )
 
 
@@ -95,6 +97,40 @@ def test_reply_classification_is_advisory_and_email_requires_approval(tmp_path):
     assert classify_reply("I am interested, but what does this involve?") == "QUESTION"
     assert classify_reply("Please unsubscribe") == "UNSUBSCRIBE"
     assert classify_reply("I consent to the research") == "EXPLICIT_CONSENT"
+
+
+def test_manual_invitation_uses_test_override_without_mutating_source(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile({**profile("owner", "owner_controlled_test"), "identity": {"name": "GeoAIResume", "website": "https://geo-ai-resume.vercel.app", "verification_evidence": [{"url": "https://geo-ai-resume.vercel.app", "text": "Owner-controlled test website"}]}}, db)
+    before = sqlite3.connect(db).execute("SELECT contact_channels_json,source_candidate_id FROM research_records WHERE profile_id='owner'").fetchone()
+    result = create_manual_invitation_draft("owner", delivery_recipient="yuxuan.chen.1031@outlook.com", secret="secret", path=db, test_override=True)
+    assert result["status"] == "DRAFTED"
+    assert result["test_override"] is True
+    assert result["intended_recipient"] is None
+    assert result["invitation_reference"].startswith("GEO-")
+    assert result["invitation_reference"] in result["body"]
+    assert "geo-ai-resume.vercel.app" in result["body"]
+    after = sqlite3.connect(db).execute("SELECT contact_channels_json,source_candidate_id FROM research_records WHERE profile_id='owner'").fetchone()
+    assert after == before
+    assert create_manual_invitation_draft("owner", delivery_recipient="yuxuan.chen.1031@outlook.com", secret="secret", path=db, test_override=True)["status"] == "EXISTING"
+
+
+def test_manual_invitation_rejects_unallowlisted_test_recipient_and_requires_send_evidence(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile("owner", "owner_controlled_test"), db)
+    with pytest.raises(PermissionError, match="allowlist"):
+        create_manual_invitation_draft("owner", delivery_recipient="other@example.com", secret="secret", path=db, test_override=True)
+    result = create_manual_invitation_draft("owner", delivery_recipient="yuxaun.chen.1031@outlook.com", secret="secret", path=db, test_override=True)
+    with pytest.raises(PermissionError, match="approved"):
+        reconcile_manual_send(result["draft_id"], provider="OUTLOOK_WORD_MAIL_MERGE", provider_message_id="m1", evidence_ref="sent-item-1", path=db)
+    from outreach_agent.research_lifecycle import approve_email
+    approve_email(result["draft_id"], "operator", path=db)
+    with pytest.raises(ValueError, match="evidence"):
+        reconcile_manual_send(result["draft_id"], provider="OUTLOOK_WORD_MAIL_MERGE", provider_message_id="m1", evidence_ref="", path=db)
+    accepted = reconcile_manual_send(result["draft_id"], provider="OUTLOOK_WORD_MAIL_MERGE", provider_message_id="m1", evidence_ref="sent-item-1", path=db)
+    assert accepted["status"] == "RECONCILED"
+    assert reconcile_manual_send(result["draft_id"], provider="OUTLOOK_WORD_MAIL_MERGE", provider_message_id="m1", evidence_ref="sent-item-1", path=db)["status"] == "EXISTING"
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM email_events").fetchone()[0] == 1
 
 
 def test_outlook_eml_reply_preserves_headers_and_does_not_grant_consent(tmp_path):

@@ -41,6 +41,7 @@ from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
 from outreach_agent.research_lifecycle import (
     REGISTRY_DB, approve_email_batch, create_questionnaire_invitation, get_invitation_reference, create_geo_handoff, export_records_csv,
     get_record, ingest_reply, list_records, personalized_recruitment_draft, create_post_form_confirmation_draft,
+    create_manual_invitation_draft, reconcile_manual_send,
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
 from outreach_agent.geo_engine_handoff import review_questionnaire_submission
@@ -589,6 +590,18 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     draft_id = personalized_recruitment_draft(str(body["profile_id"]), recipient=str(body["recipient"]), questionnaire_url=str(body["questionnaire_url"]), path=REGISTRY_DB)
                     self._json({"draft_id": draft_id, "status": "PENDING_APPROVAL"}, 201)
                     return
+                if parsed.path == "/api/recruitment/manual-draft":
+                    secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
+                    if not secret:
+                        self._json({"error": "Manual invitation drafting requires RESEARCH_QUESTIONNAIRE_SECRET"}, 503)
+                        return
+                    result = create_manual_invitation_draft(
+                        str(body["profile_id"]), delivery_recipient=str(body["delivery_recipient"]),
+                        secret=secret, path=REGISTRY_DB, test_override=bool(body.get("test_override", False)),
+                        expires_at=body.get("expires_at"),
+                    )
+                    self._json(result, 200 if result.get("status") == "EXISTING" else 201)
+                    return
                 if parsed.path == "/api/recruitment/screen-and-draft":
                     secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
                     if not secret:
@@ -616,6 +629,14 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return
                 if parsed.path == "/api/recruitment/send-simulated":
                     self._json(record_simulated_send_batch(list(body.get("draft_ids") or []), path=REGISTRY_DB))
+                    return
+                if parsed.path == "/api/recruitment/manual-send-reconcile":
+                    result = reconcile_manual_send(
+                        str(body["draft_id"]), provider=str(body.get("provider") or "OUTLOOK_WORD_MAIL_MERGE"),
+                        provider_message_id=str(body.get("provider_message_id") or ""),
+                        evidence_ref=str(body.get("evidence_ref") or ""), sent_at=body.get("sent_at"), path=REGISTRY_DB,
+                    )
+                    self._json(result, 200 if result.get("status") == "EXISTING" else 201)
                     return
                 if parsed.path == "/api/recruitment/replies":
                     reply_id = ingest_reply(profile_id=str(body["profile_id"]), thread_id=str(body["thread_id"]), message_id=str(body["message_id"]), sender=str(body["sender"]), text=str(body.get("text") or ""), verified_sender=bool(body.get("verified_sender")), path=REGISTRY_DB)

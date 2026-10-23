@@ -20,7 +20,7 @@ function authHeaders(headers={}) {
   if (state.dashboardToken) result.Authorization = `Bearer ${state.dashboardToken}`;
   return result;
 }
-function showAuthPrompt(message="Authenticate to access the Outreach Dashboard.") {
+function showAuthPrompt(message="This action requires protected operator access.") {
   const host=$("app-error");
   if (host) { host.hidden=false; host.textContent=`Protected operator action: ${message}`; }
 }
@@ -31,7 +31,7 @@ async function publicApi(path) {
 }
 async function api(path) {
   const response = await fetch(path, {headers: authHeaders({"Accept":"application/json"}), cache:"no-store"});
-  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
+  if (response.status === 401) showAuthPrompt();
   if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
   return response.json();
 }
@@ -40,13 +40,13 @@ async function apiWrite(path, payload) {
   if(path==="/api/research/consent-review" || path.startsWith("/api/hotel-discovery/")) { if(state.reviewToken) headers.Authorization=`Bearer ${state.reviewToken}`; }
   const response = await fetch(path, {method:"POST", headers, body:JSON.stringify(payload), cache:"no-store"});
   const result = await response.json();
-  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
+  if (response.status === 401) showAuthPrompt();
   if (!response.ok) throw new Error(result.error || `Dashboard request failed (${response.status})`);
   return result;
 }
 async function apiDownload(path, payload) {
   const response = await fetch(path, {method:"POST", headers:authHeaders({"Accept":"text/csv, application/json","Content-Type":"application/json"}), body:JSON.stringify(payload), cache:"no-store"});
-  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
+  if (response.status === 401) showAuthPrompt();
   if (!response.ok) { const result=await response.json(); const error=new Error(result.error || `Export failed (${response.status})`); error.exportResult=result; throw error; }
   const blob=await response.blob();
   const filename=response.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1] || "mail-merge.csv";
@@ -728,7 +728,7 @@ const loginForm=$("dashboard-login-form"); if(loginForm) loginForm.addEventListe
   try{
     await start();
     $("dashboard-login").hidden=true;
-    $("dashboard-login-status").textContent="Authenticated for this browser session.";
+    $("app-error").textContent="Protected operator access is configured for this browser session.";
     $("app-error").hidden=true;
     $("dashboard-token").value="";
   }catch(error){

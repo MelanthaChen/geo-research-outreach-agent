@@ -237,7 +237,7 @@ def test_research_queue_record_click_has_protected_detail_path_and_auth_prompt()
     assert 'button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError))' in js
     assert 'id="research-inline-login"' in js
     assert 'id="research-inline-token"' in js
-    assert 'detail.scrollIntoView({behavior:"smooth",block:"start"})' in js
+    assert 'window.scrollTo({top:Math.max(0,top),behavior:"smooth"})' in js
     assert 'await api(`/api/research/records/${encodeURIComponent(profileId)}`)' in js
     assert "Authentication failed. Check the token and try again." in js
 

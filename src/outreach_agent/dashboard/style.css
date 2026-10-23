@@ -104,6 +104,13 @@ main { width: 95%; max-width: 2560px; margin: 0 auto; }
 .review-actions .button { min-height: 38px; }
 .review-note-label { display: block; max-width: 720px; margin: 10px 0; color: var(--muted); font-size: 13px; }
 .review-note-label textarea { display: block; width: 100%; min-height: 60px; margin-top: 5px; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 14px var(--sans); resize: vertical; }
+.consent-review-card { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 8px; }
+.consent-review-card .section-head { padding: 8px 0 12px; }
+.consent-response { display: grid; gap: 5px; padding: 12px; background: #f8faf8; border: 1px solid #e2eae3; border-radius: 7px; overflow-wrap: anywhere; font-size: 14px; }
+.conflict-warning { margin: 12px 0; padding: 12px; border: 1px solid #e8c7a2; background: #fff7e9; color: #76521f; border-radius: 7px; overflow-wrap: anywhere; }
+.review-checks { display: grid; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfb; }
+.review-checks label { display: flex; gap: 9px; align-items: flex-start; font-size: 14px; }
+.review-history { margin: 8px 0 14px; padding-left: 22px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 900px) {
   .candidate-row { grid-template-columns: minmax(0,1fr) auto; }
   .candidate-badges { grid-column: 1 / -1; grid-row: 2; }
@@ -368,6 +375,10 @@ body.app-shell { display: grid; grid-template-columns: 248px minmax(0,1fr); min-
 .inline-status { padding: 10px 12px; border-radius: 5px; background: #f6f8f6; font-size: 12px !important; }
 .response-empty { padding: 30px; text-align: center; color: var(--muted); }
 .app-error { margin: 0 0 18px; padding: 12px 15px; border: 1px solid #e9c7c1; border-radius: 6px; background: #fff4f1; color: #833f35; }
+.dashboard-login { margin: 0 0 18px; display: grid; gap: 14px; border: 1px solid #cbd9d1; background: #f6fbf8; }
+.dashboard-login h2 { margin: 0 0 6px; }
+.dashboard-login-form { display: flex; align-items: end; gap: 12px; max-width: 680px; }
+.dashboard-login-form .field-label { flex: 1; }
 .main-shell>footer { border-top: 1px solid #e5ebe5; margin-top: 26px; }
 .selection-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 11px 18px; border-bottom: 1px solid #e9eee9; color: #5d6b62; font-size: 12px; }
 .selection-toolbar label { display: flex; align-items: center; gap: 7px; cursor: pointer; }

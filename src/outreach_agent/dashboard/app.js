@@ -1,4 +1,4 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "" };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", dashboardToken: sessionStorage.getItem("geo_outreach_dashboard_token") || "" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
@@ -15,21 +15,33 @@ const websiteDomain = (value) => {
 };
 const pillClass = (value) => ["VERIFIED","ELIGIBLE","HIGH","APPROVED","HAS_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "good" : ["UNKNOWN","NEEDS REVIEW","NEEDS_REVIEW","PENDING","BASELINE_NOT_RECHECKED","MEDIUM"].includes(String(value).toUpperCase()) ? "warn" : ["REJECTED_MISMATCH","REJECTED","LOW","NO_SUITABLE_CHANNEL"].includes(String(value).toUpperCase()) ? "bad" : "neutral";
 
+function authHeaders(headers={}) {
+  const result = {...headers};
+  if (state.dashboardToken) result.Authorization = `Bearer ${state.dashboardToken}`;
+  return result;
+}
+function showAuthPrompt(message="Authenticate to access the Outreach Dashboard.") {
+  const panel=$("dashboard-login");
+  if (panel) { panel.hidden=false; $("dashboard-login-message").textContent=message; $("dashboard-token").focus(); }
+}
 async function api(path) {
-  const response = await fetch(path, {headers: {"Accept":"application/json"}, cache:"no-store"});
+  const response = await fetch(path, {headers: authHeaders({"Accept":"application/json"}), cache:"no-store"});
+  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
   if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
   return response.json();
 }
 async function apiWrite(path, payload) {
-  const headers={"Accept":"application/json","Content-Type":"application/json"};
-  if(path==="/api/research/consent-review") { if(state.reviewToken) headers.Authorization=`Bearer ${state.reviewToken}`; }
+  const headers=authHeaders({"Accept":"application/json","Content-Type":"application/json"});
+  if(path==="/api/research/consent-review" || path.startsWith("/api/hotel-discovery/")) { if(state.reviewToken) headers.Authorization=`Bearer ${state.reviewToken}`; }
   const response = await fetch(path, {method:"POST", headers, body:JSON.stringify(payload), cache:"no-store"});
   const result = await response.json();
+  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
   if (!response.ok) throw new Error(result.error || `Dashboard request failed (${response.status})`);
   return result;
 }
 async function apiDownload(path, payload) {
-  const response = await fetch(path, {method:"POST", headers:{"Accept":"text/csv, application/json","Content-Type":"application/json"}, body:JSON.stringify(payload), cache:"no-store"});
+  const response = await fetch(path, {method:"POST", headers:authHeaders({"Accept":"text/csv, application/json","Content-Type":"application/json"}), body:JSON.stringify(payload), cache:"no-store"});
+  if (response.status === 401) showAuthPrompt("Dashboard authentication is required. Enter the operator token to continue.");
   if (!response.ok) { const result=await response.json(); const error=new Error(result.error || `Export failed (${response.status})`); error.exportResult=result; throw error; }
   const blob=await response.blob();
   const filename=response.headers.get("Content-Disposition")?.match(/filename="?([^";]+)"?/)?.[1] || "mail-merge.csv";
@@ -54,6 +66,7 @@ function renderSummary(summary) {
   const scale = summary.phase6h || {};
   const smb = summary.phase7_smb_target || {};
   const hotelPool = summary.hotel_candidate_pool || {};
+  const hotelJob = summary.hotel_discovery || {};
   const metrics = [
     ["Total candidates", pool.total_candidates ?? summary.total_companies, "existing cohort + separate discovery pool"],
     ["Verified companies", pool.verified_companies ?? summary.website_verification.VERIFIED ?? 0, "based on identity evidence"],
@@ -125,6 +138,20 @@ function renderSummary(summary) {
     ["With confirmed contact form", hotelPool.with_confirmed_form ?? 0],
     ["Awaiting human review", hotelPool.pending_review ?? 0],
   ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(Number(value).toLocaleString())}</strong></div>`).join("");
+  const jobStatus = hotelJob.status || "NOT_INITIALIZED";
+  $("hotel-discovery-metrics").innerHTML = [
+    ["Qualified prospects", hotelJob.qualified_prospects ?? 0],
+    ["Target", hotelJob.target_count ?? 1000],
+    ["Remaining", hotelJob.remaining ?? 1000],
+    ["Raw rows screened", hotelJob.scanned_count ?? 0],
+    ["Promoted this job", hotelJob.promoted_count ?? 0],
+    ["Rejected / duplicate", Number(hotelJob.rejected_count ?? 0) + Number(hotelJob.duplicate_count ?? 0)],
+    ["Last successful run", hotelJob.last_success_at || "Not run"],
+    ["Job status", jobStatus],
+  ].map(([label,value]) => `<div class="secondary-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("");
+  $("hotel-discovery-status").textContent = hotelJob.last_error ? `Last error: ${hotelJob.last_error}` : `Status: ${jobStatus}. Discovery is disabled by default and never sends outreach or starts GEO research.`;
+  $("hotel-discovery-pause").disabled = ["PAUSED","TARGET_REACHED","NOT_INITIALIZED"].includes(jobStatus);
+  $("hotel-discovery-resume").disabled = jobStatus !== "PAUSED";
   const distributionHTML = [
     distCard("WEBSITE IDENTITY", summary.website_verification, summary.total_companies),
     distCard("ELIGIBILITY", summary.eligibility, summary.total_companies),
@@ -633,6 +660,7 @@ function navigate() {
   if(page==="interest-form") renderFormTokens(state.campaignSummaries).catch(showError);
 }
 async function start() {
+  if (state.dashboardToken) $("dashboard-login").hidden=true;
   wireFilters();
   state.emailConfiguration=await api("/api/test-email/config");
   const result = await api("/api/summary");
@@ -646,6 +674,26 @@ async function start() {
   navigate();
 }
 window.addEventListener("hashchange",navigate);
+$("dashboard-login-form").addEventListener("submit",async(event)=>{
+  event.preventDefault();
+  const token=$("dashboard-token").value.trim();
+  if(!token)return;
+  state.dashboardToken=token;
+  sessionStorage.setItem("geo_outreach_dashboard_token",token);
+  $("dashboard-login-status").textContent="Authenticating…";
+  try{
+    await start();
+    $("dashboard-login").hidden=true;
+    $("dashboard-login-status").textContent="Authenticated for this browser session.";
+    $("app-error").hidden=true;
+    $("dashboard-token").value="";
+  }catch(error){
+    state.dashboardToken="";
+    sessionStorage.removeItem("geo_outreach_dashboard_token");
+    $("dashboard-login-status").textContent="Authentication failed. Check the token and try again.";
+    showError(error);
+  }
+});
 let responseSearchTimer;
 $("response-search").addEventListener("input",()=>{clearTimeout(responseSearchTimer);responseSearchTimer=setTimeout(()=>{state.responsePage=1;renderResponsesFromApi().catch(showError);},250);});
 ["response-status","response-campaign","response-source","response-date-from","response-date-to","response-environment","response-sort"].forEach((id)=>$(id).addEventListener("change",()=>{state.responsePage=1;renderResponsesFromApi().catch(showError);}));
@@ -686,6 +734,8 @@ $("connect-gmail").addEventListener("click",async()=>{
 });
 $("add-sender-account").addEventListener("click",async()=>{try{const result=await apiWrite("/api/sender-accounts",{email:$('sender-email').value,display_name:$('sender-display-name').value,reply_to:$('sender-reply-to').value,signature:$('sender-signature').value,provider:"GMAIL"});$("sender-account-status").textContent=result.message||"Sender account saved";await loadSenderAccounts();}catch(error){$("sender-account-status").textContent=error.message;}});
 $("analytics-campaign-filter").addEventListener("change",()=>api("/api/campaign-analytics").then(result=>renderAnalytics(result,state.campaignSummaries)).catch(showError));
+$("hotel-discovery-pause").addEventListener("click",()=>apiWrite("/api/hotel-discovery/pause",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
+$("hotel-discovery-resume").addEventListener("click",()=>apiWrite("/api/hotel-discovery/resume",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
 $("research-search").addEventListener("input",()=>{researchState.filters.q=$("research-search").value;researchState.page=1;reloadResearchQueue().catch(showError);});
 ["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;reloadResearchQueue().catch(showError);}));
 $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});

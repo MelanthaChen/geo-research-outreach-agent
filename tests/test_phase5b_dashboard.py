@@ -219,7 +219,7 @@ def test_dashboard_assets_do_not_load_external_resources_or_submit_forms():
     assert "https://" not in html
     assert "https://" not in css
     assert "fetch(" in js and "fetch(\"http" not in js
-    assert "localStorage" not in js and "sessionStorage" not in js
+    assert "localStorage" not in js and "sessionStorage.getItem(\"geo_outreach_dashboard_token\")" in js
     assert 'method:"POST"' in js
     assert "Test delivery recorded" in js
     assert 'value="INTERESTED"' in (ROOT / "src/outreach_agent/dashboard/index.html").read_text(encoding="utf-8")

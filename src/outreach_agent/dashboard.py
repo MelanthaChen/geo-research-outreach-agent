@@ -52,6 +52,63 @@ from outreach_agent.lean_registry import review_contact
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
+_PUBLIC_RESEARCH_FIELDS = (
+    "profile_id", "profile_type", "name", "official_website", "industry", "location",
+    "identity_verification_status", "geographic_classification", "screening_status",
+    "recruitment_priority", "qualification_status",
+)
+
+
+def _public_research_record(row: dict) -> dict:
+    """Return only non-sensitive fields suitable for the unauthenticated queue."""
+    return {field: row.get(field) for field in _PUBLIC_RESEARCH_FIELDS}
+
+
+def _public_summary(data: dict) -> dict:
+    """Build a deliberately small public dashboard summary.
+
+    Contact-channel, invitation, response, consent, and review counts are
+    operational data and stay behind the protected dashboard API.
+    """
+    source = data.get("summary") or {}
+    return {
+        "public": True,
+        "notice": "Public read-only view. Operational details require protected operator access.",
+        "summary": {
+            "total_companies": source.get("total_companies", 0),
+            "cloud_registry": bool(source.get("cloud_registry")),
+            "website_verification": {}, "eligibility": {}, "geo_opportunity": {},
+            "research_priority": {}, "contact_channel_coverage": {},
+            "contact_channel_classes": {}, "pending_human_reviews": {}, "outreach": {},
+            "candidate_pool": {"total_candidates": source.get("total_companies", 0)},
+            "phase6h": {}, "phase7_smb_target": {}, "hotel_candidate_pool": {},
+            "hotel_discovery": {"status": "DISABLED"},
+        },
+        "filters": data.get("filters", {}),
+        "simulated_signup_url": "",
+        "participation_form_configuration": {},
+    }
+
+
+def _public_research_records(params: dict) -> dict:
+    """Read the operational queue with sensitive lifecycle filters excluded."""
+    filters = {
+        key: params[key] for key in ("q", "profile_type", "geographic_status", "industry", "location", "sort")
+        if key in params
+    }
+    # The public surface is intentionally limited to the operational prospect
+    # view and can never be used to enumerate the raw discovery pool.
+    filters["promotion_state"] = "OPERATIONAL_WITH_TEST"
+    page = max(1, int(params.get("page", "1")))
+    page_size = max(1, min(100, int(params.get("page_size", "50"))))
+    result = list_records(REGISTRY_DB, **filters, limit=page_size, offset=(page - 1) * page_size)
+    return {
+        "public": True,
+        "notice": "Public read-only queue. Contact, invitation, consent, and GEO operations are protected.",
+        "records": [_public_research_record(row) for row in result.get("records", [])],
+        "total": result.get("total", 0), "page": page, "page_size": page_size,
+    }
+
 
 def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                  email_event_store: EmailEventStore | None = None):
@@ -113,8 +170,18 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             if parsed.path == "/health":
                 self._json({"status": "healthy", "service": "outreach-dashboard"})
                 return
-            if parsed.path.startswith("/api/") and not self._dashboard_auth_ok():
+            if parsed.path.startswith("/api/") and parsed.path not in {"/api/public/summary", "/api/public/research/records"} and not self._dashboard_auth_ok():
                 self._json({"error": "dashboard authentication required"}, 401)
+                return
+            if parsed.path == "/api/public/summary":
+                self._json(_public_summary(data))
+                return
+            if parsed.path == "/api/public/research/records":
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                try:
+                    self._json(_public_research_records(params))
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    self._json({"error": str(exc)}, 400)
                 return
             if parsed.path == "/api/test-email/config":
                 try:
@@ -388,7 +455,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path.startswith("/api/") and not self._dashboard_auth_ok():
+            if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not self._dashboard_auth_ok():
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
             try:

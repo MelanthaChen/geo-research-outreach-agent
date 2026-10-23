@@ -1,4 +1,4 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", dashboardToken: sessionStorage.getItem("geo_outreach_dashboard_token") || "" };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", dashboardToken: "" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
@@ -21,8 +21,13 @@ function authHeaders(headers={}) {
   return result;
 }
 function showAuthPrompt(message="Authenticate to access the Outreach Dashboard.") {
-  const panel=$("dashboard-login");
-  if (panel) { panel.hidden=false; $("dashboard-login-message").textContent=message; $("dashboard-token").focus(); }
+  const host=$("app-error");
+  if (host) { host.hidden=false; host.textContent=`Protected operator action: ${message}`; }
+}
+async function publicApi(path) {
+  const response = await fetch(path, {headers:{"Accept":"application/json"}, cache:"no-store"});
+  if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
+  return response.json();
 }
 async function api(path) {
   const response = await fetch(path, {headers: authHeaders({"Accept":"application/json"}), cache:"no-store"});
@@ -631,7 +636,25 @@ async function runCampaignAction(campaignId, action) {
 function showError(error) { const host = $("app-error"); host.hidden = false; host.textContent = `Unable to load this view: ${error.message}`; }
 const researchState={page:1,pageSize:25,selected:new Set(),total:0,filters:{promotion_state:"OPERATIONAL_WITH_TEST"}};
 async function reloadResearchQueue(){const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...researchState.filters});const result=await api(`/api/research/records?${query}`);researchState.total=result.total;const host=$("research-table");host.innerHTML=result.records.length?result.records.map(row=>`<article class="company-row ${researchState.selected.has(row.profile_id)?"selected":""}"><input type="checkbox" data-research-select="${esc(row.profile_id)}" ${researchState.selected.has(row.profile_id)?"checked":""}><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Consent</span>${pill(row.consent_status)}</span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.geo_research_status)}</small></button></article>`).join(""):`<div class="no-results">No research records match these filters.</div>`;host.querySelectorAll("[data-research-select]").forEach(box=>box.addEventListener("change",()=>{box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);updateResearchSelection();}));host.querySelectorAll("[data-research-detail]").forEach(button=>button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError)));$("research-page").textContent=`Page ${result.page} of ${Math.max(1,Math.ceil(result.total/result.page_size))} · ${result.total} records`;$("research-prev").disabled=result.page<=1;$("research-next").disabled=result.page>=Math.max(1,Math.ceil(result.total/result.page_size));updateResearchSelection();}
-function updateResearchSelection(){$("research-selected-count").textContent=`${researchState.selected.size} selected`;}
+async function reloadResearchQueue(){
+  const publicMode=!state.dashboardToken;
+  const filters={...researchState.filters};
+  if(publicMode) delete filters.consent_status;
+  const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...filters});
+  const result=publicMode?await publicApi(`/api/public/research/records?${query}`):await api(`/api/research/records?${query}`);
+  researchState.total=result.total;
+  const host=$("research-table");
+  host.innerHTML=result.records.length?result.records.map(row=>publicMode
+    ?`<article class="company-row"><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Public read-only</span></span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.screening_status||"NOT_PUBLIC")}</small></button></article>`
+    :`<article class="company-row ${researchState.selected.has(row.profile_id)?"selected":""}"><input type="checkbox" data-research-select="${esc(row.profile_id)}" ${researchState.selected.has(row.profile_id)?"checked":""}><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Consent</span>${pill(row.consent_status)}</span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.geo_research_status)}</small></button></article>`).join(""):`<div class="no-results">No research records match these filters.</div>`;
+  host.querySelectorAll("[data-research-select]").forEach(box=>box.addEventListener("change",()=>{box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);updateResearchSelection();}));
+  host.querySelectorAll("[data-research-detail]").forEach(button=>button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError)));
+  $("research-page").textContent=`Page ${result.page} of ${Math.max(1,Math.ceil(result.total/result.page_size))} · ${result.total} records`;
+  $("research-prev").disabled=result.page<=1;$("research-next").disabled=result.page>=Math.max(1,Math.ceil(result.total/result.page_size));updateResearchSelection();
+}
+function updateResearchSelection(){
+  $("research-selected-count").textContent=`${researchState.selected.size} selected`;
+}
 function reviewHeaders(){return `<label class="field-label">Review token (only required off localhost)<input id="consent-review-token" type="password" value="${esc(state.reviewToken)}" autocomplete="off"></label>`;}
 function renderConsentReview(row, profileId){
   const submissions=row.questionnaire_submissions||[], conflicts=row.questionnaire_conflicts||[], reviews=row.consent_reviews||[];
@@ -648,6 +671,14 @@ async function loadResearchDetail(profileId){const row=await api(`/api/research/
   $("research-detail").querySelectorAll("[data-consent-decision]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=$("research-detail").querySelector("#consent-reviewer").value.trim();if(!reviewer){showError(new Error("Reviewer name is required"));return;}const checks={};$("research-detail").querySelectorAll("[data-review-check]").forEach(input=>checks[input.dataset.reviewCheck]=input.checked);try{await researchAction("/api/research/consent-review",{profile_id:profileId,submission_id:(row.questionnaire_submissions||[])[0]?.submission_id,reviewer,approve:button.dataset.consentDecision==="approve",notes:$("research-detail").querySelector("#consent-review-notes").value,...checks});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
 }
 async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
+async function loadResearchDetail(profileId){
+  if(!state.dashboardToken){
+    $("research-detail").innerHTML=`<div class="empty-state"><h3>Protected operational details</h3><p>This public view shows non-sensitive prospect information only. Contact details, questionnaire responses, consent review, invitations, and GEO handoff records require protected operator access.</p></div>`;
+    return;
+  }
+  const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);
+  $("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Screening evidence</h4>${listItems((row.screenings||[]).map(item=>JSON.parse(item.evidence_json||"[]")),"No screening evidence recorded.")}</div><div class="subsection"><h4>Drafts</h4>${listItems((row.email_drafts||[]).map(item=>`${item.draft_id} · ${item.approval_status} · ${item.recipient}`),"No recruitment drafts.")}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
+}
 const pages = ["overview","companies","research-queue","campaigns","interest-form","responses","analytics","settings"];
 function navigate() {
   const requested = location.hash.slice(1) || (state.summary?.cloud_registry ? "research-queue" : "overview");
@@ -673,8 +704,21 @@ async function start() {
   await loadCampaignWorkspace();
   navigate();
 }
+async function start() {
+  if(!state.dashboardToken){
+    const result=await publicApi("/api/public/summary");
+    state.summary=result.summary; state.participationFormUrl=""; state.formConfiguration={};
+    renderSummary({...result.summary, filters: result.filters||{}});
+    const protectedActions=$("research-protected-actions"); if(protectedActions) protectedActions.hidden=true;
+    navigate();
+    return;
+  }
+  const result=await api("/api/summary");
+  state.summary=result.summary; state.participationFormUrl=result.simulated_signup_url||""; state.formConfiguration=result.participation_form_configuration||{};
+  renderSettings(state.formConfiguration); renderSummary({...result.summary, filters: result.filters}); await reloadCompanies(); await loadCampaignWorkspace(); navigate();
+}
 window.addEventListener("hashchange",navigate);
-$("dashboard-login-form").addEventListener("submit",async(event)=>{
+const loginForm=$("dashboard-login-form"); if(loginForm) loginForm.addEventListener("submit",async(event)=>{
   event.preventDefault();
   const token=$("dashboard-token").value.trim();
   if(!token)return;

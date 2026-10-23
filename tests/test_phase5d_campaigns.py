@@ -423,7 +423,8 @@ def test_dashboard_campaign_ui_uses_same_origin_test_processing_and_separate_rev
     assert "data-submission-review" in js
     assert "formal consent: NO" in js
     assert "privacy_notice" in (ROOT / "config/outreach.yaml").read_text(encoding="utf-8")
-    assert "localStorage" not in js and "sessionStorage.getItem(\"geo_outreach_dashboard_token\")" in js
+    assert "localStorage" not in js
+    assert "sessionStorage.getItem(\"geo_outreach_dashboard_token\")" not in js
 
 
 def test_phase5e_dashboard_has_independent_views_and_safe_test_form_tools():

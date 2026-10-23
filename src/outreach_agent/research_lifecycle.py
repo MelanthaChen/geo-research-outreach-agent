@@ -256,6 +256,10 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           status TEXT NOT NULL DEFAULT 'GENERATED', reviewer TEXT,
           created_at TEXT NOT NULL, approved_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS owner_test_recipient_bindings (
+          profile_id TEXT PRIMARY KEY, recipient TEXT NOT NULL, label TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS research_filter_idx ON research_records(profile_type, recruitment_status, consent_status, geo_research_status);
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(questionnaire_submissions)")}
@@ -881,7 +885,22 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
         try:
             record = get_record(profile_id, path)
             if record.get("profile_type") == "owner_controlled_test":
-                categories["owner_controlled_test_excluded"].append(profile_id)
+                with _connect(path) as binding_db:
+                    binding = binding_db.execute("SELECT recipient FROM owner_test_recipient_bindings WHERE profile_id=? AND active=1", (profile_id,)).fetchone()
+                if not binding:
+                    categories["owner_controlled_test_excluded"].append(profile_id)
+                    continue
+                recipient = str(binding["recipient"]).strip().casefold()
+                existing = next((item for item in record.get("email_drafts", [])
+                                 if str(item.get("approval_status")) in {"PENDING", "APPROVED"}
+                                 and str(item.get("delivery_recipient") or item.get("recipient") or "").casefold() == recipient), None)
+                if existing:
+                    categories["duplicate_already_invited"].append(profile_id)
+                    generated.append({"profile_id": profile_id, "draft_id": existing["draft_id"], "status": "EXISTING"})
+                    continue
+                result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=path, test_override=True)
+                generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
+                categories["ready_for_approval"].append(profile_id)
                 continue
             discovered = _discovered_official_email_channels(record)
             official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})

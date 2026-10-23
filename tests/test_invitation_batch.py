@@ -93,6 +93,21 @@ def test_purpose_specific_email_is_excluded_from_draft_preparation(tmp_path):
     assert get_record("company-blocked", path)["email_drafts"] == []
 
 
+def test_bound_owner_test_recipients_use_normal_batch_workflow(tmp_path):
+    path = tmp_path / "registry.db"
+    register_profile(profile("owner-one", owner_test=True), path)
+    register_profile(profile("owner-two", owner_test=True), path)
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO owner_test_recipient_bindings(profile_id,recipient,label,created_at,updated_at) VALUES (?,?,?,?,?)", ("owner-one", "yuxuan.chen.1031@outlook.com", "GeoAIResume demo", "now", "now"))
+        db.execute("INSERT INTO owner_test_recipient_bindings(profile_id,recipient,label,created_at,updated_at) VALUES (?,?,?,?,?)", ("owner-two", "yuxaun.chen.1031@outlook.com", "Whisker Haven demo", "now", "now"))
+    result = generate_invitation_batch(["owner-one", "owner-two"], secret="test-secret", path=path)
+    assert result["summary"]["successfully_generated"] == 2
+    assert result["summary"]["owner_controlled_test_excluded"] == 0
+    with sqlite3.connect(path) as db:
+        rows = db.execute("SELECT delivery_recipient FROM email_drafts ORDER BY profile_id").fetchall()
+    assert [row[0] for row in rows] == ["yuxuan.chen.1031@outlook.com", "yuxaun.chen.1031@outlook.com"]
+
+
 def test_batch_approval_requires_explicit_reviewer_and_is_idempotent(tmp_path):
     path = tmp_path / "registry.db"
     register_profile(profile("company-ready"), path)

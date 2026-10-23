@@ -27,3 +27,39 @@ def test_docx_generation_from_integration_fixture(tmp_path):
     assert "Post-deployment measurements" in text
     assert "Not supplied" in text
 
+
+def test_incomplete_report_is_explicit_and_does_not_dump_json(tmp_path):
+    template = Path("templates/company_geo_analysis_report_template.docx")
+    output = tmp_path / "incomplete.docx"
+    result = {
+        "contract_version": "geo-research-integration/v1",
+        "source_profile_id": "whisker-fixture",
+        "source_profile_version": "v1",
+        "property_id": 3,
+        "observed_pages": [{
+            "url": "https://example.test/",
+            "title": "Example",
+            "headings": ["Example heading"],
+            "exact_quotes": ["Observed source text"],
+        }],
+        "baseline": {"provider": "CONTROLLED_FIXTURE", "model_calls": 0},
+        "recommendations": [{
+            "rank": 1,
+            "title": "Clarify the entity",
+            "page_url": "https://example.test/",
+            "original_quote": "Observed source text",
+            "proposed_revision": "Add a concise entity summary.",
+            "rationale": "Improves retrieval clarity.",
+        }],
+        "limitations": ["No real model baseline was available."],
+    }
+    generate_docx_report(result, output, template)
+    document = Document(output)
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    text += "\n" + "\n".join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+    assert "REPORT STATUS: INCOMPLETE" in text
+    assert "Clarify the entity" in text
+    assert "Observed source text" in text
+    assert "{" not in text and "}" not in text
+    assert "{{" not in text and "}}" not in text
+

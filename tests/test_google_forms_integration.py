@@ -93,6 +93,27 @@ def test_representative_email_difference_is_retained_and_reviewed(tmp_path):
         assert conn.execute("select contact_email,identity_review_status from questionnaire_submissions").fetchone() == ("different@forms.example", "REPRESENTATIVE_EMAIL_DIFFERS_FROM_INVITATION")
 
 
+def test_distinct_second_response_is_quarantined(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(_profile(), db)
+    invitation_id, _ = create_questionnaire_invitation("forms-company", secret="secret", path=db)
+    reference = get_invitation_reference(invitation_id, path=db)
+    base = {
+        "Invitation Reference": reference,
+        "Is your company interested in participating in this research?": "Yes",
+        "Does your company authorize our research team to conduct the research described above?": "Yes",
+        "Full Name of the Authorized Company Representative": "Owner",
+        "Job Title of the Authorized Company Representative": "Founder",
+    }
+    first = {**base, "Timestamp": "2026-10-22T18:00:00Z", "Business Email Address of the Authorized Company Representative": "owner@forms.example"}
+    second = {**base, "Timestamp": "2026-10-22T18:05:00Z", "Business Email Address of the Authorized Company Representative": "other@forms.example"}
+    assert ingest_google_form_response(first, path=db) == "NEEDS_REVIEW"
+    assert ingest_google_form_response(second, path=db) == "NEEDS_REVIEW"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("select count(*) from questionnaire_submissions").fetchone()[0] == 2
+        assert conn.execute("select count(*) from questionnaire_conflicts where status='QUARANTINED'").fetchone()[0] == 1
+
+
 def test_unknown_reference_and_mismatch_are_not_consent(tmp_path):
     db = tmp_path / "registry.db"
     register_profile(_profile(), db)

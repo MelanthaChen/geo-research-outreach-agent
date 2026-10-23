@@ -133,6 +133,25 @@ def _upsert(target, table: str, columns: list[str], row: dict[str, Any], key_col
     )
 
 
+def _upsert_many(target, table: str, columns: list[str], rows: list[dict[str, Any]], key_columns: list[str]) -> None:
+    """Upsert a source section in one driver batch.
+
+    The SQLite source stores are small enough to materialize, while one
+    PostgreSQL round-trip per candidate makes a first Neon migration
+    needlessly slow. Keeping the same conflict keys and update expression
+    preserves rerun/idempotency semantics while making the cloud path usable.
+    """
+    if not rows:
+        return
+    values = [[row.get(column) for column in columns] for row in rows]
+    placeholders = ",".join("?" for _ in columns)
+    updates = ",".join(f"{column}=excluded.{column}" for column in columns if column not in key_columns)
+    target.executemany(
+        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders}) "
+        f"ON CONFLICT ({','.join(key_columns)}) DO UPDATE SET {updates}", values
+    )
+
+
 def _source_checksum(rows: list[dict[str, Any]]) -> str:
     return _checksum("\n".join(_row_json(row) for row in rows))
 
@@ -145,14 +164,17 @@ def _migrate_candidates(target, source_path: Path, *, hotel: bool, report: dict[
     contacts_table = "hotel_contact_channels" if hotel else "phase6f_contact_channels"
     source_candidates = [dict(row) for row in source.execute("SELECT * FROM candidates ORDER BY candidate_id")]
     source_name = f"{prefix}:candidates"
+    candidate_payloads = []
     for row in source_candidates:
         raw = _row_json(row)
         payload = {key: row.get(key) for key in candidate_columns}
         payload.update(source_row_json=raw, source_row_checksum=_checksum(raw))
-        _upsert(target, candidate_table, candidate_columns + ["source_row_json", "source_row_checksum"], payload, ["candidate_id"])
+        candidate_payloads.append(payload)
+    _upsert_many(target, candidate_table, candidate_columns + ["source_row_json", "source_row_checksum"], candidate_payloads, ["candidate_id"])
 
     provenance_table = "hotel_provenance" if hotel else "candidate_provenance"
     mirror_provenance = "candidate_hotel_provenance" if hotel else "candidate_company_provenance"
+    provenance_payloads = []
     for row in source.execute(f"SELECT * FROM {provenance_table} ORDER BY candidate_id"):
         item = dict(row)
         raw = _row_json(item)
@@ -163,24 +185,31 @@ def _migrate_candidates(target, source_path: Path, *, hotel: bool, report: dict[
             payload = {key: item.get(key) for key in ("candidate_id", "source_name", "source_record_id", "source_url", "source_license_or_permission", "discovery_timestamp")}
             keys = ["candidate_id", "source_name", "source_record_id"]
         payload.update(source_row_json=raw, source_row_checksum=_checksum(raw))
-        _upsert(target, mirror_provenance, list(payload), payload, keys)
+        provenance_payloads.append((payload, keys))
+    if provenance_payloads:
+        provenance_columns = list(provenance_payloads[0][0])
+        _upsert_many(target, mirror_provenance, provenance_columns, [item[0] for item in provenance_payloads], provenance_payloads[0][1])
 
     if source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (contacts_table,)).fetchone():
+        contact_payloads = []
         for row in source.execute(f"SELECT * FROM {contacts_table} ORDER BY candidate_id"):
             item = dict(row)
             raw = _row_json(item)
             fields = list(HOTEL_CONTACT_COLUMNS if hotel else CONTACT_COLUMNS)
             payload = {key: item.get(key) or "" for key in fields}
             payload.update(source_row_json=raw, source_row_checksum=_checksum(raw))
-            _upsert(target, "candidate_hotel_contacts" if hotel else "candidate_company_contacts", fields + ["source_row_json", "source_row_checksum"], payload, ["candidate_id", "channel_type", "email", "channel_url"])
+            contact_payloads.append(payload)
+        _upsert_many(target, "candidate_hotel_contacts" if hotel else "candidate_company_contacts", fields + ["source_row_json", "source_row_checksum"], contact_payloads, ["candidate_id", "channel_type", "email", "channel_url"])
 
     if not hotel and source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='phase6e_screening'").fetchone():
+        screening_payloads = []
         for row in source.execute("SELECT * FROM phase6e_screening ORDER BY candidate_id"):
             item = dict(row)
             raw = _row_json(item)
             payload = {key: item.get(key) for key in ("candidate_id", "screen_status", "priority_score", "category_group", "chain_location_concern", "rule_version", "screened_at", "manual_sample_class", "manual_sample_note", "website_domain_concern", "priority_basis")}
             payload.update(source_row_json=raw, source_row_checksum=_checksum(raw))
-            _upsert(target, "candidate_company_screening", list(payload), payload, ["candidate_id"])
+            screening_payloads.append(payload)
+        _upsert_many(target, "candidate_company_screening", list(screening_payloads[0]) if screening_payloads else [], screening_payloads, ["candidate_id"])
 
     report["sources"][source_name] = {"rows": len(source_candidates), "checksum": _source_checksum(source_candidates)}
     report["counts"][prefix] = len(source_candidates)

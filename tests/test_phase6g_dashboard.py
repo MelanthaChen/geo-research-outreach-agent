@@ -67,6 +67,41 @@ def test_questionnaire_ingestion_is_not_blocked_by_dashboard_auth(monkeypatch):
         thread.join(timeout=2)
 
 
+def test_public_operational_pages_have_safe_read_projections(monkeypatch):
+    monkeypatch.setenv("OUTREACH_DASHBOARD_TOKEN", "operator-secret-sentinel")
+    def records(*args, **kwargs):
+        profile_type = kwargs.get("profile_type") or "business_company"
+        return {"records": [{
+            "profile_id": "public-1", "profile_type": profile_type, "name": "Public Example",
+            "official_website": "https://example.com", "industry": "Software", "location": "Boston, MA",
+            "identity_verification_status": "VERIFIED", "geographic_classification": "VERIFIED_US",
+            "screening_status": "SCREENED", "recruitment_priority": "HIGH", "qualification_status": "QUALIFIED",
+            "contact_channels_json": '[{"email":"private@example.com"}]', "consent_status": "CONSENTED",
+        }], "total": 1}
+    monkeypatch.setattr(dashboard, "list_records", records)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler({"summary": {}, "details": {}}))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        for path in ("/api/public/companies", "/api/public/hotels"):
+            payload = json.load(urllib.request.urlopen(base + path))
+            assert payload["public"] is True
+            assert payload["records"][0]["profile_type"] in {"business_company", "hotel_property"}
+            assert "contact_channels_json" not in payload["records"][0]
+        for path in ("/api/public/campaigns", "/api/public/responses", "/api/public/analytics"):
+            payload = json.load(urllib.request.urlopen(base + path))
+            assert payload["public"] is True
+            assert "private@example.com" not in json.dumps(payload)
+        with __import__("pytest").raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(base + "/api/campaigns")
+        assert error.value.code == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_phase6g_dashboard_review_api_is_paginated_filterable_and_scoped(monkeypatch):
     row = {"candidate_id": "osm:one", "channel_key": "channel-key", "company_name": "Example",
            "source_name": "OSM", "confidence": "HIGH", "review_status": "PENDING",

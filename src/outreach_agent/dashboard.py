@@ -110,6 +110,39 @@ def _public_research_records(params: dict) -> dict:
     }
 
 
+def _public_records_by_type(params: dict, profile_type: str) -> dict:
+    """Public projection used by the Companies and Hotels pages."""
+    scoped = dict(params)
+    scoped["profile_type"] = profile_type
+    result = _public_research_records(scoped)
+    result["profile_type"] = profile_type
+    return result
+
+
+def _public_aggregate(campaign_store: CampaignStore | None = None) -> dict:
+    """Return aggregate-only operational metrics; never return row details."""
+    result = {
+        "public": True,
+        "notice": "Aggregate read-only metrics. Personal responses and operational records are protected.",
+        "companies": _public_records_by_type({"page": "1", "page_size": "1"}, "business_company")["total"],
+        "hotels": _public_records_by_type({"page": "1", "page_size": "1"}, "hotel_property")["total"],
+        "owner_controlled_tests": _public_records_by_type({"page": "1", "page_size": "1"}, "owner_controlled_test")["total"],
+        "campaigns": [],
+        "responses": {"total": 0, "by_status": {}},
+    }
+    if campaign_store is not None:
+        analytics = campaign_store.analytics()
+        result["campaigns"] = [
+            {key: campaign.get(key) for key in ("id", "name", "status", "company_count", "simulated_deliveries", "simulated_response_count")}
+            for campaign in campaign_store.list()
+        ]
+        result["responses"] = {
+            "total": sum(int(value or 0) for value in (analytics.get("responses") or {}).values()),
+            "by_status": {str(key): int(value or 0) for key, value in (analytics.get("responses") or {}).items()},
+        }
+    return result
+
+
 def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                  email_event_store: EmailEventStore | None = None):
     class DashboardHandler(BaseHTTPRequestHandler):
@@ -170,7 +203,12 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             if parsed.path == "/health":
                 self._json({"status": "healthy", "service": "outreach-dashboard"})
                 return
-            if parsed.path.startswith("/api/") and parsed.path not in {"/api/public/summary", "/api/public/research/records"} and not self._dashboard_auth_ok():
+            public_paths = {
+                "/api/public/summary", "/api/public/research/records", "/api/public/companies",
+                "/api/public/hotels", "/api/public/campaigns", "/api/public/responses",
+                "/api/public/analytics",
+            }
+            if parsed.path.startswith("/api/") and parsed.path not in public_paths and not self._dashboard_auth_ok():
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
             if parsed.path == "/api/public/summary":
@@ -182,6 +220,23 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     self._json(_public_research_records(params))
                 except (ValueError, OSError, sqlite3.Error) as exc:
                     self._json({"error": str(exc)}, 400)
+                return
+            if parsed.path in {"/api/public/companies", "/api/public/hotels"}:
+                params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+                profile_type = "hotel_property" if parsed.path.endswith("/hotels") else "business_company"
+                try:
+                    self._json(_public_records_by_type(params, profile_type))
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    self._json({"error": str(exc)}, 400)
+                return
+            if parsed.path in {"/api/public/campaigns", "/api/public/responses", "/api/public/analytics"}:
+                aggregate = _public_aggregate(campaign_store)
+                if parsed.path.endswith("/campaigns"):
+                    self._json({"public": True, "notice": aggregate["notice"], "campaigns": aggregate["campaigns"]})
+                elif parsed.path.endswith("/responses"):
+                    self._json({"public": True, "notice": aggregate["notice"], "responses": aggregate["responses"]})
+                else:
+                    self._json(aggregate)
                 return
             if parsed.path == "/api/test-email/config":
                 try:

@@ -679,7 +679,7 @@ async function loadResearchDetail(profileId){
   const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);
   $("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Screening evidence</h4>${listItems((row.screenings||[]).map(item=>JSON.parse(item.evidence_json||"[]")),"No screening evidence recorded.")}</div><div class="subsection"><h4>Drafts</h4>${listItems((row.email_drafts||[]).map(item=>`${item.draft_id} · ${item.approval_status} · ${item.recipient}`),"No recruitment drafts.")}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
 }
-const pages = ["overview","companies","research-queue","campaigns","interest-form","responses","analytics","settings"];
+const pages = ["overview","companies","hotels","research-queue","campaigns","interest-form","responses","analytics","settings"];
 function navigate() {
   const requested = location.hash.slice(1) || (state.summary?.cloud_registry ? "research-queue" : "overview");
   const page = pages.includes(requested) ? requested : "overview";
@@ -789,4 +789,57 @@ $("research-create-draft").addEventListener("click",async()=>{const id=[...resea
 $("research-invite").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;try{await researchAction("/api/recruitment/invite",{profile_id:id});}catch(error){showError(error);}});
 $("research-approve").addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name:");if(!reviewer)return;try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="PENDING").map(item=>item.draft_id));if(!drafts.length)throw new Error("No pending drafts selected");await researchAction("/api/recruitment/approve-batch",{draft_ids:drafts,reviewer});}catch(error){showError(error);}});
 $("research-send").addEventListener("click",async()=>{try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="APPROVED").map(item=>item.draft_id));if(!drafts.length)throw new Error("No approved drafts selected");await researchAction("/api/recruitment/send-simulated",{draft_ids:drafts});}catch(error){showError(error);}});
+function publicDirectoryMarkup(title, description, result) {
+  const rows = result.records || [];
+  const maxPage = Math.max(1, Math.ceil(Number(result.total || 0) / Number(result.page_size || 25)));
+  return `<div class="page-heading"><div><p class="eyebrow">PUBLIC READ-ONLY DIRECTORY</p><h1>${esc(title)}</h1><p>${esc(description)}</p></div><span class="mini-tag">${Number(result.total || 0).toLocaleString()} prospects</span></div><div class="public-readonly-notice"><strong>Public read-only view</strong><span>Names, websites, qualification states, and locations are visible. Contacts, invitations, responses, consent, and approvals remain protected.</span></div><div class="filters"><label class="search"><span>⌕</span><input id="public-directory-search" type="search" value="${esc(result.query || "")}" placeholder="Search name, website, or location"></label></div><div class="company-list" id="public-directory-rows">${rows.length ? rows.map(row => `<article class="company-row"><a class="company-choice" href="${esc(row.official_website || "#")}" target="_blank" rel="noreferrer"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website || "Website not recorded")}</span></span><span class="company-status"><span class="company-status-label">${esc(compact(row.profile_type))}</span>${pill(row.qualification_status)}<span class="company-status-label">${esc(compact(row.geographic_classification || "COUNTRY_UNKNOWN"))}</span></span><small>${esc(row.industry || "Unknown industry")} · ${esc(row.location || "Unknown location")} · Website ${esc(compact(row.identity_verification_status || "UNKNOWN"))}</small></a></article>`).join("") : `<div class="empty-state"><h3>No public prospects match these filters</h3><p>Try a broader search.</p></div>`}</div><div class="list-pagination"><button class="button outline" id="public-directory-prev" ${result.page <= 1 ? "disabled" : ""}>Previous</button><span>Page ${result.page} of ${maxPage} · ${Number(result.total || 0).toLocaleString()} records</span><button class="button outline" id="public-directory-next" ${result.page >= maxPage ? "disabled" : ""}>Next</button></div>`;
+}
+async function loadPublicDirectory(page, profileType) {
+  const host = $(page === "hotels" ? "page-hotels" : "page-companies");
+  const endpoint = profileType === "hotel_property" ? "/api/public/hotels" : "/api/public/companies";
+  const query = new URLSearchParams({page:String(state.publicDirectoryPage || 1), page_size:"25"});
+  if (state.publicDirectoryQuery) query.set("q", state.publicDirectoryQuery);
+  const result = await publicApi(`${endpoint}?${query}`); result.query = state.publicDirectoryQuery || "";
+  host.innerHTML = publicDirectoryMarkup(profileType === "hotel_property" ? "Hotels" : "Companies", profileType === "hotel_property" ? "Qualified US hotel properties in the operational prospect registry." : "Eligible operational company prospects in the lean registry.", result);
+  $("public-directory-search").addEventListener("input", (event) => { state.publicDirectoryQuery = event.target.value; state.publicDirectoryPage = 1; clearTimeout(state.publicDirectoryTimer); state.publicDirectoryTimer = setTimeout(() => loadPublicDirectory(page, profileType).catch(showError), 250); });
+  $("public-directory-prev").addEventListener("click", () => { state.publicDirectoryPage = Math.max(1, (state.publicDirectoryPage || 1) - 1); loadPublicDirectory(page, profileType).catch(showError); });
+  $("public-directory-next").addEventListener("click", () => { state.publicDirectoryPage = (state.publicDirectoryPage || 1) + 1; loadPublicDirectory(page, profileType).catch(showError); });
+}
+function renderPublicRestricted(page, title, reason) {
+  const host = $("page-" + page); if (!host) return;
+  host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">PROTECTED WORKFLOW</p><h1>${esc(title)}</h1><p>${esc(reason)}</p></div></div><section class="panel restricted-panel"><h2>Restricted operation</h2><p>This view is not available in the public browsing session because it may expose or modify sensitive operational data.</p><p>Operator authentication is required for contacts, invitations, questionnaire responses, consent review, approvals, exports, sender settings, and GEO handoffs.</p></section>`;
+}
+async function loadPublicResponses() {
+  const result = await publicApi("/api/public/responses"); const host = $("page-responses");
+  host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">FOLLOW-UP</p><h1>Responses</h1><p>Aggregate response activity only. Personal submissions and contact details are never returned publicly.</p></div></div><section class="panel"><div class="public-readonly-notice"><strong>Aggregate-only view</strong><span>Individual response records, identities, consent evidence, and questionnaire contents require protected operator access.</span></div><div class="metrics">${Object.entries(result.responses.by_status || {}).map(([key,value]) => `<div class="metric"><div class="metric-label">${esc(compact(key))}</div><div class="metric-value">${esc(value)}</div><div class="metric-note">Aggregate count</div></div>`).join("") || `<div class="empty-state"><h3>No public response metrics</h3><p>Response details are protected.</p></div>`}</div></section>`;
+}
+async function loadPublicAnalytics() {
+  const result = await publicApi("/api/public/analytics"); const host = $("page-analytics");
+  host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">MEASUREMENT</p><h1>Analytics</h1><p>Public aggregate metrics from the lean operational registry. Test activity is separated from live activity.</p></div></div><section class="panel"><div class="metrics"><div class="metric"><div class="metric-label">Company prospects</div><div class="metric-value">${Number(result.companies || 0).toLocaleString()}</div><div class="metric-note">Operational records</div></div><div class="metric"><div class="metric-label">Hotel prospects</div><div class="metric-value">${Number(result.hotels || 0).toLocaleString()}</div><div class="metric-note">Operational records</div></div><div class="metric"><div class="metric-label">Owner-controlled tests</div><div class="metric-value">${Number(result.owner_controlled_tests || 0).toLocaleString()}</div><div class="metric-note">Excluded from formal cohorts</div></div><div class="metric"><div class="metric-label">Responses</div><div class="metric-value">${Number(result.responses?.total || 0).toLocaleString()}</div><div class="metric-note">Aggregate only</div></div></div></section>`;
+}
+async function loadPublicCampaigns() {
+  const result = await publicApi("/api/public/campaigns"); const host = $("page-campaigns");
+  host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">OUTREACH STATUS</p><h1>Campaigns</h1><p>Public campaign status only. Sending, approvals, recipients, and invitation content remain protected.</p></div></div><section class="panel"><div class="public-readonly-notice"><strong>Protected workflow controls hidden</strong><span>Anonymous visitors can see high-level status but cannot create, approve, export, or send campaigns.</span></div><div class="campaign-list">${(result.campaigns || []).map(c => `<article class="campaign-card"><strong>${esc(displayCampaignName(c.name))}</strong><small>${esc(compact(c.status))} · ${esc(c.company_count || 0)} selected · ${esc(c.simulated_deliveries || 0)} test deliveries</small></article>`).join("") || `<div class="empty-state"><h3>No campaign status to display</h3><p>Live sending is disabled.</p></div>`}</div></section>`;
+}
+function navigate() {
+  const requested = location.hash.slice(1) || (state.summary?.cloud_registry ? "research-queue" : "overview");
+  const page = pages.includes(requested) ? requested : "overview";
+  document.querySelectorAll("[data-view]").forEach((view) => { view.hidden = view.dataset.view !== page; });
+  document.querySelectorAll("[data-page]").forEach((link) => { const active = link.dataset.page === page; link.classList.toggle("active", active); if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current"); });
+  document.title = `${page.replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase())} · GEO Research Outreach Platform`;
+  if (state.dashboardToken) {
+    if (page === "responses") renderResponsesFromApi().catch(showError);
+    if (page === "research-queue") reloadResearchQueue().catch(showError);
+    if (page === "interest-form") renderFormTokens(state.campaignSummaries).catch(showError);
+    return;
+  }
+  if (page === "companies") loadPublicDirectory(page, "business_company").catch(showError);
+  else if (page === "hotels") loadPublicDirectory(page, "hotel_property").catch(showError);
+  else if (page === "research-queue") reloadResearchQueue().catch(showError);
+  else if (page === "responses") loadPublicResponses().catch(showError);
+  else if (page === "analytics") loadPublicAnalytics().catch(showError);
+  else if (page === "campaigns") loadPublicCampaigns().catch(showError);
+  else if (page === "interest-form") renderPublicRestricted(page, "Participation", "The actual questionnaire is handled through the secure invitation workflow; local test controls are not public.");
+  else if (page === "settings") renderPublicRestricted(page, "Settings", "Configuration and administrative controls require protected operator access.");
+}
 start().catch(showError);

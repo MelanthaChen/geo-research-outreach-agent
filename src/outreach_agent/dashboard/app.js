@@ -642,7 +642,8 @@ async function runCampaignAction(campaignId, action) {
   await loadCampaignWorkspace(); await showCampaign(campaignId);
 }
 function showError(error) { const host = $("app-error"); host.hidden = false; host.textContent = `Unable to load this view: ${error.message}`; }
-const researchState={page:1,pageSize:25,selected:new Set(),total:0,filters:{promotion_state:"OPERATIONAL_WITH_TEST"}};
+const researchState={page:1,pageSize:25,selected:new Set(),total:0,filters:{promotion_state:"OPERATIONAL_WITH_TEST"},selectionScope:"Current page",batch:null};
+const researchSort=document.createElement("select"); researchSort.id="research-sort"; researchSort.setAttribute("aria-label","Sort research queue"); researchSort.innerHTML='<option value="name">Sort: company name</option><option value="identity">Sort: identity status</option><option value="consent">Sort: consent status</option><option value="updated">Sort: recently updated</option>'; $("research-geography").after(researchSort);
 async function reloadResearchQueue(){const query=new URLSearchParams({page:String(researchState.page),page_size:String(researchState.pageSize),...researchState.filters});const result=await api(`/api/research/records?${query}`);researchState.total=result.total;const host=$("research-table");host.innerHTML=result.records.length?result.records.map(row=>`<article class="company-row ${researchState.selected.has(row.profile_id)?"selected":""}"><input type="checkbox" data-research-select="${esc(row.profile_id)}" ${researchState.selected.has(row.profile_id)?"checked":""}><button class="company-choice" data-research-detail="${esc(row.profile_id)}"><span class="company-main"><span class="company-name">${esc(row.name)}</span><span class="company-url">${esc(row.official_website)}</span></span><span class="company-status"><span class="company-status-label">${esc(row.profile_type)}</span>${pill(row.qualification_status)}<span class="company-status-label">Consent</span>${pill(row.consent_status)}</span><small>${esc(row.industry||"Unknown industry")} · ${esc(row.location||"Unknown location")} · Screen ${esc(row.geo_research_status)}</small></button></article>`).join(""):`<div class="no-results">No research records match these filters.</div>`;host.querySelectorAll("[data-research-select]").forEach(box=>box.addEventListener("change",()=>{box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);updateResearchSelection();}));host.querySelectorAll("[data-research-detail]").forEach(button=>button.addEventListener("click",()=>loadResearchDetail(button.dataset.researchDetail).catch(showError)));$("research-page").textContent=`Page ${result.page} of ${Math.max(1,Math.ceil(result.total/result.page_size))} · ${result.total} records`;$("research-prev").disabled=result.page<=1;$("research-next").disabled=result.page>=Math.max(1,Math.ceil(result.total/result.page_size));updateResearchSelection();}
 async function reloadResearchQueue(){
   const publicMode=false;
@@ -662,6 +663,42 @@ async function reloadResearchQueue(){
 }
 function updateResearchSelection(){
   $("research-selected-count").textContent=`${researchState.selected.size} selected`;
+  const scope=$("research-selection-scope"); if(scope) scope.textContent=researchState.selectionScope;
+  const generate=$("research-generate-batch"); if(generate) generate.disabled=!researchState.selected.size;
+}
+function renderResearchBatchSummary(result){
+  researchState.batch=result;
+  const host=$("research-batch-summary"); if(!host)return;
+  const labels={successfully_generated:"Ready for approval",ready_for_approval:"New drafts",missing_verified_recipient:"Missing verified recipient",insufficient_verified_evidence:"Insufficient evidence",duplicate_already_invited:"Already invited",owner_controlled_test_excluded:"Owner-controlled test excluded",generation_failed:"Generation failed"};
+  host.hidden=false;
+  host.innerHTML=`<div class="batch-summary-head"><strong>Batch generated</strong><span>${esc(result.batch_id)}</span></div><div class="batch-summary-grid">${Object.entries(labels).map(([key,label])=>`<button type="button" class="batch-summary-item" data-batch-category="${esc(key)}"><strong>${esc(result.summary?.[key]??0)}</strong><span>${esc(label)}</span></button>`).join("")}</div><p class="section-help">Select a summary category to focus the relevant records. Only validated drafts can be approved or exported; exceptions remain excluded from the Word package.</p>`;
+  host.querySelectorAll("[data-batch-category]").forEach(button=>button.addEventListener("click",()=>{const ids=result.categories?.[button.dataset.batchCategory]||[];researchState.selected=new Set(ids.map(item=>typeof item==="string"?item:item.profile_id).filter(Boolean));researchState.selectionScope=`Batch category: ${button.dataset.batchCategory}`;updateResearchSelection();}));
+  $("research-batch-actions").hidden=!(result.draft_ids||[]).length;
+  $("research-batch-export").disabled=true;
+  $("research-batch-approve").disabled=true;
+}
+async function selectAllMatchingResearch(){
+  const result=await apiWrite("/api/recruitment/selection",{filters:researchState.filters});
+  researchState.selected=new Set(result.profile_ids||[]); researchState.selectionScope=`All ${result.total} matching records`; reloadResearchQueue().catch(showError); updateResearchSelection();
+}
+async function generateResearchBatch(){
+  if(!researchState.selected.size) throw new Error("Select at least one company");
+  const result=await apiWrite("/api/recruitment/batch-generate",{profile_ids:[...researchState.selected]});
+  renderResearchBatchSummary(result); $("research-status").textContent=`Generated ${result.summary.successfully_generated} invitation drafts; no messages sent.`;
+}
+async function approveResearchBatch(){
+  if(!researchState.batch?.batch_id) throw new Error("Generate a batch first");
+  const reviewer=$("research-batch-reviewer").value.trim(); if(!reviewer) throw new Error("Reviewer name is required");
+  if(!$("research-batch-confirm").checked) throw new Error("Confirm the batch approval scope first");
+  const result=await apiWrite("/api/recruitment/batch-approve",{batch_id:researchState.batch.batch_id,reviewer});
+  $("research-status").textContent=`Approved ${result.approved} eligible drafts. Exporting remains separate; no messages sent.`;
+  $("research-batch-export").disabled=false; $("research-batch-approve").disabled=true;
+}
+async function exportResearchBatch(){
+  if(!researchState.batch?.batch_id) throw new Error("Generate a batch first");
+  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected]})});
+  if(!response.ok){let detail="Mail Merge package export failed";try{detail=(await response.json()).error||detail;}catch(_){ }throw new Error(detail);}
+  const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded approved Word Mail Merge package. Exporting did not mark invitations sent.";
 }
 async function downloadResearchMailMergePackage(){
   if(!researchState.selected.size){showError(new Error("Select at least one approved invitation draft"));return;}
@@ -814,15 +851,23 @@ $("add-sender-account").addEventListener("click",async()=>{try{const result=awai
 $("analytics-campaign-filter").addEventListener("change",()=>api("/api/campaign-analytics").then(result=>renderAnalytics(result,state.campaignSummaries)).catch(showError));
 $("hotel-discovery-pause").addEventListener("click",()=>apiWrite("/api/hotel-discovery/pause",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
 $("hotel-discovery-resume").addEventListener("click",()=>apiWrite("/api/hotel-discovery/resume",{}).then(result=>{renderSummary({...state.summary,hotel_discovery:result,filters:state.summary.filters});}).catch(showError));
-$("research-search").addEventListener("input",()=>{researchState.filters.q=$("research-search").value;researchState.page=1;reloadResearchQueue().catch(showError);});
-["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;reloadResearchQueue().catch(showError);}));
+$("research-search").addEventListener("input",()=>{researchState.filters.q=$("research-search").value;researchState.page=1;researchState.selected.clear();researchState.selectionScope="Current page";researchState.batch=null;$("research-batch-summary").hidden=true;$("research-batch-actions").hidden=true;reloadResearchQueue().catch(showError);});
+["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;researchState.selected.clear();researchState.selectionScope="Current page";researchState.batch=null;$("research-batch-summary").hidden=true;$("research-batch-actions").hidden=true;reloadResearchQueue().catch(showError);}));
 $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});
 $("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});
-$("research-select-all").addEventListener("change",()=>{$("research-table").querySelectorAll("[data-research-select]").forEach(box=>{box.checked=$("research-select-all").checked;box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);});updateResearchSelection();});
-$("research-create-draft").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;const recipient=window.prompt("Approved recipient address for this draft:");if(!recipient)return;try{await researchAction("/api/recruitment/screen-and-draft",{profile_id:id,recipient,mode:"RULE_BASED"});}catch(error){showError(error);}});
+$("research-sort").addEventListener("change",()=>{researchState.filters.sort=$("research-sort").value;researchState.page=1;reloadResearchQueue().catch(showError);});
+$("research-select-all").addEventListener("change",()=>{$("research-table").querySelectorAll("[data-research-select]").forEach(box=>{box.checked=$("research-select-all").checked;box.checked?researchState.selected.add(box.dataset.researchSelect):researchState.selected.delete(box.dataset.researchSelect);});researchState.selectionScope="Current page";updateResearchSelection();});
+$("research-select-all-matching").addEventListener("click",()=>selectAllMatchingResearch().catch(showError));
+$("research-clear-selection").addEventListener("click",()=>{researchState.selected.clear();researchState.selectionScope="Current page";researchState.batch=null;$("research-batch-summary").hidden=true;$("research-batch-actions").hidden=true;updateResearchSelection();reloadResearchQueue().catch(showError);});
+$("research-generate-batch").addEventListener("click",()=>generateResearchBatch().catch(showError));
+$("research-batch-reviewer").addEventListener("input",()=>{const ready=Boolean(researchState.batch?.draft_ids?.length&&$("research-batch-reviewer").value.trim()&&$("research-batch-confirm").checked);$("research-batch-approve").disabled=!ready;});
+$("research-batch-confirm").addEventListener("change",()=>$("research-batch-reviewer").dispatchEvent(new Event("input")));
+$("research-batch-approve").addEventListener("click",()=>approveResearchBatch().catch(showError));
+$("research-batch-export").addEventListener("click",()=>exportResearchBatch().catch(showError));
+$("research-create-draft").addEventListener("click",()=>generateResearchBatch().catch(showError));
 $("research-mail-merge-package").addEventListener("click",()=>downloadResearchMailMergePackage().catch(showError));
 $("research-invite").addEventListener("click",async()=>{const id=[...researchState.selected][0];if(!id)return;try{await researchAction("/api/recruitment/invite",{profile_id:id});}catch(error){showError(error);}});
-$("research-approve").addEventListener("click",async()=>{const reviewer=window.prompt("Reviewer name:");if(!reviewer)return;try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="PENDING").map(item=>item.draft_id));if(!drafts.length)throw new Error("No pending drafts selected");await researchAction("/api/recruitment/approve-batch",{draft_ids:drafts,reviewer});}catch(error){showError(error);}});
+$("research-approve").addEventListener("click",()=>{if(researchState.batch?.batch_id){approveResearchBatch().catch(showError);}else{showError(new Error("Generate a personalized invitation batch first, then approve it in the batch review controls."));}});
 $("research-send").addEventListener("click",async()=>{try{const records=await Promise.all([...researchState.selected].map(id=>api(`/api/research/records/${encodeURIComponent(id)}`)));const drafts=records.flatMap(row=>(row.email_drafts||[]).filter(item=>item.approval_status==="APPROVED").map(item=>item.draft_id));if(!drafts.length)throw new Error("No approved drafts selected");await researchAction("/api/recruitment/send-simulated",{draft_ids:drafts});}catch(error){showError(error);}});
 function publicDirectoryMarkup(title, description, result) {
   const rows = result.records || [];

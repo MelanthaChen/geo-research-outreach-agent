@@ -46,7 +46,7 @@ from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
 from outreach_agent.research_lifecycle import (
     REGISTRY_DB, approve_email_batch, create_questionnaire_invitation, get_invitation_reference, create_geo_handoff, export_records_csv,
     get_record, ingest_reply, list_records, personalized_recruitment_draft, create_post_form_confirmation_draft,
-    create_manual_invitation_draft, reconcile_manual_send,
+    create_manual_invitation_draft, reconcile_manual_send, generate_invitation_batch, approve_invitation_batch,
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
 from outreach_agent.geo_engine_handoff import review_questionnaire_submission
@@ -671,6 +671,40 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         expires_at=body.get("expires_at"),
                     )
                     self._json(result, 200 if result.get("status") == "EXISTING" else 201)
+                    return
+                if parsed.path == "/api/recruitment/batch-generate":
+                    secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
+                    if not secret:
+                        self._json({"error": "Batch invitation drafting requires RESEARCH_QUESTIONNAIRE_SECRET"}, 503)
+                        return
+                    try:
+                        result = generate_invitation_batch([str(value) for value in (body.get("profile_ids") or [])], secret=secret, path=REGISTRY_DB)
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        self._json({"error": str(exc)}, 400)
+                        return
+                    self._json(result, 200)
+                    return
+                if parsed.path == "/api/recruitment/selection":
+                    allowed = {"q", "profile_type", "geographic_status", "industry", "location", "sort", "promotion_state"}
+                    filters = {key: str(value) for key, value in (body.get("filters") or {}).items() if key in allowed and str(value)}
+                    filters.setdefault("promotion_state", "OPERATIONAL_WITH_TEST")
+                    try:
+                        result = list_records(REGISTRY_DB, **filters, limit=500, offset=0)
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        self._json({"error": str(exc)}, 400)
+                        return
+                    if result["total"] > 500:
+                        self._json({"error": "Narrow the filters before selecting more than 500 records", "total": result["total"], "max_selectable": 500}, 409)
+                        return
+                    self._json({"total": result["total"], "profile_ids": [row["profile_id"] for row in result["records"]], "scope": filters})
+                    return
+                if parsed.path == "/api/recruitment/batch-approve":
+                    try:
+                        result = approve_invitation_batch(str(body.get("batch_id") or ""), str(body.get("reviewer") or ""), path=REGISTRY_DB)
+                    except (KeyError, ValueError, OSError, sqlite3.Error) as exc:
+                        self._json({"error": str(exc)}, 400)
+                        return
+                    self._json(result, 200)
                     return
                 if parsed.path == "/api/research/mail-merge/package":
                     profile_ids = [str(value) for value in (body.get("profile_ids") or []) if str(value).strip()]

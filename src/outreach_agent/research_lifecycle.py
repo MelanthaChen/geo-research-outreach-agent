@@ -202,6 +202,12 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           submission_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, status TEXT NOT NULL,
           property_id INTEGER, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS invitation_batches (
+          batch_id TEXT PRIMARY KEY, selected_profile_ids_json TEXT NOT NULL,
+          draft_ids_json TEXT NOT NULL DEFAULT '[]', summary_json TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'GENERATED', reviewer TEXT,
+          created_at TEXT NOT NULL, approved_at TEXT
+        );
         CREATE INDEX IF NOT EXISTS research_filter_idx ON research_records(profile_type, recruitment_status, consent_status, geo_research_status);
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(questionnaire_submissions)")}
@@ -804,6 +810,88 @@ def create_manual_invitation_draft(
             "intended_recipient": intended, "test_override": test_override, "evidence": evidence}
 
 
+def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path = REGISTRY_DB,
+                              max_batch_size: int = 500) -> dict[str, Any]:
+    """Generate existing manual invitation drafts for a bounded selection.
+
+    This is a thin orchestration layer over the existing invitation workflow.
+    It never sends, approves, or marks an invitation delivered. Each record is
+    isolated so one exception cannot abort the rest of the batch.
+    """
+    unique_ids = list(dict.fromkeys(str(value).strip() for value in profile_ids if str(value).strip()))
+    if not unique_ids:
+        raise ValueError("select at least one company")
+    if len(unique_ids) > max_batch_size:
+        raise ValueError(f"batch exceeds the configured limit of {max_batch_size} records")
+    init_registry(path)
+    batch_id = "batch-invitations-" + _hash("|".join(sorted(unique_ids)))[:20]
+    generated: list[dict[str, Any]] = []
+    categories = {key: [] for key in (
+        "ready_for_approval", "missing_verified_recipient", "insufficient_verified_evidence",
+        "duplicate_already_invited", "owner_controlled_test_excluded", "generation_failed",
+    )}
+    for profile_id in unique_ids:
+        try:
+            record = get_record(profile_id, path)
+            if record.get("profile_type") == "owner_controlled_test":
+                categories["owner_controlled_test_excluded"].append(profile_id)
+                continue
+            channels = record.get("contact_channels") or []
+            official = sorted({str(item.get("email", "")).strip().casefold() for item in channels
+                               if item.get("email") and str(item.get("review_status", "")).upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"}
+                               and EMAIL_RE.match(str(item.get("email", "")).strip())})
+            if len(official) != 1:
+                categories["missing_verified_recipient"].append(profile_id)
+                continue
+            existing = next((item for item in record.get("email_drafts", [])
+                             if str(item.get("approval_status")) in {"PENDING", "APPROVED"}
+                             and str(item.get("recipient", "")).casefold() == official[0]), None)
+            if existing:
+                categories["duplicate_already_invited"].append(profile_id)
+                generated.append({"profile_id": profile_id, "draft_id": existing["draft_id"], "status": "EXISTING"})
+                continue
+            result = create_manual_invitation_draft(profile_id, delivery_recipient=official[0], secret=secret, path=path)
+            generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
+            categories["ready_for_approval"].append(profile_id)
+        except PermissionError:
+            categories["insufficient_verified_evidence"].append(profile_id)
+        except (KeyError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            categories["generation_failed"].append({"profile_id": profile_id, "error": str(exc)})
+    draft_ids = [item["draft_id"] for item in generated]
+    summary = {
+        "total_selected": len(unique_ids),
+        "successfully_generated": len(generated),
+        "ready_for_approval": len(categories["ready_for_approval"]),
+        "missing_verified_recipient": len(categories["missing_verified_recipient"]),
+        "insufficient_verified_evidence": len(categories["insufficient_verified_evidence"]),
+        "duplicate_already_invited": len(categories["duplicate_already_invited"]),
+        "owner_controlled_test_excluded": len(categories["owner_controlled_test_excluded"]),
+        "generation_failed": len(categories["generation_failed"]),
+    }
+    with _connect(path) as db:
+        db.execute("INSERT INTO invitation_batches(batch_id,selected_profile_ids_json,draft_ids_json,summary_json,status,created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(batch_id) DO UPDATE SET draft_ids_json=excluded.draft_ids_json,summary_json=excluded.summary_json,status=CASE WHEN invitation_batches.status='APPROVED' THEN 'APPROVED' ELSE 'GENERATED' END", (batch_id, json.dumps(unique_ids), json.dumps(draft_ids), json.dumps(summary, sort_keys=True), "GENERATED", now()))
+    return {"batch_id": batch_id, "summary": summary, "categories": categories, "draft_ids": draft_ids,
+            "generated": generated, "status": "GENERATED"}
+
+
+def approve_invitation_batch(batch_id: str, reviewer: str, *, path: Path = REGISTRY_DB) -> dict[str, Any]:
+    """Approve only the validated drafts recorded for one batch."""
+    if not reviewer.strip():
+        raise ValueError("reviewer is required")
+    init_registry(path)
+    with _connect(path) as db:
+        row = db.execute("SELECT draft_ids_json,status FROM invitation_batches WHERE batch_id=?", (batch_id,)).fetchone()
+        if not row:
+            raise KeyError(batch_id)
+        draft_ids = json.loads(row["draft_ids_json"] or "[]")
+        if row["status"] == "APPROVED":
+            return {"status": "EXISTING", "batch_id": batch_id, "approved": len(draft_ids), "draft_ids": draft_ids}
+    result = approve_email_batch(draft_ids, reviewer, path=path)
+    with _connect(path) as db:
+        db.execute("UPDATE invitation_batches SET status='APPROVED',reviewer=?,approved_at=? WHERE batch_id=?", (reviewer.strip(), now(), batch_id))
+    return {"status": "APPROVED", "batch_id": batch_id, "approved": result["approved"], "draft_ids": draft_ids}
+
+
 def reconcile_manual_send(draft_id: str, *, provider: str, provider_message_id: str, evidence_ref: str, sent_at: str | None = None, path: Path = REGISTRY_DB) -> dict[str, Any]:
     """Reconcile an already completed Outlook/Word send; never sends itself."""
     if not provider_message_id.strip() or not evidence_ref.strip():
@@ -1087,7 +1175,7 @@ def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "
     order = {"name": default_name_order, "identity": "identity_verification_status", "consent": "consent_status", "updated": "updated_at DESC"}.get(sort, default_name_order)
     with _connect(path) as db:
         total = db.execute("SELECT COUNT(*) FROM research_records" + where, args).fetchone()[0]
-        rows = [dict(row) for row in db.execute("SELECT * FROM research_records" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", args + [max(1, min(limit, 100)), max(0, offset)])]
+        rows = [dict(row) for row in db.execute("SELECT * FROM research_records" + where + " ORDER BY " + order + " LIMIT ? OFFSET ?", args + [max(1, min(limit, 500)), max(0, offset)])]
     return {"records": rows, "total": total, "limit": limit, "offset": offset, "sort": sort}
 
 

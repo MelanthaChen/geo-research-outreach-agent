@@ -184,7 +184,12 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 return
             if parsed.path == "/api/summary":
                 summary = dict(data["summary"])
-                summary["phase6h"] = phase6h_summary()
+                # Cloud mode is backed by the configured operational registry.
+                # Do not invoke the local SQLite-only discovery summaries here:
+                # they are unavailable on Render and would make authentication
+                # fail during the dashboard bootstrap request.
+                if not summary.get("cloud_registry"):
+                    summary["phase6h"] = phase6h_summary()
                 self._json({"summary": summary, "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
                             "participation_form_configuration": data["participation_form_configuration"]})
                 return

@@ -710,6 +710,7 @@ async function start() {
     state.summary=result.summary; state.participationFormUrl=""; state.formConfiguration={};
     renderSummary({...result.summary, filters: result.filters||{}});
     const protectedActions=$("research-protected-actions"); if(protectedActions) protectedActions.hidden=true;
+    await loadPublicOverview();
     navigate();
     return;
   }
@@ -817,6 +818,20 @@ async function loadPublicAnalytics() {
   const result = await publicApi("/api/public/analytics"); const host = $("page-analytics");
   host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">MEASUREMENT</p><h1>Analytics</h1><p>Public aggregate metrics from the lean operational registry. Test activity is separated from live activity.</p></div></div><section class="panel"><div class="metrics"><div class="metric"><div class="metric-label">Company prospects</div><div class="metric-value">${Number(result.companies || 0).toLocaleString()}</div><div class="metric-note">Operational records</div></div><div class="metric"><div class="metric-label">Hotel prospects</div><div class="metric-value">${Number(result.hotels || 0).toLocaleString()}</div><div class="metric-note">Operational records</div></div><div class="metric"><div class="metric-label">Owner-controlled tests</div><div class="metric-value">${Number(result.owner_controlled_tests || 0).toLocaleString()}</div><div class="metric-note">Excluded from formal cohorts</div></div><div class="metric"><div class="metric-label">Responses</div><div class="metric-value">${Number(result.responses?.total || 0).toLocaleString()}</div><div class="metric-note">Aggregate only</div></div></div></section>`;
 }
+async function loadPublicOverview() {
+  const result = await publicApi("/api/public/analytics");
+  const metrics = [
+    ["Company prospects", result.companies || 0, "Operational company records"],
+    ["Hotel prospects", result.hotels || 0, "Operational hotel records"],
+    ["Owner-controlled tests", result.owner_controlled_tests || 0, "Excluded from formal cohorts"],
+    ["Aggregate responses", result.responses?.total || 0, "Individual responses remain protected"],
+  ];
+  const host = $("metrics");
+  if (host) host.innerHTML = metrics.map(([label, value, note]) => `<div class="metric"><div class="metric-label">${esc(label)}</div><div class="metric-value">${Number(value).toLocaleString()}</div><div class="metric-note">${esc(note)}</div></div>`).join("");
+  document.querySelectorAll('#page-overview a[href^="/api/"]').forEach((link) => link.remove());
+  const notice = document.querySelector('#page-overview .candidate-scale-overview');
+  if (notice) notice.innerHTML = '<div class="public-readonly-notice"><strong>Operational registry view</strong><span>Use Companies, Hotels, and Research Queue for safe public browsing. Qualification evidence, contacts, invitations, consent, and exports remain protected.</span></div>';
+}
 async function loadPublicCampaigns() {
   const result = await publicApi("/api/public/campaigns"); const host = $("page-campaigns");
   host.innerHTML = `<div class="page-heading"><div><p class="eyebrow">OUTREACH STATUS</p><h1>Campaigns</h1><p>Public campaign status only. Sending, approvals, recipients, and invitation content remain protected.</p></div></div><section class="panel"><div class="public-readonly-notice"><strong>Protected workflow controls hidden</strong><span>Anonymous visitors can see high-level status but cannot create, approve, export, or send campaigns.</span></div><div class="campaign-list">${(result.campaigns || []).map(c => `<article class="campaign-card"><strong>${esc(displayCampaignName(c.name))}</strong><small>${esc(compact(c.status))} · ${esc(c.company_count || 0)} selected · ${esc(c.simulated_deliveries || 0)} test deliveries</small></article>`).join("") || `<div class="empty-state"><h3>No campaign status to display</h3><p>Live sending is disabled.</p></div>`}</div></section>`;
@@ -841,5 +856,9 @@ function navigate() {
   else if (page === "campaigns") loadPublicCampaigns().catch(showError);
   else if (page === "interest-form") renderPublicRestricted(page, "Participation", "The actual questionnaire is handled through the secure invitation workflow; local test controls are not public.");
   else if (page === "settings") renderPublicRestricted(page, "Settings", "Configuration and administrative controls require protected operator access.");
+  if (page === "research-queue") {
+    const exportLink = document.querySelector('#page-research-queue a[href="/api/research/records.csv"]');
+    if (exportLink) exportLink.remove();
+  }
 }
 start().catch(showError);

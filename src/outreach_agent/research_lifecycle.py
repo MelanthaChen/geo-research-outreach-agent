@@ -9,6 +9,8 @@ network side effect is performed by this module.
 from __future__ import annotations
 
 import csv
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import hmac
 import io
@@ -33,6 +35,22 @@ REGISTRY_DB: Path | str = os.environ.get("OUTREACH_DATABASE_URL", Path("data/res
 CONSENTED = "CONSENTED"
 CONSENT_VERSION = "geo-research-consent/v1"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+CONFIRMATION_POLICIES = {"AFFIRMATIVE_REPLY_REQUIRED", "NOTICE_ONLY"}
+
+
+def configured_confirmation_policy() -> str:
+    """Return the explicitly configured post-form confirmation policy.
+
+    The safe default requires an affirmative response.  A notice-only flow is
+    available only when an operator configures it deliberately; it is never
+    inferred from a form submission or from the absence of a reply.
+    """
+    value = os.environ.get("OUTREACH_CONFIRMATION_POLICY", "AFFIRMATIVE_REPLY_REQUIRED").strip().upper()
+    if value not in CONFIRMATION_POLICIES:
+        raise ValueError(
+            "OUTREACH_CONFIRMATION_POLICY must be AFFIRMATIVE_REPLY_REQUIRED or NOTICE_ONLY"
+        )
+    return value
 
 # The outreach-first lifecycle is intentionally broader than the GEO Engine's
 # internal execution lifecycle.  The owner-controlled fixture uses this same
@@ -117,6 +135,7 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           future_contact_permission INTEGER NOT NULL DEFAULT 0,
           consent_wording_version TEXT NOT NULL, submitted_at TEXT NOT NULL, review_status TEXT NOT NULL DEFAULT 'PENDING',
           response_source TEXT NOT NULL DEFAULT 'LOCAL_TOKEN', invitation_reference TEXT,
+          invitation_recipient_email TEXT, representative_email TEXT,
           UNIQUE(invitation_id, response_hash)
         );
         CREATE TABLE IF NOT EXISTS email_drafts (
@@ -124,6 +143,23 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           template_version TEXT NOT NULL, recipient TEXT NOT NULL, preview_hash TEXT NOT NULL,
           body TEXT NOT NULL, approval_status TEXT NOT NULL DEFAULT 'PENDING', approved_by TEXT, approved_at TEXT,
           subject TEXT NOT NULL DEFAULT '', analysis_id TEXT, invitation_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS confirmation_emails (
+          confirmation_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, invitation_id TEXT NOT NULL,
+          submission_id TEXT NOT NULL, draft_id TEXT NOT NULL UNIQUE,
+          official_company_email TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'DRAFT',
+          confirmation_policy TEXT NOT NULL DEFAULT 'AFFIRMATIVE_REPLY_REQUIRED',
+          provider_message_id TEXT, created_at TEXT NOT NULL, sent_at TEXT,
+          confirmed_at TEXT, confirmation_evidence_ref TEXT, review_status TEXT NOT NULL DEFAULT 'PENDING',
+          UNIQUE(profile_id, submission_id)
+        );
+        CREATE TABLE IF NOT EXISTS research_reports (
+          report_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, source_profile_version TEXT NOT NULL,
+          property_id INTEGER NOT NULL, result_record_id TEXT NOT NULL UNIQUE,
+          report_path TEXT, status TEXT NOT NULL DEFAULT 'PREVIEW_ONLY',
+          delivery_status TEXT NOT NULL DEFAULT 'NOT_SENT',
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(profile_id, source_profile_version)
         );
         CREATE TABLE IF NOT EXISTS email_events (
           event_id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, event_type TEXT NOT NULL,
@@ -175,6 +211,8 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
             "representative_full_name": "TEXT",
             "representative_job_title": "TEXT",
             "identity_review_status": "TEXT NOT NULL DEFAULT 'PENDING'",
+            "invitation_recipient_email": "TEXT",
+            "representative_email": "TEXT",
         }
         for name, definition in submission_additions.items():
             if name not in columns:
@@ -227,6 +265,29 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
         for name, definition in {"subject": "TEXT NOT NULL DEFAULT ''", "analysis_id": "TEXT", "invitation_id": "TEXT"}.items():
             if name not in draft_columns:
                 db.execute(f"ALTER TABLE email_drafts ADD COLUMN {name} {definition}")
+        reply_columns = {row[1] for row in db.execute("PRAGMA table_info(replies)")}
+        for name, definition in {
+            "recipient": "TEXT NOT NULL DEFAULT ''",
+            "subject": "TEXT NOT NULL DEFAULT ''",
+            "message_id": "TEXT",
+            "in_reply_to": "TEXT",
+            "references_header": "TEXT",
+            "sent_at": "TEXT",
+            "raw_content": "TEXT NOT NULL DEFAULT ''",
+            "invitation_reference": "TEXT",
+            "correlation_status": "TEXT NOT NULL DEFAULT 'MANUAL_REVIEW'",
+        }.items():
+            if name not in reply_columns:
+                db.execute(f"ALTER TABLE replies ADD COLUMN {name} {definition}")
+        confirmation_columns = {row[1] for row in db.execute("PRAGMA table_info(confirmation_emails)")}
+        for name, definition in {
+            "confirmation_policy": "TEXT NOT NULL DEFAULT 'AFFIRMATIVE_REPLY_REQUIRED'",
+            "confirmed_at": "TEXT",
+            "confirmation_evidence_ref": "TEXT",
+            "review_status": "TEXT NOT NULL DEFAULT 'PENDING'",
+        }.items():
+            if name not in confirmation_columns:
+                db.execute(f"ALTER TABLE confirmation_emails ADD COLUMN {name} {definition}")
         record_columns = {row[1] for row in db.execute("PRAGMA table_info(research_records)")}
         if "geo_integration_status" not in record_columns:
             db.execute("ALTER TABLE research_records ADD COLUMN geo_integration_status TEXT NOT NULL DEFAULT 'NOT_STARTED'")
@@ -380,20 +441,24 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
             outcome = "NEEDS_REVIEW"
             review = "NEEDS_REVIEW"
         identity_review = "MATCHED_INVITATION_EMAIL" if invitation_email_matches else "REPRESENTATIVE_EMAIL_DIFFERS_FROM_INVITATION"
+        invitation_recipient_email = next(iter(sorted(allowed_emails)), "")
         submission_id = "submission-" + _hash(invitation["invitation_id"] + response_hash)[:20]
         db.execute("""INSERT INTO questionnaire_submissions
           (submission_id,invitation_id,response_hash,respondent_name,respondent_role,contact_email,consent_status,
            company_identity_confirmed,website_analysis_allowed,recommendations_requested,ongoing_measurement_allowed,
            site_modification_authorized,future_contact_permission,consent_wording_version,submitted_at,review_status,response_source,invitation_reference,
-           research_interest,research_authorization,representative_full_name,representative_job_title,identity_review_status)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, 0, 0, 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, identity_review))
+           research_interest,research_authorization,representative_full_name,representative_job_title,identity_review_status,
+           invitation_recipient_email,representative_email)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, 0, 0, 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, identity_review, invitation_recipient_email, parsed.contact_email))
         if conflicting:
             conflict_id = "conflict-" + _hash(invitation["invitation_id"] + response_hash)[:20]
             db.execute("""INSERT INTO questionnaire_conflicts
               (conflict_id,invitation_id,profile_id,first_submission_id,conflicting_submission_id,reason,status,created_at)
               VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (conflict_id) DO NOTHING""", (conflict_id, invitation["invitation_id"], invitation["profile_id"], prior_submission["submission_id"], submission_id, "multiple distinct responses for one invitation", "QUARANTINED", now()))
         db.execute("UPDATE questionnaire_invitations SET status='RESPONDED' WHERE invitation_id=?", (invitation["invitation_id"],))
-        db.execute("UPDATE research_records SET questionnaire_status='RESPONDED',consent_status=?,recruitment_status=?,geo_research_status='PENDING_REVIEW',geo_integration_status=CASE WHEN ? THEN 'BLOCKED_CONFLICT' ELSE geo_integration_status END,updated_at=? WHERE profile_id=?", (outcome, "DECLINED" if outcome == "DECLINED" else "RESPONDED", int(conflicting), now(), invitation["profile_id"]))
+        # PostgreSQL requires a boolean for CASE WHEN; SQLite accepts either
+        # representation, so keep the semantic value intact across backends.
+        db.execute("UPDATE research_records SET questionnaire_status='RESPONDED',consent_status=?,recruitment_status=?,geo_research_status='PENDING_REVIEW',geo_integration_status=CASE WHEN ? THEN 'BLOCKED_CONFLICT' ELSE geo_integration_status END,updated_at=? WHERE profile_id=?", (outcome, "DECLINED" if outcome == "DECLINED" else "RESPONDED", bool(conflicting), now(), invitation["profile_id"]))
     return outcome if outcome in {"DECLINED", "INTERESTED_NOT_AUTHORIZED"} else "NEEDS_REVIEW"
 
 
@@ -473,6 +538,84 @@ def ingest_reply(*, profile_id: str, thread_id: str, message_id: str, sender: st
     return reply_id
 
 
+def ingest_eml_reply(eml_path: Path, *, path: Path = REGISTRY_DB) -> dict[str, Any]:
+    """Import one exported Outlook message as review evidence.
+
+    The file is parsed locally and retained verbatim in the registry. Header
+    values are evidence, not proof of mailbox authenticity; imported messages
+    therefore remain ``NEEDS_REVIEW`` until an operator verifies the sender.
+    Correlation uses an invitation reference when present, otherwise a unique
+    invitation recipient match. Ambiguous or missing correlation is retained
+    with ``AMBIGUOUS``/``UNMATCHED`` status and never changes consent.
+    """
+    raw_bytes = Path(eml_path).read_bytes()
+    message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+    sender = str(message.get("From") or "")
+    sender_address = parseaddr(sender)[1].casefold()
+    recipients = ", ".join(str(value) for value in message.get_all("To", []) + message.get_all("Cc", []))
+    subject = str(message.get("Subject") or "")
+    message_id = str(message.get("Message-ID") or "").strip() or "eml-" + _hash(raw_bytes.decode("utf-8", errors="replace"))[:24]
+    in_reply_to = str(message.get("In-Reply-To") or "").strip()
+    references_header = " ".join(str(value) for value in message.get_all("References", []))
+    sent_at = str(message.get("Date") or "").strip()
+    if message.is_multipart():
+        parts = [part for part in message.walk() if part.get_content_type() == "text/plain" and not part.get_filename()]
+        text = "\n\n".join(str(part.get_content()) for part in parts)
+    else:
+        text = str(message.get_content())
+    invitation_references = set(re.findall(r"GEO-[A-Z0-9]{16}", " ".join((subject, text, references_header))))
+
+    init_registry(path)
+    with _connect(path) as db:
+        candidates: list[tuple[str, str]] = []
+        for reference in sorted(invitation_references):
+            row = db.execute("SELECT invitation_id,profile_id FROM questionnaire_invitations WHERE invitation_reference=?", (reference,)).fetchone()
+            if row:
+                candidates.append((row["invitation_id"], row["profile_id"]))
+        if not candidates and sender_address:
+            rows = db.execute(
+                "SELECT DISTINCT i.invitation_id,i.profile_id FROM questionnaire_invitations i JOIN email_drafts d ON d.invitation_id=i.invitation_id WHERE lower(d.recipient)=?",
+                (sender_address,),
+            ).fetchall()
+            candidates = [(row["invitation_id"], row["profile_id"]) for row in rows]
+        if len(candidates) == 1:
+            invitation_id, profile_id = candidates[0]
+            correlation_status = "CORRELATED_BY_REFERENCE" if invitation_references else "CORRELATED_BY_UNIQUE_RECIPIENT"
+        elif len(candidates) > 1:
+            invitation_id = profile_id = ""
+            correlation_status = "AMBIGUOUS"
+        else:
+            invitation_id = profile_id = ""
+            correlation_status = "UNMATCHED"
+        reply_id = "reply-" + _hash(message_id)[:16]
+        classification = classify_reply(text)
+        existing = db.execute("SELECT reply_id FROM replies WHERE reply_id=?", (reply_id,)).fetchone()
+        if not existing:
+            db.execute(
+                """INSERT INTO replies
+                (reply_id,profile_id,thread_id,sender,classification,classification_source,review_status,original_reference,created_at,
+                 recipient,subject,message_id,in_reply_to,references_header,sent_at,raw_content,invitation_reference,correlation_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (reply_id, profile_id, in_reply_to or message_id, sender, classification, "RULE_ADVISORY", "NEEDS_REVIEW", message_id, now(), recipients, subject, message_id, in_reply_to, references_header, sent_at, raw_bytes.decode("utf-8", errors="replace"), next(iter(invitation_references), ""), correlation_status),
+            )
+        return {
+            "reply_id": reply_id,
+            "profile_id": profile_id or None,
+            "invitation_id": invitation_id or None,
+            "message_id": message_id,
+            "in_reply_to": in_reply_to,
+            "references": references_header,
+            "sender": sender,
+            "recipient": recipients,
+            "subject": subject,
+            "sent_at": sent_at,
+            "classification": classification,
+            "correlation_status": correlation_status,
+            "review_status": "NEEDS_REVIEW",
+            "consent_changed": False,
+        }
+
+
 def create_geo_handoff(profile_id: str, submission_id: str, *, scope: dict[str, Any], path: Path = REGISTRY_DB) -> str:
     init_registry(path)
     with _connect(path) as db:
@@ -535,6 +678,64 @@ def create_email_draft(profile_id: str, recipient: str, body: str, *, path: Path
             raise PermissionError("email draft requires VERIFIED_US geographic eligibility")
         db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)", (draft_id, profile_id, draft_version, template_version, recipient, _hash(body), body, "PENDING", None, None))
     return draft_id
+
+
+def create_post_form_confirmation_draft(submission_id: str, *, path: Path = REGISTRY_DB) -> dict[str, Any]:
+    """Prepare, but never send, the formal post-form confirmation email.
+
+    The destination must be an explicitly verified official company channel in
+    the existing registry. Representative and invitation addresses are never
+    substituted. Explicit authorization ``NO`` and quarantined submissions are
+    hard blockers.
+    """
+    init_registry(path)
+    confirmation_policy = configured_confirmation_policy()
+    with _connect(path) as db:
+        submission = db.execute("SELECT * FROM questionnaire_submissions WHERE submission_id=?", (submission_id,)).fetchone()
+        if not submission:
+            raise ValueError("submission is not registered")
+        invitation = db.execute("SELECT * FROM questionnaire_invitations WHERE invitation_id=?", (submission["invitation_id"],)).fetchone()
+        record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone() if invitation else None
+        if not invitation or not record:
+            raise ValueError("submission is not linked to a registered profile")
+        if submission["research_authorization"] != "YES":
+            return {"status": "BLOCKED_EXPLICIT_AUTHORIZATION_NO", "submission_id": submission_id}
+        if db.execute("SELECT 1 FROM questionnaire_conflicts WHERE invitation_id=? AND status='QUARANTINED'", (invitation["invitation_id"],)).fetchone():
+            return {"status": "BLOCKED_CONFLICT", "submission_id": submission_id}
+        if record["contact_verification_status"] != "CONTACT_VERIFIED":
+            return {"status": "BLOCKED_NO_VERIFIED_OFFICIAL_EMAIL", "submission_id": submission_id}
+        channels = json.loads(record["contact_channels_json"] or "[]")
+        verified = [item for item in channels if item.get("email") and item.get("channel_type") in {"GENERAL_BUSINESS_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL", "PARTNERSHIP_EMAIL", "SALES_MARKETING_EMAIL", "NAMED_PERSON_EMAIL"} and str(item.get("review_status", "")).upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"}]
+        emails = sorted({str(item["email"]).strip().casefold() for item in verified if EMAIL_RE.match(str(item["email"]).strip())})
+        if len(emails) != 1:
+            return {"status": "BLOCKED_OFFICIAL_EMAIL_AMBIGUOUS" if len(emails) > 1 else "BLOCKED_NO_VERIFIED_OFFICIAL_EMAIL", "submission_id": submission_id}
+        official_email = emails[0]
+        existing = db.execute("SELECT confirmation_id,draft_id,status,official_company_email FROM confirmation_emails WHERE submission_id=?", (submission_id,)).fetchone()
+        if existing:
+            return {"status": "EXISTING", "confirmation_id": existing["confirmation_id"], "draft_id": existing["draft_id"], "official_company_email": existing["official_company_email"]}
+        invitation_recipient = submission["invitation_recipient_email"] or ""
+        representative_email = submission["representative_email"] or submission["contact_email"] or ""
+        subject = f"Formal GEO research authorization confirmation - {record['name']}"
+        if confirmation_policy == "AFFIRMATIVE_REPLY_REQUIRED":
+            confirmation_instruction = (
+                "Please confirm or dispute this authorization by replying to this email and identify invitation reference "
+            )
+        else:
+            confirmation_instruction = (
+                "This is a notice of the recorded authorization. If this is inaccurate, please dispute it by replying and identify invitation reference "
+            )
+        body = (
+            f"Hello,\n\nThis is a formal confirmation {'request' if confirmation_policy == 'AFFIRMATIVE_REPLY_REQUIRED' else 'notice'} regarding {record['name']} and the public website GEO research invitation.\n\n"
+            f"The submitted form identified {submission['representative_full_name'] or submission['respondent_name']} as the representative, with role {submission['representative_job_title'] or submission['respondent_role']}, and recorded representative email {representative_email}.\n\n"
+            "The proposed scope is read-only analysis of the company's public website for GEO research. No website changes, publication, experiments, or monitoring will occur without separate approval.\n\n"
+            + confirmation_instruction
+            + f"{invitation['invitation_reference']}. This message is not proof of authorization, and no research will begin without explicit review.\n"
+        )
+        draft_id = "draft-confirmation-" + _hash(submission_id + official_email)[:20]
+        confirmation_id = "confirmation-" + _hash(submission_id + official_email)[:20]
+        db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,invitation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (draft_id, record["profile_id"], "confirmation-draft-v1", "post-form-confirmation-v1", official_email, _hash(subject + "\n" + body), body, "PENDING", None, None, subject, invitation["invitation_id"]))
+        db.execute("INSERT INTO confirmation_emails(confirmation_id,profile_id,invitation_id,submission_id,draft_id,official_company_email,status,confirmation_policy,created_at) VALUES (?,?,?,?,?,?,?,?,?)", (confirmation_id, record["profile_id"], invitation["invitation_id"], submission_id, draft_id, official_email, "DRAFT", confirmation_policy, now()))
+        return {"status": "DRAFT", "confirmation_id": confirmation_id, "draft_id": draft_id, "official_company_email": official_email, "invitation_recipient_email": invitation_recipient, "representative_email": representative_email, "confirmation_policy": confirmation_policy, "subject": subject, "body": body}
 
 
 def persist_combined_screening_and_draft(profile_id: str, *, result: dict[str, Any], recipient: str, secret: str, path: Path = REGISTRY_DB, base_url: str | None = None, expires_at: str | None = None) -> dict[str, str]:

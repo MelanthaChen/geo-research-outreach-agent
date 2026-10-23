@@ -49,6 +49,20 @@ class HttpGeoEngineBridge:
             raise RuntimeError("GEO Engine handoff response omitted property_id")
         return payload
 
+    def get_research_result(self, source_profile_id: str, source_profile_version: str | None = None) -> dict[str, Any]:
+        import httpx
+
+        params = {"source_profile_version": source_profile_version} if source_profile_version else {}
+        response = httpx.get(
+            self.api_url.rstrip("/") + f"/api/v1/integration/research-results/{source_profile_id}",
+            params=params,
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"GEO Engine result retrieval failed ({response.status_code})")
+        return response.json()
+
 
 @dataclass
 class LocalGeoEngineBridge:
@@ -185,10 +199,12 @@ def review_questionnaire_submission(submission_id: str, *, reviewer: str, compan
         record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone() if invitation else None
         if not invitation or not record:
             raise ValueError("submission is not linked to a registered profile")
-        allowed = {str(r[0]).casefold() for r in db.execute("SELECT recipient FROM email_drafts WHERE invitation_id=?", (invitation["invitation_id"],))}
-        email_match = bool(submission["contact_email"] and submission["contact_email"].casefold() in allowed)
         conflict = db.execute("SELECT 1 FROM questionnaire_conflicts WHERE invitation_id=? AND status='QUARANTINED'", (invitation["invitation_id"],)).fetchone()
-        checks = all((company_identity_verified, representative_authorized, consent_version_verified, website_scope_verified, withdrawal_checked, email_match))
+        # The form's representative email identifies the accountable respondent;
+        # it is not required to equal the original invitation recipient. The
+        # reviewer verifies representative authorization independently. A
+        # separate distinct submission for the invitation remains quarantined.
+        checks = all((company_identity_verified, representative_authorized, consent_version_verified, website_scope_verified, withdrawal_checked))
         decision = "APPROVED" if approve and not conflict and checks and submission["research_interest"] == "YES" and submission["research_authorization"] == "YES" else "REJECTED" if not approve else "BLOCKED"
         review_id = "review-" + _hash(submission_id + reviewer + decision)[:20]
         db.execute("INSERT OR REPLACE INTO consent_reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (review_id, submission_id, record["profile_id"], decision, reviewer, int(company_identity_verified), int(representative_authorized), int(consent_version_verified), int(website_scope_verified), int(withdrawal_checked), notes, now()))

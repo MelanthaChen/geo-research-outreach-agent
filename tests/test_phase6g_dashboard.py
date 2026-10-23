@@ -1,9 +1,36 @@
 import json
 import threading
 import urllib.request
+import sqlite3
 from http.server import ThreadingHTTPServer
 
 from outreach_agent import dashboard
+
+
+def test_post_form_confirmation_api_uses_isolated_fixture_and_stays_draft(tmp_path, monkeypatch):
+    from outreach_agent.research_lifecycle import create_email_draft, create_post_form_confirmation_draft, create_questionnaire_invitation, get_invitation_reference, ingest_google_form_response, register_profile
+    path = tmp_path / "registry.db"
+    profile = {"schema_version":"geo-company-profile/v1","profile_id":"fixture-company","profile_type":"startup_company","identity":{"name":"Fixture Company","website":"https://fixture.test","verification_status":"VERIFIED"},"startup":{"location":"Boston, MA"},"qualification":{"eligibility":"ELIGIBLE"}}
+    register_profile(profile, path)
+    invitation_id, _ = create_questionnaire_invitation("fixture-company", secret="secret", path=path)
+    reference = get_invitation_reference(invitation_id, path=path)
+    draft = create_email_draft("fixture-company", "invitation@test.example", "Invitation", path=path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft))
+        conn.execute("UPDATE research_records SET contact_verification_status='CONTACT_VERIFIED',contact_channels_json=? WHERE profile_id='fixture-company'", ('[{"channel_type":"GENERAL_BUSINESS_EMAIL","email":"official@test.example","review_status":"APPROVED"}]',))
+    ingest_google_form_response({"Invitation Reference":reference,"Is your company interested in participating in this research?":"Yes","Does your company authorize our research team to conduct the research described above?":"Yes","Full Name of the Authorized Company Representative":"Rep","Job Title of the Authorized Company Representative":"CEO","Business Email Address of the Authorized Company Representative":"representative@test.example"}, path=path)
+    submission_id = sqlite3.connect(path).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
+    monkeypatch.setenv("OUTREACH_DASHBOARD_TOKEN", "operator-token")
+    monkeypatch.setattr(dashboard, "REGISTRY_DB", path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dashboard.make_handler({"summary": {}, "details": {}}))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/api/recruitment/post-form-confirmation", data=json.dumps({"submission_id":submission_id}).encode(), headers={"Content-Type":"application/json","Authorization":"Bearer operator-token"}, method="POST")
+        response = json.load(urllib.request.urlopen(request))
+        assert response["status"] == "DRAFT"
+        assert response["official_company_email"] == "official@test.example"
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
 
 
 def test_public_dashboard_queue_is_read_only_and_redacted(monkeypatch):

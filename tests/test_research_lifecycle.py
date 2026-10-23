@@ -6,10 +6,13 @@ from outreach_agent.research_lifecycle import (
     CONSENT_VERSION,
     approve_email,
     classify_reply,
+    ingest_eml_reply,
     create_email_draft,
     create_geo_handoff,
     create_questionnaire_invitation,
+    create_post_form_confirmation_draft,
     init_registry,
+    ingest_google_form_response,
     ingest_candidate_stores,
     list_records,
     record_simulated_send,
@@ -92,6 +95,149 @@ def test_reply_classification_is_advisory_and_email_requires_approval(tmp_path):
     assert classify_reply("I am interested, but what does this involve?") == "QUESTION"
     assert classify_reply("Please unsubscribe") == "UNSUBSCRIBE"
     assert classify_reply("I consent to the research") == "EXPLICIT_CONSENT"
+
+
+def test_outlook_eml_reply_preserves_headers_and_does_not_grant_consent(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    invitation_id, _ = create_questionnaire_invitation("company-1", secret="secret", path=db)
+    from outreach_agent.research_lifecycle import get_invitation_reference
+    reference = get_invitation_reference(invitation_id, path=db)
+    draft_id = create_email_draft("company-1", "invitee@example.test", "Invitation", path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft_id))
+    eml = tmp_path / "reply.eml"
+    eml.write_text(
+        f"From: Representative <rep@example.test>\nTo: chen.yuxuan9@northeastern.edu\n"
+        f"Subject: Re: GEO invitation {reference}\nDate: Thu, 23 Oct 2026 10:00:00 -0400\n"
+        "Message-ID: <reply-123@example.test>\nIn-Reply-To: <invite-123@example.test>\n"
+        "References: <invite-123@example.test>\nContent-Type: text/plain; charset=utf-8\n\n"
+        "I am interested and would like to understand the study.\n",
+        encoding="utf-8",
+    )
+    result = ingest_eml_reply(eml, path=db)
+    assert result["correlation_status"] == "CORRELATED_BY_REFERENCE"
+    assert result["message_id"] == "<reply-123@example.test>"
+    assert result["in_reply_to"] == "<invite-123@example.test>"
+    assert result["review_status"] == "NEEDS_REVIEW"
+    assert result["consent_changed"] is False
+    with sqlite3.connect(db) as conn:
+        reply = conn.execute("SELECT sender,recipient,subject,message_id,raw_content,correlation_status FROM replies").fetchone()
+        assert reply[0].startswith("Representative")
+        assert reply[1] == "chen.yuxuan9@northeastern.edu"
+        assert reply[3] == "<reply-123@example.test>"
+        assert "I am interested" in reply[4]
+        assert conn.execute("SELECT consent_status FROM research_records").fetchone()[0] == "NOT_ASKED"
+
+
+def test_outlook_eml_reply_with_no_unique_match_requires_review(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    eml = tmp_path / "unmatched.eml"
+    eml.write_text(
+        "From: Unknown <unknown@example.test>\nTo: team@example.test\nSubject: Re: GEO\n"
+        "Message-ID: <unknown@example.test>\nContent-Type: text/plain\n\nPlease tell me more.\n",
+        encoding="utf-8",
+    )
+    result = ingest_eml_reply(eml, path=db)
+    assert result["correlation_status"] == "UNMATCHED"
+    assert result["profile_id"] is None
+    assert result["consent_changed"] is False
+
+
+def test_post_form_confirmation_uses_verified_official_email_not_other_roles(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    invitation_id, _ = create_questionnaire_invitation("company-1", secret="secret", path=db)
+    from outreach_agent.research_lifecycle import get_invitation_reference
+    reference = get_invitation_reference(invitation_id, path=db)
+    invitation_draft = create_email_draft("company-1", "invitation@example.test", "Invitation", path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, invitation_draft))
+        conn.execute("UPDATE research_records SET contact_verification_status='CONTACT_VERIFIED',contact_channels_json=? WHERE profile_id='company-1'", ('[{"channel_type":"GENERAL_BUSINESS_EMAIL","email":"official@example.test","review_status":"APPROVED","source_url":"https://example.test/contact"}]',))
+    row = {
+        "Timestamp": "2026-10-23T12:00:00Z", "Invitation Reference": reference,
+        "Is your company interested in participating in this research?": "Yes",
+        "Does your company authorize our research team to conduct the research described above?": "Yes",
+        "Full Name of the Authorized Company Representative": "Representative Name",
+        "Job Title of the Authorized Company Representative": "CEO",
+        "Business Email Address of the Authorized Company Representative": "representative@example.test",
+    }
+    assert ingest_google_form_response(row, path=db) == "NEEDS_REVIEW"
+    submission_id = sqlite3.connect(db).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
+    result = create_post_form_confirmation_draft(submission_id, path=db)
+    assert result["status"] == "DRAFT"
+    assert result["official_company_email"] == "official@example.test"
+    assert result["invitation_recipient_email"] == "invitation@example.test"
+    assert result["representative_email"] == "representative@example.test"
+    assert result["confirmation_policy"] == "AFFIRMATIVE_REPLY_REQUIRED"
+    assert "official@example.test" in result["official_company_email"]
+    with sqlite3.connect(db) as conn:
+        draft = conn.execute("SELECT recipient,template_version,approval_status FROM email_drafts WHERE draft_id=?", (result["draft_id"],)).fetchone()
+        assert draft == ("official@example.test", "post-form-confirmation-v1", "PENDING")
+        assert conn.execute("SELECT confirmation_policy,status,review_status FROM confirmation_emails WHERE confirmation_id=?", (result["confirmation_id"],)).fetchone() == ("AFFIRMATIVE_REPLY_REQUIRED", "DRAFT", "PENDING")
+
+
+def test_confirmation_policy_is_explicit_and_notice_only_is_not_inferred(tmp_path, monkeypatch):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    invitation_id, _ = create_questionnaire_invitation("company-1", secret="secret", path=db)
+    from outreach_agent.research_lifecycle import get_invitation_reference
+    reference = get_invitation_reference(invitation_id, path=db)
+    invitation_draft = create_email_draft("company-1", "invitation@example.test", "Invitation", path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, invitation_draft))
+        conn.execute("UPDATE research_records SET contact_verification_status='CONTACT_VERIFIED',contact_channels_json=? WHERE profile_id='company-1'", ('[{"channel_type":"GENERAL_BUSINESS_EMAIL","email":"official@example.test","review_status":"VERIFIED"}]',))
+    row = {
+        "Invitation Reference": reference,
+        "Is your company interested in participating in this research?": "Yes",
+        "Does your company authorize our research team to conduct the research described above?": "Yes",
+        "Full Name of the Authorized Company Representative": "Representative",
+        "Job Title of the Authorized Company Representative": "CEO",
+        "Business Email Address of the Authorized Company Representative": "representative@example.test",
+    }
+    assert ingest_google_form_response(row, path=db) == "NEEDS_REVIEW"
+    submission_id = sqlite3.connect(db).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
+    monkeypatch.setenv("OUTREACH_CONFIRMATION_POLICY", "NOTICE_ONLY")
+    result = create_post_form_confirmation_draft(submission_id, path=db)
+    assert result["confirmation_policy"] == "NOTICE_ONLY"
+    assert "formal confirmation notice" in result["body"]
+    assert "not proof of authorization" in result["body"]
+
+
+def test_invalid_confirmation_policy_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTREACH_CONFIRMATION_POLICY", "AUTO_APPROVE")
+    with pytest.raises(ValueError, match="OUTREACH_CONFIRMATION_POLICY"):
+        from outreach_agent.research_lifecycle import configured_confirmation_policy
+        configured_confirmation_policy()
+
+
+def test_post_form_confirmation_blocks_explicit_no_and_unverified_email(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    invitation_id, _ = create_questionnaire_invitation("company-1", secret="secret", path=db)
+    from outreach_agent.research_lifecycle import get_invitation_reference
+    reference = get_invitation_reference(invitation_id, path=db)
+    draft = create_email_draft("company-1", "invitation@example.test", "Invitation", path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft))
+    row = {"Invitation Reference": reference, "Is your company interested in participating in this research?": "Yes", "Does your company authorize our research team to conduct the research described above?": "No", "Full Name of the Authorized Company Representative": "Representative", "Job Title of the Authorized Company Representative": "CEO", "Business Email Address of the Authorized Company Representative": "representative@example.test"}
+    assert ingest_google_form_response(row, path=db) == "INTERESTED_NOT_AUTHORIZED"
+    submission_id = sqlite3.connect(db).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
+    assert create_post_form_confirmation_draft(submission_id, path=db)["status"] == "BLOCKED_EXPLICIT_AUTHORIZATION_NO"
+
+
+def test_confirmation_schema_migration_is_additive_and_preserves_existing_record(tmp_path):
+    db = tmp_path / "registry.db"
+    register_profile(profile(), db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE research_records SET name='Existing durable record' WHERE profile_id='company-1'")
+    init_registry(db)
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT name FROM research_records WHERE profile_id='company-1'").fetchone()[0] == "Existing durable record"
+        submission_columns = {row[1] for row in conn.execute("PRAGMA table_info(questionnaire_submissions)")}
+        assert {"invitation_recipient_email", "representative_email"} <= submission_columns
+        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='confirmation_emails'").fetchone() is not None
 
 
 def test_delivery_preview_suppression_and_expiry_guards(tmp_path):

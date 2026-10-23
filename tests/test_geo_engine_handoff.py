@@ -75,3 +75,39 @@ def test_review_never_approves_without_all_checks(tmp_path):
     assert result["status"] == "BLOCKED"
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT consent_status FROM research_records").fetchone()[0] == "NEEDS_REVIEW"
+
+
+def test_representative_email_can_differ_from_invitation_recipient_when_reviewed(tmp_path):
+    path = tmp_path / "registry.db"
+    register_profile(owner_profile(), path)
+    invitation_id, _ = create_questionnaire_invitation("geoairesume-owner-test-v1", secret="secret", path=path)
+    reference = get_invitation_reference(invitation_id, path=path)
+    draft_id = create_email_draft("geoairesume-owner-test-v1", "invited@example.test", "test invitation", path=path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft_id))
+    row = {
+        "Timestamp": "2026-10-22T18:00:00Z",
+        "Invitation Reference": reference,
+        "Is your company interested in participating in this research?": "Yes",
+        "Does your company authorize our research team to conduct the research described above?": "Yes",
+        "Full Name of the Authorized Company Representative": "Authorized Representative",
+        "Job Title of the Authorized Company Representative": "Founder",
+        "Business Email Address of the Authorized Company Representative": "representative@example.test",
+    }
+    assert ingest_google_form_response(row, path=path) == "NEEDS_REVIEW"
+    submission_id = sqlite3.connect(path).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
+    result = review_questionnaire_submission(
+        submission_id,
+        reviewer="owner-reviewer",
+        company_identity_verified=True,
+        representative_authorized=True,
+        consent_version_verified=True,
+        website_scope_verified=True,
+        withdrawal_checked=True,
+        approve=True,
+        path=path,
+        bridge=FakeBridge(),
+    )
+    assert result["status"] == "HANDED_OFF"
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT identity_review_status FROM questionnaire_submissions").fetchone()[0] == "VERIFIED"

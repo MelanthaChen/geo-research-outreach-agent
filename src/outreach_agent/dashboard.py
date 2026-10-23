@@ -40,7 +40,7 @@ from outreach_agent.phase6h import PHASE6H_DB, dashboard_summary as phase6h_summ
 from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
 from outreach_agent.research_lifecycle import (
     REGISTRY_DB, approve_email_batch, create_questionnaire_invitation, get_invitation_reference, create_geo_handoff, export_records_csv,
-    get_record, ingest_reply, list_records, personalized_recruitment_draft,
+    get_record, ingest_reply, list_records, personalized_recruitment_draft, create_post_form_confirmation_draft,
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
 from outreach_agent.geo_engine_handoff import review_questionnaire_submission
@@ -49,6 +49,7 @@ from outreach_agent.combined_screening import run_combined_analysis
 from outreach_agent.research_lifecycle import edit_email_draft
 from outreach_agent.google_forms_integration import prefilled_form_url, sync_sheet_rows
 from outreach_agent.lean_registry import review_contact
+from outreach_agent.hotel_prospect_job import pause as pause_hotel_discovery, resume as resume_hotel_discovery, status as hotel_discovery_status
 
 STATIC_ROOT = Path(__file__).with_name("dashboard")
 
@@ -319,8 +320,18 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 # fail during the dashboard bootstrap request.
                 if not summary.get("cloud_registry"):
                     summary["phase6h"] = phase6h_summary()
+                try:
+                    summary["hotel_discovery"] = hotel_discovery_status(REGISTRY_DB)
+                except Exception as exc:
+                    summary["hotel_discovery"] = {"status": "ERROR", "error": f"{type(exc).__name__}: {exc}"}
                 self._json({"summary": summary, "filters": data["filters"], "simulated_signup_url": data["simulated_signup_url"],
                             "participation_form_configuration": data["participation_form_configuration"]})
+                return
+            if parsed.path == "/api/hotel-discovery/status":
+                try:
+                    self._json(hotel_discovery_status(REGISTRY_DB))
+                except Exception as exc:
+                    self._json({"error": f"hotel discovery status unavailable: {exc}"}, 503)
                 return
             if parsed.path == "/api/candidates":
                 params = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
@@ -578,6 +589,10 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     reply_id = ingest_reply(profile_id=str(body["profile_id"]), thread_id=str(body["thread_id"]), message_id=str(body["message_id"]), sender=str(body["sender"]), text=str(body.get("text") or ""), verified_sender=bool(body.get("verified_sender")), path=REGISTRY_DB)
                     self._json({"reply_id": reply_id, "status": "RECORDED_FOR_REVIEW"}, 202)
                     return
+                if parsed.path == "/api/recruitment/post-form-confirmation":
+                    result = create_post_form_confirmation_draft(str(body["submission_id"]), path=REGISTRY_DB)
+                    self._json(result, 201 if result.get("status") == "DRAFT" else 200)
+                    return
                 if parsed.path == "/api/research/withdraw":
                     withdraw_consent(str(body["profile_id"]), reason=str(body.get("reason") or "withdrawn by participant"), path=REGISTRY_DB)
                     self._json({"status": "WITHDRAWN"})
@@ -616,6 +631,16 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         path=REGISTRY_DB,
                     )
                     self._json({"handoff_id": handoff_id, "status": "READY"}, 201)
+                    return
+                if parsed.path in {"/api/hotel-discovery/pause", "/api/hotel-discovery/resume"}:
+                    if not self._review_auth_ok():
+                        self._json({"error": "Hotel discovery controls require trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        return
+                    if parsed.path.endswith("/pause"):
+                        result = pause_hotel_discovery(REGISTRY_DB, reason=str(body.get("reason") or "operator_pause"))
+                    else:
+                        result = resume_hotel_discovery(REGISTRY_DB)
+                    self._json(result)
                     return
                 if parsed.path == "/api/phase6g/review/channel":
                     phase6g_record_channel_decision(str(body.get("candidate_id") or ""), str(body.get("channel_key") or ""),

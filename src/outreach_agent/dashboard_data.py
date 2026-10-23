@@ -54,7 +54,33 @@ def cloud_dashboard_snapshot(registry: str | Path) -> dict[str, Any]:
 
     total = list_records(registry, limit=1, offset=0)["total"]
     return {
-        "summary": {"total_companies": total, "cloud_registry": True, "registry_mode": os.environ.get("OUTREACH_REGISTRY_MODE", "LEAN")},
+        "summary": {
+            "total_companies": total,
+            "cloud_registry": True,
+            "registry_mode": os.environ.get("OUTREACH_REGISTRY_MODE", "LEAN"),
+            # The cloud registry intentionally omits the legacy SQLite cohort
+            # summaries. Keep the renderer's established response shape stable
+            # with explicit empty/zero groups instead of making it interpret
+            # missing cloud data as an application failure.
+            "website_verification": {},
+            "eligibility": {},
+            "geo_opportunity": {},
+            "research_priority": {},
+            "contact_channel_coverage": {},
+            "contact_channel_classes": {},
+            "pending_human_reviews": {"companies": 0, "contact_channels": 0},
+            "outreach": {
+                "real_outreach_records": 0,
+                "real_sent_records": 0,
+                "simulated_delivery_events": 0,
+                "simulated_response_events": 0,
+                "simulated_handoff_events": 0,
+            },
+            "candidate_pool": {},
+            "phase6h": {},
+            "phase7_smb_target": {},
+            "hotel_candidate_pool": {},
+        },
         "companies": [],
         "details": {},
         "channel_presence": {},

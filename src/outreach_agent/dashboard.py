@@ -44,6 +44,7 @@ from outreach_agent.research_lifecycle import (
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
 from outreach_agent.geo_engine_handoff import review_questionnaire_submission
+from outreach_agent.geo_result_delivery import import_geo_result
 from outreach_agent.sender_accounts import add_account, disconnect, list_accounts, set_default
 from outreach_agent.combined_screening import run_combined_analysis
 from outreach_agent.research_lifecycle import edit_email_draft
@@ -198,6 +199,14 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return False
                 return hmac.compare_digest(decoded, f"{user}:{password}")
             return False
+
+        def _geo_service_auth_ok(self) -> bool:
+            expected = os.environ.get("GEO_ENGINE_HANDOFF_TOKEN", "")
+            supplied = self.headers.get("Authorization", "")
+            if supplied.lower().startswith("bearer "):
+                supplied = supplied[7:].strip()
+            supplied = supplied or self.headers.get("X-GEO-Engine-Handoff-Token", "")
+            return bool(expected) and hmac.compare_digest(supplied, expected)
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -521,8 +530,12 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.wfile.write(payload)
 
         def do_POST(self) -> None:  # noqa: N802
-            if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not self._dashboard_auth_ok():
+            internal_result_import = urlparse(self.path).path == "/api/integration/results"
+            if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not internal_result_import and not self._dashboard_auth_ok():
                 self._json({"error": "dashboard authentication required"}, 401)
+                return
+            if internal_result_import and not self._geo_service_auth_ok():
+                self._json({"error": "GEO Engine service authentication required"}, 401)
                 return
             try:
                 origin = self.headers.get("Origin")
@@ -552,6 +565,22 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         return
                     result = submit_questionnaire(token, secret=secret, response=response, path=REGISTRY_DB)
                     self._json({"submission_id": result, "status": "RECEIVED_FOR_REVIEW"}, 202)
+                    return
+                if parsed.path == "/api/integration/results":
+                    try:
+                        result = import_geo_result(
+                            body,
+                            path=REGISTRY_DB,
+                            report_directory=Path(os.environ.get("OUTREACH_REPORT_DIRECTORY", "reports")),
+                            template=Path(os.environ.get("OUTREACH_REPORT_TEMPLATE", "templates/company_geo_analysis_report_template.docx")),
+                        )
+                    except PermissionError as exc:
+                        self._json({"error": str(exc)}, 403)
+                        return
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        self._json({"error": str(exc)}, 409)
+                        return
+                    self._json(result, 200 if result.get("status") == "EXISTING" else 201)
                     return
                 if parsed.path == "/api/recruitment/draft":
                     draft_id = personalized_recruitment_draft(str(body["profile_id"]), recipient=str(body["recipient"]), questionnaire_url=str(body["questionnaire_url"]), path=REGISTRY_DB)

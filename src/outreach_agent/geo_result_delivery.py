@@ -71,8 +71,8 @@ def import_geo_result(
     imported = persist_geo_result_preview(result, path=path, report_directory=report_directory, template=template)
     with _connect(path) as db:
         db.execute(
-            "UPDATE research_records SET geo_research_status='REPORT_READY',updated_at=? WHERE profile_id=? AND geo_research_status NOT IN ('BLOCKED_WITHDRAWN','WITHDRAWN')",
-            (now(), result["source_profile_id"]),
+            "UPDATE research_records SET geo_property_id=COALESCE(geo_property_id,?), geo_research_status='REPORT_READY',updated_at=? WHERE profile_id=? AND geo_research_status NOT IN ('BLOCKED_WITHDRAWN','WITHDRAWN')",
+            (result["property_id"], now(), result["source_profile_id"]),
         )
     return imported
 

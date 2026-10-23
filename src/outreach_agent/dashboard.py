@@ -182,7 +182,9 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             self.wfile.write(body)
 
         def _review_auth_ok(self) -> bool:
-            """Allow loopback review by default; require a bearer token if configured."""
+            """Authorize review actions for the admin session or legacy trusted token."""
+            if self._browser_session():
+                return True
             expected = os.environ.get("OUTREACH_REVIEW_TOKEN", "")
             if not expected and self.server.server_address[0] in {"127.0.0.1", "localhost", "::1"}:
                 return True
@@ -757,7 +759,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return
                 if parsed.path == "/api/research/contact-review":
                     if not self._review_auth_ok():
-                        self._json({"error": "Contact review requires trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        self._json({"error": "Contact review requires an authenticated operator session or trusted review token"}, 401)
                         return
                     result = review_contact(
                         prospect_id=str(body["prospect_id"]), contact_id=str(body["contact_id"]),
@@ -768,7 +770,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return
                 if parsed.path == "/api/research/consent-review":
                     if not self._review_auth_ok():
-                        self._json({"error": "Consent review requires trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        self._json({"error": "Consent review requires an authenticated operator session or trusted review token"}, 401)
                         return
                     result = review_questionnaire_submission(
                         str(body["submission_id"]), reviewer=str(body.get("reviewer") or ""),
@@ -792,7 +794,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     return
                 if parsed.path in {"/api/hotel-discovery/pause", "/api/hotel-discovery/resume"}:
                     if not self._review_auth_ok():
-                        self._json({"error": "Hotel discovery controls require trusted loopback access or OUTREACH_REVIEW_TOKEN"}, 401)
+                        self._json({"error": "Hotel discovery controls require an authenticated operator session or trusted review token"}, 401)
                         return
                     if parsed.path.endswith("/pause"):
                         result = pause_hotel_discovery(REGISTRY_DB, reason=str(body.get("reason") or "operator_pause"))

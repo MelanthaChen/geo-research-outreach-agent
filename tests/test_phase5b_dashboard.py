@@ -239,12 +239,15 @@ def test_research_queue_record_click_has_protected_detail_path_and_auth_prompt()
     assert 'id="dashboard-login-form"' in html
     assert 'id="dashboard-email"' in html
     assert 'fetch("/api/auth/login"' in js
-    assert 'detail.style.position="fixed"' in js
-    assert 'detail.style.maxHeight="calc(100vh - 112px)"' in js
+    assert 'detail.classList.add("has-selection")' in js
+    assert 'consent-review-token' not in js
+    assert "Authenticated administrator session required" in js
     assert 'await api(`/api/research/records/${encodeURIComponent(profileId)}`)' in js
     assert 'fetch("/api/auth/session"' in js
     assert "sessionStorage" not in js
     assert ".auth-gate[hidden] { display: none; }" in (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")
+    assert "body.app-shell.auth-locked { display: block; }" in (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")
+    assert ".page-view#page-research-queue:not([hidden])" in (ROOT / "src/outreach_agent/dashboard/style.css").read_text(encoding="utf-8")
 
 
 def test_company_explorer_uses_compact_responsive_rows_without_a_wide_table():

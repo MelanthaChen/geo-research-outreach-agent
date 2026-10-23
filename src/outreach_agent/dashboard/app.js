@@ -1,4 +1,4 @@
-const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, reviewToken: "", authenticated: "" };
+const state = { filters: {}, lastFilterKey: "", companies: [], totalCompanies: 0, page: 1, pageSize: 50, candidatePage: 1, candidatePageSize: 25, candidateFilters: {}, phase6gPage:1, phase6gPageSize:20, phase6gFilters:{}, selectedId: null, selectedIds: new Set(), detail: null, summary: null, campaignDetails: {}, campaignSummaries: [], participationFormUrl: "", formConfiguration: {}, emailConfiguration: null, testEmailPreview: null, draft: null, delivered: false, responseRecorded: false, responsePage: 1, responsePageSize: 25, authenticated: "" };
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
 const compact = (value) => String(value || "UNKNOWN").replaceAll("_", " ");
@@ -46,7 +46,6 @@ async function api(path) {
 }
 async function apiWrite(path, payload) {
   const headers=authHeaders({"Accept":"application/json","Content-Type":"application/json"});
-  if(path==="/api/research/consent-review" || path.startsWith("/api/hotel-discovery/")) { if(state.reviewToken) headers.Authorization=`Bearer ${state.reviewToken}`; }
   const response = await fetch(path, {method:"POST", headers, body:JSON.stringify(payload), cache:"no-store"});
   const result = await response.json();
   if (response.status === 401) showAuthPrompt();
@@ -670,7 +669,7 @@ async function downloadResearchMailMergePackage(){
   if(!response.ok){let detail="Mail Merge package export failed";try{detail=(await response.json()).error||detail;}catch(_){ }throw new Error(detail);}
   const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded approved Word Mail Merge package (DOCX + XLSX + CSV).";
 }
-function reviewHeaders(){return `<label class="field-label">Review token (only required off localhost)<input id="consent-review-token" type="password" value="${esc(state.reviewToken)}" autocomplete="off"></label>`;}
+function reviewHeaders(){return `<p class="section-help review-auth-note">Authenticated administrator session required. Review actions are protected by the current session and CSRF validation.</p>`;}
 function renderConsentReview(row, profileId){
   const submissions=row.questionnaire_submissions||[], conflicts=row.questionnaire_conflicts||[], reviews=row.consent_reviews||[];
   const response=submissions[0];
@@ -682,11 +681,10 @@ function renderConsentReview(row, profileId){
   return `<div class="subsection consent-review-card"><div class="section-head"><div><p class="eyebrow">HUMAN CONSENT REVIEW</p><h3>Response and authorization review</h3></div></div>${reviewHeaders()}${responseHtml}${conflictHtml}<h4>Review history</h4><ul class="review-history">${history}</ul>${form}</div>`;
 }
 async function loadResearchDetail(profileId){const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);$("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Screening evidence</h4>${listItems((row.screenings||[]).map(item=>JSON.parse(item.evidence_json||"[]")),"No screening evidence recorded.")}</div><div class="subsection"><h4>Drafts</h4>${listItems((row.email_drafts||[]).map(item=>`${item.draft_id} · ${item.approval_status} · ${item.recipient}`),"No recruitment drafts.")}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
-  const tokenButton=$("research-detail").querySelector("#consent-review-token"); if(tokenButton) tokenButton.addEventListener("change",()=>{state.reviewToken=tokenButton.value;});
   $("research-detail").querySelectorAll("[data-consent-decision]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=$("research-detail").querySelector("#consent-reviewer").value.trim();if(!reviewer){showError(new Error("Reviewer name is required"));return;}const checks={};$("research-detail").querySelectorAll("[data-review-check]").forEach(input=>checks[input.dataset.reviewCheck]=input.checked);try{await researchAction("/api/research/consent-review",{profile_id:profileId,submission_id:(row.questionnaire_submissions||[])[0]?.submission_id,reviewer,approve:button.dataset.consentDecision==="approve",notes:$("research-detail").querySelector("#consent-review-notes").value,...checks});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
 }
 async function researchAction(path,body){const result=await apiWrite(path,body);$("research-status").textContent=JSON.stringify(result);await reloadResearchQueue();return result;}
-function focusResearchDetail(){const detail=$("research-detail");if(detail){const rect=detail.getBoundingClientRect();detail.style.position="fixed";detail.style.top="88px";detail.style.left=`${Math.max(16,rect.left)}px`;detail.style.right=`${Math.max(16,window.innerWidth-rect.right)}px`;detail.style.maxHeight="calc(100vh - 112px)";detail.style.overflowY="auto";detail.style.zIndex="30";}}
+function focusResearchDetail(){const detail=$("research-detail");if(detail){detail.classList.add("has-selection");}}
 async function loadResearchDetail(profileId){
   const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);
   const drafts=row.email_drafts||[];

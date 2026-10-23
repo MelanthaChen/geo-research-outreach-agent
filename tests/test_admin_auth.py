@@ -3,6 +3,7 @@ import os
 import sqlite3
 import threading
 import urllib.request
+from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 
 from outreach_agent.admin_auth import hash_password, init_auth_store
@@ -31,7 +32,8 @@ def test_private_api_requires_login_and_session_is_cookie_based(tmp_path, monkey
         with __import__("pytest").raises(__import__("urllib.error").error.HTTPError) as error:
             urllib.request.urlopen(base + "/api/summary")
         assert error.value.code == 401
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+        jar = CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         request = urllib.request.Request(base + "/api/auth/login", data=json.dumps({
             "email": "chen.yuxuan9@northeastern.edu", "password": "a secure test password 123",
         }).encode(), headers={"Content-Type": "application/json"}, method="POST")
@@ -93,4 +95,25 @@ def test_auth_tables_are_additive_and_password_hash_is_argon2id(tmp_path, monkey
         assert {"admin_sessions", "admin_auth_events"}.issubset(names)
         assert os.environ["OUTREACH_ADMIN_PASSWORD_HASH"].startswith("$argon2id$")
     finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_authenticated_admin_session_authorizes_review_actions_without_review_token(tmp_path, monkeypatch):
+    server, thread, base = _server(tmp_path, monkeypatch)
+    original = dashboard_module.review_contact
+    dashboard_module.review_contact = lambda **kwargs: {"status": "REVIEWED"}
+    try:
+        jar = CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        login = urllib.request.Request(base + "/api/auth/login", data=json.dumps({
+            "email": "chen.yuxuan9@northeastern.edu", "password": "a secure test password 123",
+        }).encode(), headers={"Content-Type": "application/json"}, method="POST")
+        opener.open(login)
+        csrf = next(cookie.value for cookie in jar if cookie.name == "geo_outreach_csrf")
+        review = urllib.request.Request(base + "/api/research/contact-review", data=json.dumps({
+            "prospect_id": "fixture", "contact_id": "contact", "decision": "APPROVED", "reviewer": "operator",
+        }).encode(), headers={"Content-Type": "application/json", "X-CSRF-Token": csrf}, method="POST")
+        assert json.load(opener.open(review))["status"] == "REVIEWED"
+    finally:
+        dashboard_module.review_contact = original
         server.shutdown(); server.server_close(); thread.join(timeout=2)

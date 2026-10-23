@@ -754,11 +754,14 @@ def create_manual_invitation_draft(
     with _connect(path) as db:
         existing = db.execute(
             "SELECT d.*,i.invitation_reference FROM email_drafts d LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id "
-            "WHERE d.profile_id=? AND lower(COALESCE(d.delivery_recipient,d.recipient))=? AND d.test_override=? "
+            "WHERE d.profile_id=? AND lower(COALESCE(d.delivery_recipient,d.recipient))=? "
             "AND d.approval_status IN ('PENDING','APPROVED') AND COALESCE(i.status,'INVITED') NOT IN ('SENT','EXPIRED') ORDER BY d.draft_id DESC LIMIT 1",
-            (profile_id, recipient, int(test_override)),
+            (profile_id, recipient),
         ).fetchone()
         if existing:
+            if test_override and not existing["test_override"]:
+                with _connect(path) as update_db:
+                    update_db.execute("UPDATE email_drafts SET intended_recipient=NULL,delivery_recipient=?,recipient_mode='TEST_OVERRIDE',test_override=1 WHERE draft_id=?", (recipient, existing["draft_id"]))
             return {"status": "EXISTING", "draft_id": existing["draft_id"], "invitation_id": existing["invitation_id"],
                     "invitation_reference": existing["invitation_reference"], "questionnaire_url": prefilled_form_url(existing["invitation_reference"]),
                     "subject": existing["subject"], "body": existing["body"], "delivery_recipient": recipient,

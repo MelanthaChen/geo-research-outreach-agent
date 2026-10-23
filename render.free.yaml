@@ -1,0 +1,37 @@
+# Free-only staging blueprint.
+#
+# Render Free does not provide free cron jobs or always-on workers. Sheets
+# synchronization and hotel discovery therefore remain operator-invoked until
+# a separately approved paid scheduler is available.
+services:
+  - type: web
+    name: geo-research-outreach-staging
+    runtime: python
+    plan: free
+    buildCommand: pip install '.[gmail,cloud]'
+    startCommand: python scripts/phase5b_dashboard.py --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: OUTREACH_ALLOW_REMOTE
+        value: "true"
+      - key: OUTREACH_REGISTRY_MODE
+        value: "LEAN"
+      - key: OUTREACH_DATABASE_URL
+        sync: false
+      - key: OUTREACH_DATABASE_MIGRATION_URL
+        sync: false
+      - key: OUTREACH_DASHBOARD_TOKEN
+        generateValue: true
+      - key: RESEARCH_QUESTIONNAIRE_SECRET
+        generateValue: true
+      - key: RESEARCH_QUESTIONNAIRE_BASE_URL
+        sync: false
+      - key: SEND_MODE
+        value: "dry_run"
+      - key: HOTEL_DISCOVERY_ENABLED
+        value: "false"
+      - key: GEO_ENGINE_API_URL
+        sync: false
+      - key: GEO_ENGINE_HANDOFF_TOKEN
+        sync: false

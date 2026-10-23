@@ -70,6 +70,21 @@ def test_login_rejects_wrong_password_and_state_changing_requests_need_csrf(tmp_
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
 
+def test_https_same_origin_login_is_allowed(tmp_path, monkeypatch):
+    server, thread, base = _server(tmp_path, monkeypatch)
+    try:
+        request = urllib.request.Request(base + "/api/auth/login", data=json.dumps({
+            "email": "chen.yuxuan9@northeastern.edu", "password": "a secure test password 123",
+        }).encode(), headers={
+            "Content-Type": "application/json",
+            "Origin": base.replace("http://", "https://"),
+            "Sec-Fetch-Site": "same-origin",
+        }, method="POST")
+        assert json.load(urllib.request.urlopen(request))["authenticated"] is True
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
 def test_auth_tables_are_additive_and_password_hash_is_argon2id(tmp_path, monkeypatch):
     server, thread, base = _server(tmp_path, monkeypatch)
     try:

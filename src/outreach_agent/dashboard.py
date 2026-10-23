@@ -582,7 +582,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
             try:
                 origin = self.headers.get("Origin")
                 fetch_site = self.headers.get("Sec-Fetch-Site", "same-origin")
-                if (origin and (urlparse(origin).scheme != "http" or urlparse(origin).netloc != self.headers.get("Host"))) or fetch_site in {"cross-site", "same-site"}:
+                if (origin and (urlparse(origin).scheme not in {"http", "https"} or urlparse(origin).netloc != self.headers.get("Host"))) or fetch_site in {"cross-site", "same-site"}:
                     self._json({"error": "Cross-origin changes are not allowed"}, 403)
                     return
                 length = int(self.headers.get("Content-Length", "0"))

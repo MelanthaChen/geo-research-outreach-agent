@@ -889,7 +889,12 @@ function applyResearchSearch(value){
   if(next===String(researchState.filters.q||""))return;
   researchState.filters.q=next;researchState.page=1;researchState.selectionScope="Current filtered view";resetResearchBatchOnly();scheduleResearchQueueReload();
 }
-["input","change","keyup"].forEach(eventName=>$('research-search').addEventListener(eventName,event=>applyResearchSearch(event.target.value)));
+let researchSearchSyncTimer=null;
+function syncResearchSearchFromDom(){
+  clearTimeout(researchSearchSyncTimer);
+  researchSearchSyncTimer=setTimeout(()=>applyResearchSearch($("research-search").value),0);
+}
+["input","change","keyup"].forEach(eventName=>$('research-search').addEventListener(eventName,syncResearchSearchFromDom));
 ["research-type","research-geography","research-consent"].forEach((id)=>$(id).addEventListener("change",()=>{researchState.filters[id==="research-type"?"profile_type":id==="research-geography"?"geographic_status":"consent_status"]=$(id).value;researchState.page=1;researchState.selectionScope="Current filtered view";resetResearchBatchOnly();scheduleResearchQueueReload();}));
 $("research-prev").addEventListener("click",()=>{researchState.page=Math.max(1,researchState.page-1);reloadResearchQueue().catch(showError);});
 $("research-next").addEventListener("click",()=>{researchState.page+=1;reloadResearchQueue().catch(showError);});

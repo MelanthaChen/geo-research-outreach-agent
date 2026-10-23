@@ -22,6 +22,13 @@ def test_research_queue_ignores_stale_responses_and_binds_detail_delegation():
     assert "loadResearchDetail(button.dataset.researchDetail)" in source
 
 
+def test_research_search_reads_latest_dom_value_after_input_event():
+    source = APP.read_text(encoding="utf-8")
+    assert "function syncResearchSearchFromDom()" in source
+    assert 'setTimeout(()=>applyResearchSearch($("research-search").value),0)' in source
+    assert "event.target.value" not in source[source.find("function applyResearchSearch"):source.find('["research-type"')]
+
+
 def test_select_all_matching_has_explicit_large_scope_confirmation():
     source = APP.read_text(encoding="utf-8")
     assert "result.total>researchState.pageSize" in source

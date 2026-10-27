@@ -29,6 +29,11 @@ existing lifecycle contracts, candidate stores, campaign sidecar, and
 - Added advisory reply ingestion keyed by message/thread references and
   verified sender flag. Unsubscribe replies populate suppression; vague
   positive replies never become consent.
+- The questionnaire representative email is an accountability and traceability
+  field and may differ from the original invitation recipient. The reviewer
+  verifies representative authorization independently; strict email equality is
+  not a consent requirement. Distinct submissions for one invitation remain
+  conflict-quarantined.
 - GEO handoff remains idempotent and consent-gated. It does not launch audits,
   experiments, paid LLM calls, or deployments.
 

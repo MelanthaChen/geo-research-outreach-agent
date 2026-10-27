@@ -24,7 +24,7 @@ This document records the implemented pipeline as it exists in the repository an
 | Strategy evaluation and experiments | IMPLEMENTED COMPONENTS / NOT RUN | GEO Engine experiment/citation services exist | Requires separate operator authorization and budget/provider approval |
 | Report generation and delivery | IMPLEMENTED / TESTED LOCALLY (PREVIEW ONLY) | `src/outreach_agent/geo_result_delivery.py`, existing DOCX renderer, `research_reports` table | No email delivery is enabled or claimed |
 | Background polling | IMPLEMENTED / MANUAL OR SCHEDULER-READY | Single-run Sheets sync and watcher configuration exist | Managed cloud scheduler deployment remains required |
-| Deployment | VERIFIED STAGING | Outreach deployment `dep-dbdegpvavr4c739ppic0` at `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`; GEO Engine deployment `dep-dbdej16i0phs739he920` at `79329452b9726220618e4adf9f603084abd8b624` | Authenticated cross-service write requires a confirmed isolated GEO database and a configured shared handoff secret |
+| Deployment | VERIFIED STAGING | Outreach deployment `dep-dbdet7favr4c739r65ag` at `a4a87dc3a47c677346059062276c7cfd198a78d2`; GEO Engine deployment `dep-dbderul9fdbs73at310g` at `2131234c520a22c221d714126397c9904b741136` | Authenticated cross-service write requires a confirmed isolated GEO database |
 
 ## Live owner-controlled evidence
 
@@ -42,13 +42,44 @@ The public GeoAIResume homepage was inspected read-only. It exposed website/orga
 
 ## Deployed cross-service verification (2026-10-23)
 
+### Current runtime follow-up
+
+The existing Render environment uses the existing `GEO_ENGINE_HANDOFF_TOKEN`
+mechanism only. A shared secret is configured in both services; values were
+handled only through Render's masked environment UI and were not written to
+the repository or logs. The deployed client sends canonical Bearer
+authentication plus the proxy-safe `X-GEO-Engine-Handoff-Token` header, and
+the GEO Engine integration boundary validates either header against the same
+secret.
+
+The live read-only smoke request to the GEO Engine result route returned HTTP
+404 (`research result not found`) with the configured credential, while missing
+and invalid credentials return HTTP 401. The 404 proves the request passed the
+authentication dependency; there is no result fixture for that probe. No
+profile import, research pipeline call, or other write request was attempted.
+
+The GEO Engine database inspection identified the existing Render Postgres
+target by safe metadata only: host prefix `dpg-dar8lb60tbcc739en720-a` and
+database `geo_engine_db_o8k7`. It is attached to the existing `geo-engine`
+service and was not independently confirmed as an isolated staging database.
+Render's free plan does not expose a service shell for runtime fingerprinting,
+and creating a separate isolated database would require an additional cloud
+resource/plan decision. No cloud database mutation was performed.
+
+Consequently, the live acceptance test remains blocked before mutation: no
+Property ID, research-job ID, result-envelope ID, or report ID is claimed for
+the deployed services. The clean owner-controlled fixture acceptance path,
+including idempotency, remains verified by the local cross-repository tests
+below. No historical consent, production GEO data, email, paid provider call,
+or research job was changed or started.
+
 The existing Render GEO Engine service was manually deployed, without creating a
-second service, from the requested commit:
+second service, from the targeted authentication-fix commit:
 
 - Service: `geo-engine` (`srv-d8g7ucu7r5hc73aq03q0`)
 - URL: `https://geo-engine.onrender.com`
-- Deployment: `dep-dbdej16i0phs739he920`
-- Live commit: `79329452b9726220618e4adf9f603084abd8b624`
+- Deployment: `dep-dbderul9fdbs73at310g`
+- Live commit: `2131234c520a22c221d714126397c9904b741136`
 - Render result: `Deploy succeeded | Live`
 - Source: `MelanthaChen/geo-engine`, branch `main`
 
@@ -64,13 +95,19 @@ The live API checks were read-only or deliberately unauthorized:
 | Outreach `GET /health` | HTTP 200, `{"status":"healthy","service":"outreach-dashboard"}` | Outreach service is reachable |
 | Outreach protected API with a deliberately invalid token | HTTP 401 | Dashboard authentication remains enforced |
 
-The deployment environment inspection found `GEO_ENGINE_API_URL` on Outreach,
-but no visible `GEO_ENGINE_HANDOFF_TOKEN` variable on either Render service.
-Values were not revealed, copied, logged, or placed in source control. The
-repository configuration requires both `GEO_ENGINE_API_URL` and
-`GEO_ENGINE_HANDOFF_TOKEN` together (`src/outreach_agent/geo_engine_handoff.py`;
-`render.yaml`). Consequently, a real authenticated handoff could not be
-executed safely from the deployed services in this run.
+The deployment environment inspection confirmed the shared secret is configured
+through the existing `GEO_ENGINE_HANDOFF_TOKEN` mechanism on both services;
+values were not logged or placed in source control. The client keeps Bearer as
+the canonical header and also sends `X-GEO-Engine-Handoff-Token` for managed
+proxy compatibility. GEO Engine validates either header against the same
+secret, with missing and invalid values still rejected.
+
+A real read-only request to
+`GET /api/v1/integration/research-results/auth-smoke-nonexistent` using the
+configured value reached the authenticated route and returned HTTP 404
+(`research result not found`). This proves authentication succeeded; the
+requested result fixture was simply absent. Missing and invalid credentials
+continue to return HTTP 401.
 
 Even if a secret were available, `geo-engine` is the existing service rather
 than a separately confirmed isolated test service/database. A profile import,
@@ -175,6 +212,11 @@ Test evidence for this implementation pass:
 - GEO Engine integration: `PYTHONPATH=. uv run pytest -q
   tests/test_geo_research_integration.py tests/test_cross_repository_owner_fixture.py`
   completed with 10 passing tests.
+- Focused authentication regression: Outreach handoff tests completed with 6
+  passing tests; GEO Engine integration-auth and research-integration tests
+  completed with 11 passing tests. The deployed auth behavior was additionally
+  verified against the live read-only endpoint: valid credentials returned 404
+  for a missing fixture, while missing and invalid credentials returned 401.
 - The focused report-delivery tests verify DOCX preview persistence,
   preview-only email generation, and duplicate-import idempotency.
 
@@ -184,34 +226,71 @@ The Outreach changes are deployed to the existing Render staging service:
 
 - Service: `geo-research-outreach-staging`
 - URL: `https://geo-research-outreach-staging.onrender.com`
-- Deployment: `dep-dbdegpvavr4c739ppic0`
-- Live commit: `d3c1da1b84671d22dfb2cb735566d84e065aa5bf`
+- Deployment: `dep-dbdet7favr4c739r65ag`
+- Live commit: `a4a87dc3a47c677346059062276c7cfd198a78d2`
 - Render result: `Deploy succeeded | Live`
 - Health check: `GET /health` returned HTTP 200 with
   `{"status":"healthy","service":"outreach-dashboard"}`.
 - Unauthenticated protected-route check: `GET
   /api/recruitment/post-form-confirmation` returned HTTP 401.
 
-No database records were changed by this implementation pass. The additive
-registry initialization is backward-compatible, but a direct authenticated
-read of the staging schema was not performed because no dashboard token was
-exposed or retrieved. The GEO Engine integration commit `7932945` is deployed
-live as `dep-dbdej16i0phs739he920`, and its public health and protected-route
-behavior were verified. No authenticated cross-service mutation is claimed
-because the shared handoff secret was not available for safe use and the live
-GEO database was not independently confirmed as an isolated staging database.
+No database records were changed by this implementation pass. The GEO Engine
+database remains the existing Render-managed database and was not independently
+confirmed as an isolated staging database, so no profile import, research job,
+or report retrieval write was attempted. Render Free also does not support
+one-off jobs, preventing a safe execution of the deployed Outreach client from
+the service shell.
 
-Therefore the current evidence is: both services are live on the requested
-commits, their public health endpoints work, and their protected integration
-boundaries reject unauthenticated requests. The complete authenticated
-cross-repository execution remains verified in isolated local tests, not yet as
-a live two-service mutation test.
+### Historical blocked audit (superseded by the completed acceptance below)
+
+The following section records the earlier state before the isolated Neon and
+Render staging resources were created. It is retained for provenance only; the
+completion evidence is in “Isolated cloud acceptance completed” below.
+
+The authenticated Render environment was inspected without revealing secret
+values. The live GEO Engine service is:
+
+- Service: `geo-engine` (`srv-d8g7ucu7r5hc73aq03q0`)
+- URL: `https://geo-engine.onrender.com`
+- Runtime plan shown by Render: `Free`
+- Live deployment: `dep-dbderul9fdbs73at310g`
+- Live commit: `2131234c520a22c221d714126397c9904b741136`
+
+Its environment contains a single `DATABASE_URL` binding and no separate
+staging database identifier, staging schema setting, or staging service. The
+configured database target is the existing GEO Engine database; its connection
+value was not copied or logged. No safe isolation boundary could therefore be
+demonstrated. Creating a separate database/service would be a new cloud
+resource and requires provider provisioning/plan approval before it can be
+used.
+
+Cloud-write acceptance result:
+
+| Item | Result |
+|---|---|
+| Isolated GEO staging database | NOT AVAILABLE / NOT CONFIRMED |
+| Cloud Property ID | None; no write attempted |
+| Cloud research-job ID | None; no research job started |
+| Cloud result-envelope ID | None; no result retrieval for a persisted fixture |
+| Cloud Outreach report ID | None; no report association write attempted |
+| Local controlled fixture | VERIFIED by existing cross-repository tests; idempotent Property/result/report behavior covered |
+| Production/GEO database mutation | None |
+
+The deployed authenticated read-only boundary remains verified: valid
+credentials return business-level HTTP 404 for a missing result fixture, while
+missing and invalid credentials return HTTP 401. This does not constitute a
+cloud write or a successful deployed end-to-end mutation test.
+
+Therefore the current evidence is: GEO Engine is live on the auth-fix commit,
+its authenticated read-only boundary is verified, and Outreach is live from
+the matching client commit. The
+complete cross-repository mutation test remains intentionally blocked pending an
+isolated GEO staging database.
 
 ## Exact remaining acceptance steps
 
-1. Configure the same handoff secret in both staging services without revealing
-   it in logs or source control.
-2. Confirm that the GEO Engine database and integration store are isolated
+1. Provision or identify an explicitly isolated GEO staging database/service;
+   do not repoint the existing `geo-engine` service.
    staging resources, not the existing production database.
 3. Seed one clean owner-controlled fixture in the isolated Outreach staging
    database with explicit verified consent; do not use the historical
@@ -224,3 +303,163 @@ a live two-service mutation test.
 
 Until steps 1-3 are complete, no live property or research records should be
 created.
+
+## Isolated cloud acceptance completed (2026-10-23)
+
+The previously blocked cloud test was completed against a separate free-tier
+staging stack. The production GEO Engine service and database were not
+repointed or modified.
+
+### Environment
+
+- Neon project: `geo-engine-staging` (`rough-paper-82218218`), AWS US East 2
+  (Ohio), database `neondb`.
+- GEO Engine staging Render service: `geo-engine-staging`
+  (`srv-dbdf2nt9fdbs73atqgp0`),
+  [https://geo-engine-staging.onrender.com](https://geo-engine-staging.onrender.com).
+- GEO Engine staging deployment: `dep-dbdfcf6i0phs739k6n5g`, source commit
+  `7c054d74326d418bfb0e3827ec0016a9bf174c81`, status `Deploy succeeded | Live`.
+- Outreach staging remained on
+  `https://geo-research-outreach-staging.onrender.com`, commit
+  `a4a87dc3a47c677346059062276c7cfd198a78d2`.
+
+### Actual cross-service evidence
+
+The fixture was `cloud-owner-fixture-20261023-v2`, an owner-controlled
+GeoAIResume profile with explicit controlled-fixture consent and no formal
+cohort membership.
+
+| Stage | Actual result |
+|---|---|
+| Authenticated profile import | HTTP 200; `property_id=2`; `exclusion_reason=CONTROLLED_TEST_FIXTURE` |
+| Duplicate profile import | HTTP 200; same `property_id=2` and no second property mapping |
+| Invalid-token research request | HTTP 401 |
+| Controlled research run | HTTP 200; `status=COMPLETED`; `audit_id=2`; baseline `experiment_id=2`; no paid provider |
+| Repeated research run | HTTP 200; `idempotent=true`; same property, audit, experiment, and result record IDs |
+| Versioned result retrieval | HTTP 200 from `/api/v1/integration/research-results/cloud-owner-fixture-20261023-v2?source_profile_version=geo-company-profile/v1` |
+| Normal GEO Property API | HTTP 200 for `/api/v1/properties/2`; property domain `geo-ai-resume.vercel.app` |
+| Normal Property metrics API | HTTP 200; no generated/published content and no provider executions |
+| Outreach result/report preview | Isolated SQLite only: report `report-2bce086ec6d8fb352661`, DOCX created, second import returned `EXISTING` |
+| Final email preview | `PREVIEW_ONLY`, recipient `owner-controlled@example.test`; no delivery attempted |
+
+Result envelope:
+`research-result:cloud-owner-fixture-20261023-v2:geo-company-profile/v1`.
+The generated DOCX is at
+`/tmp/geo-cloud-reports-v2/report-2bce086ec6d8fb352661.docx`; its registry
+association is in `/tmp/geo-cloud-outreach-acceptance-v2.db`. These are
+isolated acceptance artifacts, not production Outreach data.
+
+### Scope and limitations
+
+The deployed research runner is protected by the existing shared handoff
+token, requires `APP_ENV=staging`/`test`/`development`, and requires an
+explicit `controlled_fixture=true` owner-controlled payload. It does not
+accept provider credentials, run paid LLM calls, deploy content, enable
+monitoring, or start citation tests. The production GEO Engine service remains
+on its prior deployment and database.
+
+The cloud GEO persistence and retrieval path is verified. Outreach report
+association and DOCX/email-preview generation were verified against an
+isolated local registry because the deployed Outreach service does not expose a
+public result-import mutation endpoint; no live Outreach records were changed.
+Hotel discovery, outreach sending, consent changes, and production research
+execution remain disabled.
+
+## Final deployed GEO result-import verification — 2026-10-23
+
+The authenticated GEO Engine → Outreach report-persistence boundary is now
+deployed and verified with the isolated owner-controlled fixture
+`cloud-owner-fixture-20261023-v2`.
+
+| Check | Evidence |
+|---|---|
+| Outreach deployment | Commit `b7e3492db7eddecba76f90b0098af7a278e7fd44`; Render deployment `dep-dbdfq8gl0d7c739aplag`; service healthy at `https://geo-research-outreach-staging.onrender.com` |
+| GEO deployment | Commit `7c054d74326d418bfb0e3827ec0016a9bf174c81`; Render deployment `dep-dbdfocui0phs739ldte0`; service healthy at `https://geo-engine-staging.onrender.com` |
+| Authenticated result retrieval | HTTP 200; result record `research-result:cloud-owner-fixture-20261023-v2:geo-company-profile/v1`; `property_id=2`; contract `geo-research-integration/v1` |
+| Result import | HTTP 200 `EXISTING`; report `report-2bce086ec6d8fb352661`; `delivery_status=NOT_SENT` |
+| Idempotency | One `research_reports` row for the report ID; repeated import created no duplicate |
+| Persisted association | Neon staging: fixture `CONSENTED`, `REPORT_READY`, `geo_property_id=2`, handoff `HANDED_OFF`; report row exists with `property_id=2` |
+| Authorization failures | Invalid result-import credentials return HTTP 401; missing/invalid credentials remain rejected |
+| Health | Outreach `/health` reports `healthy` |
+| Side effects | No email sent, no paid provider call, no production or historical consent mutation |
+| Regression tests | Focused integration suite: 20 passed |
+
+The result-import endpoint is protected, validates the versioned envelope and
+handoff/property association, persists through the existing report store, and
+returns an idempotent existing result on retry. The test used only the
+isolated Neon staging registry and the owner-controlled fixture.
+
+Remaining production blocker: the GEO integration result envelope and generated
+DOCX currently use the Render service filesystem. They must move to durable
+PostgreSQL/object storage before production reliance across redeploys. The
+staging database association is durable; no real outreach delivery was
+attempted.
+
+## Whisker Haven owner-controlled cloud acceptance — 2026-10-23
+
+This section records the explicitly authorized staging test for the fictional
+Whisker Haven demo site. It is separate from formal participant consent and
+does not change historical GeoAIResume records.
+
+| Stage | Actual evidence |
+|---|---|
+| Form submission | Live Google Form submission recorded successfully; invitation reference `GEO-FCB07DC22A54ACFB`; representative `Yuxuan Chen`, role `Owner-controlled staging test operator`, email `yuxuan.chen.1031@gmail.com`; interest `YES`; authorization `YES` |
+| Google Sheets synchronization | Dry run: `read_ok rows=4 dry_run=true`; live Neon staging sync: `sync_ok seen=4 processed=0 duplicates=3 needs_review=1` |
+| Outreach state | Neon staging record `whisker-haven-owner-demo-20261023-v1` remains `NEEDS_REVIEW`; no consent or GEO handoff was auto-approved |
+| GEO profile import | Authenticated HTTP 200; profile `whisker-haven-independent-20261023-v2`; property ID `3`; property domain `whisker-haven-demo.vercel.app`; controlled-test exclusion preserved |
+| GEO deployment | Render service `geo-engine-staging`; deployment `dep-dbdm613rjlhs73dp9ing`; commit `c22ae7f84feda01f42dcd81996d72684a29d642e`; status `Deploy succeeded | Live` |
+| Controlled research workflow | Authenticated HTTP 200; `status=COMPLETED`; audit ID `5`; experiment ID `5`; baseline provider `CONTROLLED_FIXTURE`; no paid provider calls |
+| Result retrieval | Authenticated HTTP 200; result `research-result:whisker-haven-independent-20261023-v2:geo-company-profile/v1`; property ID `3`; contract `geo-research-integration/v1` |
+| Retry/idempotency | Repeated profile import returned property ID `3`; repeated research run returned HTTP 200 with `idempotent=true`; no duplicate property or result record |
+| Invalid credentials | Read-only result retrieval without credentials returned HTTP 401 |
+| DOCX preview | Generated `/tmp/Whisker-Haven-independent-GEO-report.docx`; preview labels the work as independent owner-controlled analysis and records missing rendered website evidence |
+
+The first Whisker run exposed that the Render Free runtime has no guaranteed
+Chromium executable. The deployed fix makes controlled-fixture research use
+the existing bounded HTTP-first audit path rather than failing with HTTP 500.
+The resulting audit is `insufficient_analyzable_content` with zero page
+references because Whisker Haven is a client-rendered demo. Therefore this is
+not a claim of a complete rendered-content audit or measured search visibility
+improvement. A browser-capable staging runtime is still required for that
+portion of the research workflow.
+
+The GEO result is intentionally not imported into Outreach: the corresponding
+live form response remains protected `NEEDS_REVIEW`, and no direct database
+consent mutation was performed. No email, campaign, paid model call, or
+production research job was initiated.
+
+Local verification after this run: the Outreach full suite passed with the
+development dependencies installed. GEO Engine integration regression tests
+passed (`11 passed`), including the distinct owner-controlled-domain test. The
+GEO Engine repository-wide suite reported `184 passed, 7 failed`; those seven
+failures are in the pre-existing Brave/provider and teacher-provenance areas,
+outside this integration change and its two unrelated existing working-tree
+files. Those files were not modified.
+
+## Whisker Haven evidence-backed report correction — 2026-10-23
+
+The earlier Whisker Haven DOCX was not acceptable as a completed research
+report: it contained no rendered page references, no grounded recommendations,
+and a controlled-fixture baseline that was easy to misread as a real model
+measurement. The report pipeline has now been corrected and rerun.
+
+| Check | Actual result |
+|---|---|
+| Browser-rendered audit | 5 pages captured with Chromium/Codex browser runtime at `2026-10-23T13:57:17Z`; URLs, titles, metadata, rendered headings, internal links, source quotes, and structured-data checks are persisted in `data/whisker_haven_independent_analysis_20261023.json` |
+| Recommendations | 3 concrete, page-specific proposals, each tied to an observed URL and exact quoted source text; recommendations are hypotheses, not measured lifts |
+| GEO questions | 4 site-specific questions derived from the rendered homepage, cat directory, process, about, and contact content |
+| Real AI visibility baseline | `INCOMPLETE`; provider `CONTROLLED_FIXTURE`, model calls `0`, no real model responses or citations; no paid provider was called and no free provider was configured |
+| DOCX output | `demo_runs/whisker_haven_20261023/Whisker-Haven-GEO-Analysis.docx`; 3 rendered pages, readable tables, no template placeholders, and no raw JSON dump |
+| Consent boundary | Independent owner-controlled analysis only; the live Outreach record remains `NEEDS_REVIEW`; no consent-gated handoff was claimed |
+| External side effects | No emails, website changes, experiments, paid calls, production changes, or GEO handoff were initiated |
+
+The report now explicitly labels itself `REPORT STATUS: INCOMPLETE` because a
+real AI visibility baseline is absent. The cloud Render audit remains
+`insufficient_analyzable_content` with no page references because its HTTP-first
+runtime cannot render the client-side demo; the five-page browser audit is the
+durable evidence source for this independent report. The next required action
+for a completed visibility study is authorization and configuration of a free
+or explicitly approved real model provider, followed by rerunning the recorded
+question set. The renderer remains backward-compatible for older integration
+envelopes by producing an explicit incomplete preview rather than failing or
+claiming completion.

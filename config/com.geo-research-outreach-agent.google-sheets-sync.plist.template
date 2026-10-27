@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.geo-research-outreach-agent.google-sheets-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV_PATH__</string><string>run</string><string>python</string>
+    <string>scripts/sync_google_form_responses.py</string>
+    <string>--credentials</string><string>__CREDENTIALS_PATH__</string>
+    <string>--watch</string><string>--interval-seconds</string><string>300</string>
+    <string>--status-file</string><string>__STATUS_PATH__</string>
+  </array>
+  <key>WorkingDirectory</key><string>__REPOSITORY__</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__LOG_DIRECTORY__/google-sheets-sync.log</string>
+  <key>StandardErrorPath</key><string>__LOG_DIRECTORY__/google-sheets-sync.error.log</string>
+</dict>
+</plist>

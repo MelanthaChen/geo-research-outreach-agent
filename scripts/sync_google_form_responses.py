@@ -103,6 +103,46 @@ def sync_once(*, path=REGISTRY_DB, service=None):
     return {"status": "BLOCKED" if follow_up_is_blocked(outcomes) else "COMPLETED", "counts": counts, "follow_up": outcomes}
 
 
+def handoff_owner_test_fixtures(*, path=REGISTRY_DB):
+    """Retry only existing authorized fixture handoffs; never start research."""
+    from outreach_agent.geo_engine_handoff import (
+        OWNER_TEST_AUTOMATION_PROFILES,
+        owner_test_automation_enabled,
+        process_geo_handoff,
+    )
+    from outreach_agent.research_lifecycle import _connect, init_registry
+
+    init_registry(path)
+    profile_ids = tuple(sorted(OWNER_TEST_AUTOMATION_PROFILES))
+    with _connect(path) as db:
+        rows = db.execute(
+            """SELECT h.profile_id,s.submission_id
+               FROM geo_handoffs h
+               JOIN questionnaire_submissions s ON s.submission_id=h.consent_submission_id
+               JOIN questionnaire_invitations i ON i.invitation_id=s.invitation_id
+               JOIN research_records r ON r.profile_id=h.profile_id
+               WHERE h.profile_id IN (?,?)
+                 AND h.status IN ('HANDOFF_PENDING','HANDOFF_FAILED','HANDED_OFF')
+                 AND i.automation_authorized=1
+                 AND s.review_status='APPROVED' AND s.consent_status='CONSENTED'
+                 AND s.research_interest='YES' AND s.research_authorization='YES'
+                 AND r.consent_status='CONSENTED' AND r.withdrawal_status!='WITHDRAWN'
+               ORDER BY h.profile_id""",
+            profile_ids,
+        ).fetchall()
+    outcomes = []
+    for row in rows:
+        profile_id = row["profile_id"]
+        if not owner_test_automation_enabled(profile_id):
+            outcomes.append({"profile_id": profile_id, "status": "BLOCKED", "error": "owner test automation is disabled"})
+            continue
+        outcome = process_geo_handoff(row["submission_id"], path=path)
+        outcomes.append({"profile_id": profile_id, **outcome})
+    succeeded = {o.get("profile_id") for o in outcomes if o.get("status") == "HANDED_OFF"}
+    expected = set(OWNER_TEST_AUTOMATION_PROFILES)
+    return {"status": "COMPLETED" if succeeded == expected and len(outcomes) == len(expected) else "BLOCKED", "handoffs": outcomes}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read Google Forms responses into the local Outreach Agent registry")
     parser.add_argument("--credentials", default=os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_FILE"), help="Existing service-account JSON path; never created by this command")

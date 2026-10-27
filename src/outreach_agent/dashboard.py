@@ -721,9 +721,12 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         self._json({"status": "BLOCKED", "error": str(exc)}, 409)
                     return
                 if parsed.path == "/api/integration/tick":
-                    from scripts.sync_google_form_responses import sync_once
+                    from scripts.sync_google_form_responses import handoff_owner_test_fixtures, sync_once
                     try:
-                        self._json(sync_once(path=REGISTRY_DB))
+                        if body.get("handoff_only") is True:
+                            self._json(handoff_owner_test_fixtures(path=REGISTRY_DB))
+                        else:
+                            self._json(sync_once(path=REGISTRY_DB))
                     except Exception as exc:
                         self._json({"status": "BLOCKED", "error": str(exc)}, 503)
                     return

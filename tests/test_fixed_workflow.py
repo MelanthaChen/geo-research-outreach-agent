@@ -6,10 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from outreach_agent.research_lifecycle import (_connect, register_profile, generate_invitation_batch,
     get_record, ingest_google_form_response)
-from outreach_agent.geo_engine_handoff import OWNER_FIXTURES
+from outreach_agent.geo_engine_handoff import OWNER_FIXTURES, process_geo_handoff
 from outreach_agent.email_dispatch import send_invitation_batch, ProviderResult
 from outreach_agent.geo_result_delivery import resume_accepted_research, follow_up_is_blocked
 from outreach_agent.mail_merge import research_mail_merge_rows
+from scripts.sync_google_form_responses import handoff_owner_test_fixtures
 
 
 def seed(path, profile_id='geoairesume-owner-test-v1'):
@@ -144,6 +145,38 @@ def test_scheduler_marks_failed_handoffs_blocked():
     assert follow_up_is_blocked([{"status": "INCOMPLETE"}])
     assert not follow_up_is_blocked([{"status": "SENT"}, {"status": "EXISTING"}])
     assert not follow_up_is_blocked([])
+
+
+def test_handoff_only_retry_reuses_failed_rows_without_starting_research(tmp_path, monkeypatch):
+    monkeypatch.setenv('OUTREACH_OWNER_TEST_AUTOMATION_ENABLED', 'true')
+    path=tmp_path/'registry.db'
+    profiles=[seed(path,pid) for pid in OWNER_FIXTURES]
+    generate_invitation_batch([pid for pid,_ in profiles],secret='test',path=path)
+    for pid,email in profiles:
+        assert ingest_google_form_response(row_for(path,pid,email),path=path)=='CONSENTED'
+
+    class TimeoutBridge:
+        def import_profile(self,profile): raise TimeoutError('simulated prior timeout')
+    for pid,_ in profiles:
+        submission_id=get_record(pid,path)['questionnaire_submissions'][0]['submission_id']
+        assert process_geo_handoff(submission_id,path=path,bridge=TimeoutBridge())['status']=='HANDOFF_FAILED'
+
+    class ExistingEngineBridge:
+        def __init__(self): self.calls=[]
+        def import_profile(self,profile):
+            self.calls.append(profile['profile_id'])
+            return {'property_id': {'geoairesume-owner-test-v1': 21,'whisker-haven-owner-demo-20261023-v1': 22}[profile['profile_id']]}
+        def run_controlled_research(self,profile): raise AssertionError('handoff-only retry must not start research')
+    bridge=ExistingEngineBridge()
+    monkeypatch.setattr('outreach_agent.geo_engine_handoff.default_bridge',lambda:bridge)
+    first=handoff_owner_test_fixtures(path=path)
+    assert first['status']=='COMPLETED'
+    assert {x['profile_id']:x['property_id'] for x in first['handoffs']}=={'geoairesume-owner-test-v1':21,'whisker-haven-owner-demo-20261023-v1':22}
+    second=handoff_owner_test_fixtures(path=path)
+    assert second['status']=='COMPLETED'
+    assert all(x['idempotent'] for x in second['handoffs']) and len(bridge.calls)==2
+    assert all(get_record(pid,path)['geo_research_status']=='HANDED_OFF' for pid,_ in profiles)
+    assert all(get_record(pid,path)['handoffs'][0]['research_run_status']=='NOT_STARTED' for pid,_ in profiles)
 
 
 def test_postgres_schema_initialization_retries_failure_then_reuses_success(monkeypatch):

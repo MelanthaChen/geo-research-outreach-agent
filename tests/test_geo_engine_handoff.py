@@ -167,3 +167,5 @@ def test_http_bridge_sends_canonical_and_proxy_safe_auth_headers(monkeypatch):
         assert kwargs["headers"] == _handoff_headers("test-secret")
     assert calls[0][2]["headers"]["Authorization"] == "Bearer test-secret"
     assert calls[0][2]["headers"]["X-GEO-Engine-Handoff-Token"] == "test-secret"
+    assert calls[0][2]["timeout"] == 90.0
+    assert calls[1][2]["timeout"] == 20.0

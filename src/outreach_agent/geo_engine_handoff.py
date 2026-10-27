@@ -33,6 +33,7 @@ class HttpGeoEngineBridge:
     api_url: str
     token: str
     timeout_seconds: float = 20.0
+    profile_import_timeout_seconds: float = 90.0
 
     def import_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
         import httpx
@@ -42,7 +43,11 @@ class HttpGeoEngineBridge:
             self.api_url.rstrip("/") + "/api/v1/integration/profile-import",
             json=profile,
             headers=headers,
-            timeout=self.timeout_seconds,
+            # Render Free services sleep when idle. The measured staging cold
+            # start exceeded 35 seconds, while this POST used to time out at
+            # 20 seconds. Keep result/research calls on their shorter timeout;
+            # only the registration request needs the cold-start allowance.
+            timeout=self.profile_import_timeout_seconds,
         )
         if response.status_code >= 400:
             raise RuntimeError(f"GEO Engine handoff failed ({response.status_code})")

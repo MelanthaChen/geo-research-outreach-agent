@@ -20,6 +20,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import nullcontext
+from threading import RLock
 from email.utils import parseaddr
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,7 +139,27 @@ def _connect(path: Path | str):
     return db
 
 
+_initialized_postgres_targets: set[str] = set()
+_registry_initialization_lock = RLock()
+
+
 def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
+    """Apply PostgreSQL migrations once per worker, before serving its first use.
+
+    SQLite keeps per-call initialization because local files can be recreated.
+    A failed migration is never cached; a new deployment has a fresh cache.
+    """
+    if not is_postgres_target(path):
+        return _initialize_registry(path)
+    with _registry_initialization_lock:
+        target = str(path)
+        if target not in _initialized_postgres_targets:
+            _initialize_registry(path)
+            _initialized_postgres_targets.add(target)
+    return path
+
+
+def _initialize_registry(path: Path | str = REGISTRY_DB) -> Path | str:
     if not is_postgres_target(path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     with _connect(path) as db:

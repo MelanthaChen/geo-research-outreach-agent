@@ -137,3 +137,21 @@ def test_malformed_timestamp_cannot_start_research(tmp_path, monkeypatch):
     row=row_for(path,pid,email); row['Timestamp']='not a date'
     assert ingest_google_form_response(row,path=path)=='NEEDS_REVIEW'
     assert resume_accepted_research(path=path)==[]
+
+
+def test_postgres_schema_initialization_retries_failure_then_reuses_success(monkeypatch):
+    from outreach_agent import research_lifecycle as lifecycle
+    target='postgresql://schema-cache-unit-test/registry'
+    lifecycle._initialized_postgres_targets.discard(target)
+    calls=[]
+    def initialize(path):
+        calls.append(path)
+        if len(calls)==1:
+            raise RuntimeError('migration failed')
+        return path
+    monkeypatch.setattr(lifecycle,'_initialize_registry',initialize)
+    with pytest.raises(RuntimeError): lifecycle.init_registry(target)
+    assert lifecycle.init_registry(target)==target
+    assert lifecycle.init_registry(target)==target
+    assert len(calls)==2
+    lifecycle._initialized_postgres_targets.discard(target)

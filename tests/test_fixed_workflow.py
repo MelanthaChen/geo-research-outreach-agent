@@ -8,7 +8,7 @@ from outreach_agent.research_lifecycle import (_connect, register_profile, gener
     get_record, ingest_google_form_response)
 from outreach_agent.geo_engine_handoff import OWNER_FIXTURES
 from outreach_agent.email_dispatch import send_invitation_batch, ProviderResult
-from outreach_agent.geo_result_delivery import resume_accepted_research
+from outreach_agent.geo_result_delivery import resume_accepted_research, follow_up_is_blocked
 from outreach_agent.mail_merge import research_mail_merge_rows
 
 
@@ -137,6 +137,13 @@ def test_malformed_timestamp_cannot_start_research(tmp_path, monkeypatch):
     row=row_for(path,pid,email); row['Timestamp']='not a date'
     assert ingest_google_form_response(row,path=path)=='NEEDS_REVIEW'
     assert resume_accepted_research(path=path)==[]
+
+
+def test_scheduler_marks_failed_handoffs_blocked():
+    assert follow_up_is_blocked([{"status": "HANDOFF_FAILED"}])
+    assert follow_up_is_blocked([{"status": "INCOMPLETE"}])
+    assert not follow_up_is_blocked([{"status": "SENT"}, {"status": "EXISTING"}])
+    assert not follow_up_is_blocked([])
 
 
 def test_postgres_schema_initialization_retries_failure_then_reuses_success(monkeypatch):

@@ -6,6 +6,14 @@ import json
 import base64
 import secrets
 from pathlib import Path
+
+
+SUCCESSFUL_FOLLOW_UP_STATES = {"SENT", "EXISTING"}
+
+
+def follow_up_is_blocked(outcomes: list[dict]) -> bool:
+    """A scheduler tick is complete only when all resumed work reached delivery."""
+    return any(outcome.get("status") not in SUCCESSFUL_FOLLOW_UP_STATES for outcome in outcomes)
 from typing import Any
 
 from outreach_agent.research_lifecycle import _connect, _hash, init_registry, now

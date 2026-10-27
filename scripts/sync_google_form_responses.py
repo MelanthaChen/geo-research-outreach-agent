@@ -80,7 +80,7 @@ def materialize_secret_credentials() -> Path | None:
 
 def sync_once(*, path=REGISTRY_DB, service=None):
     """One deployed scheduler tick: read Forms, then resume durable follow-up work."""
-    from outreach_agent.geo_result_delivery import resume_accepted_research
+    from outreach_agent.geo_result_delivery import follow_up_is_blocked, resume_accepted_research
     from outreach_agent.geo_engine_handoff import OWNER_TEST_AUTOMATION_PROFILES
     from outreach_agent.research_lifecycle import _connect, init_registry
     credential_file = None
@@ -100,7 +100,7 @@ def sync_once(*, path=REGISTRY_DB, service=None):
     scoped = [row for row in rows if str(row.get("Invitation Reference", "")).strip() in references]
     counts = sync_sheet_rows(scoped, process=lambda row: ingest_google_form_response(row.raw, path=path))
     outcomes = resume_accepted_research(path=path)
-    return {"status": "COMPLETED" if not any(o.get("status") in {"BLOCKED", "FAILED", "INCOMPLETE"} for o in outcomes) else "BLOCKED", "counts": counts, "follow_up": outcomes}
+    return {"status": "BLOCKED" if follow_up_is_blocked(outcomes) else "COMPLETED", "counts": counts, "follow_up": outcomes}
 
 
 def main() -> int:

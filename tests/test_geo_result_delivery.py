@@ -57,7 +57,7 @@ def test_geo_result_import_requires_handoff_and_is_idempotent(tmp_path):
     with _connect(path) as db:
         row = db.execute("SELECT geo_property_id,geo_research_status FROM research_records WHERE profile_id=?", ("fixture-company",)).fetchone()
         assert row["geo_property_id"] == 41
-        assert row["geo_research_status"] == "REPORT_READY"
+        assert row["geo_research_status"] == "RESEARCH_INCOMPLETE"
 
 
 def test_geo_result_import_rejects_property_mismatch(tmp_path):

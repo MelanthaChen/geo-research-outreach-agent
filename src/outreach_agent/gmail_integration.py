@@ -52,8 +52,12 @@ def _secure_keyring():
 def _credential_record(settings: dict[str, Any] | None = None) -> dict[str, Any] | None:
     from outreach_agent.email_test_settings import PREFERRED_SENDER
 
-    keyring = _secure_keyring()
-    raw = keyring.get_password(SERVICE_NAME, PREFERRED_SENDER)
+    # Managed deployments provide the existing OAuth record as a secret. No
+    # credential is returned in health responses or written to the repository.
+    raw = os.environ.get("OUTREACH_GMAIL_CREDENTIALS_JSON")
+    if not raw:
+        keyring = _secure_keyring()
+        raw = keyring.get_password(SERVICE_NAME, PREFERRED_SENDER)
     if not raw:
         return None
     try:
@@ -75,7 +79,7 @@ def gmail_connection_status(settings: dict[str, Any] | None = None) -> dict[str,
         "oauth_client_file": str(client_file),
         "prerequisite": "",
     }
-    if not client_file.is_file():
+    if not client_file.is_file() and not os.environ.get("OUTREACH_GMAIL_CREDENTIALS_JSON"):
         result["prerequisite"] = (
             "Missing Google OAuth desktop-client JSON. Enable Gmail API, configure the consent screen, "
             "create a Desktop app OAuth client, and place its JSON at the configured path outside the repository."
@@ -163,14 +167,15 @@ def _credentials(settings: dict[str, Any] | None = None):
     if credentials.expired and credentials.refresh_token:
         credentials.refresh(Request())
         record["credentials"] = json.loads(credentials.to_json())
-        _secure_keyring().set_password(SERVICE_NAME, PREFERRED_SENDER, json.dumps(record, separators=(",", ":")))
+        if not os.environ.get("OUTREACH_GMAIL_CREDENTIALS_JSON"):
+            _secure_keyring().set_password(SERVICE_NAME, PREFERRED_SENDER, json.dumps(record, separators=(",", ":")))
     if not credentials.valid:
         raise GmailSetupError("Gmail authorization expired; reconnect Gmail before sending.")
     return credentials
 
 
 def send_gmail_message(*, recipient: str, sender: str, subject: str, body: str,
-                       settings: dict[str, Any] | None = None) -> dict[str, str]:
+                       settings: dict[str, Any] | None = None, attachment: tuple[str, bytes] | None = None) -> dict[str, str]:
     """Send one reviewed message via Gmail API; returned acceptance is not delivery."""
     from outreach_agent.email_test_settings import PREFERRED_SENDER, validate_test_recipient
 
@@ -187,6 +192,8 @@ def send_gmail_message(*, recipient: str, sender: str, subject: str, body: str,
     message["From"] = PREFERRED_SENDER
     message["Subject"] = subject
     message.set_content(body)
+    if attachment:
+        message.add_attachment(attachment[1], maintype="application", subtype="vnd.openxmlformats-officedocument.wordprocessingml.document", filename=attachment[0])
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
     try:
         service = build("gmail", "v1", credentials=_credentials(settings), cache_discovery=False)

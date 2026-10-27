@@ -688,12 +688,14 @@ function updateResearchSelection(){
 function renderResearchBatchSummary(result){
   researchState.batch=result;
   const host=$("research-batch-summary"); if(!host)return;
-  const labels={successfully_generated:"Ready for approval",ready_for_approval:"New drafts",discovered_unverified_recipient:"First-party email; contact review pending",missing_verified_recipient:"Missing verified recipient",insufficient_verified_evidence:"Insufficient evidence",duplicate_already_invited:"Already invited",owner_controlled_test_excluded:"Owner-controlled test excluded",generation_failed:"Generation failed"};
+  const labels={successfully_generated:"Generated",ready_for_approval:"New drafts",discovered_unverified_recipient:"First-party email; contact review pending",missing_verified_recipient:"Missing verified recipient",insufficient_verified_evidence:"Insufficient evidence",duplicate_already_invited:"Already invited",owner_controlled_test_excluded:"Owner-controlled test excluded",generation_failed:"Generation failed"};
   host.hidden=false;
-  host.innerHTML=`<div class="batch-summary-head"><strong>Batch generated</strong><span>${esc(result.batch_id)}</span></div><div class="batch-summary-grid">${Object.entries(labels).map(([key,label])=>`<button type="button" class="batch-summary-item" data-batch-category="${esc(key)}"><strong>${esc(result.summary?.[key]??0)}</strong><span>${esc(label)}</span></button>`).join("")}</div><p class="section-help">Select a summary category to focus the relevant records. Only validated drafts can be approved or exported; exceptions remain excluded from the Word package.</p>`;
+  host.innerHTML=`<div class="batch-summary-head"><strong>Batch generated</strong><span>${esc(result.batch_id)}</span></div><div class="batch-summary-grid">${Object.entries(labels).map(([key,label])=>`<button type="button" class="batch-summary-item" data-batch-category="${esc(key)}"><strong>${esc(result.summary?.[key]??0)}</strong><span>${esc(label)}</span></button>`).join("")}</div><p class="section-help">Select a summary category to focus the relevant records. Generated invitations can be previewed, exported and sent. Exceptions remain excluded.</p>`;
+  host.innerHTML+=(result.generated||[]).map(item=>`<details><summary>${esc(item.subject||item.profile_id)} — ${esc(item.delivery_recipient||item.recipient||"")}</summary><pre style="white-space:pre-wrap">${esc(item.body||"")}</pre></details>`).join("");
+  host.innerHTML+=Object.values(result.categories||{}).flat().filter(item=>typeof item==="object"&&item.error).map(item=>`<p>${esc(item.profile_id)}: ${esc(item.error)}</p>`).join("");
   host.querySelectorAll("[data-batch-category]").forEach(button=>button.addEventListener("click",()=>{const ids=result.categories?.[button.dataset.batchCategory]||[];researchState.selected=new Set(ids.map(item=>typeof item==="string"?item:item.profile_id).filter(Boolean));researchState.selectionScope=`Batch category: ${button.dataset.batchCategory}`;updateResearchSelection();}));
   $("research-batch-actions").hidden=!(result.draft_ids||[]).length;
-  $("research-batch-export").disabled=true;
+  $("research-batch-export").disabled=false;
   $("research-batch-approve").disabled=true;
 }
 function selectVisibleResearchRows(checked){
@@ -707,13 +709,6 @@ function selectVisibleResearchRows(checked){
   updateResearchSelection();
 }
 async function selectAllMatchingResearch(){
-  // A bounded result set is already present in the DOM. Keep this path local:
-  // selecting three visible rows must not perform a database round trip or
-  // rebuild the table. Larger scopes retain the explicit, server-side flow.
-  if(researchState.total<=researchState.pageSize){
-    selectVisibleResearchRows(true);
-    return;
-  }
   const result=await apiWrite("/api/recruitment/selection",{filters:researchState.filters});
   if(result.total>researchState.pageSize && !window.confirm(`This will select ${result.total} matching records across all pages. Continue?`))return;
   researchState.selected=new Set(result.profile_ids||[]); researchState.selectionScope=`All ${result.total} matching records`; reloadResearchQueue().catch(showError); updateResearchSelection();
@@ -722,6 +717,15 @@ async function generateResearchBatch(){
   if(!researchState.selected.size) throw new Error("Select at least one company");
   const result=await apiWrite("/api/recruitment/batch-generate",{profile_ids:[...researchState.selected]});
   renderResearchBatchSummary(result); $("research-status").textContent=`Generated ${result.summary.successfully_generated} invitation drafts; no messages sent.`;
+}
+async function sendResearchBatch(){
+  if(!researchState.batch?.batch_id) throw new Error("Generate a batch first");
+  const button=$("research-batch-send"); button.disabled=true;
+  try {
+    const result=await apiWrite("/api/recruitment/batch-send",{batch_id:researchState.batch.batch_id});
+    $("research-status").textContent=result.outcomes.map(o=>`${o.draft_id}: ${o.status}${o.error?" — "+o.error:""}`).join("; ")+". Provider acceptance does not confirm receipt.";
+    await reloadResearchQueue();
+  } finally { button.disabled=false; }
 }
 async function approveResearchBatch(){
   if(!researchState.batch?.batch_id) throw new Error("Generate a batch first");
@@ -733,18 +737,19 @@ async function approveResearchBatch(){
 }
 async function exportResearchBatch(){
   if(!researchState.batch?.batch_id) throw new Error("Generate a batch first");
-  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected]})});
+  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected],batch_id:researchState.batch?.batch_id})});
   if(!response.ok){let detail="Mail Merge package export failed";try{detail=(await response.json()).error||detail;}catch(_){ }throw new Error(detail);}
-  const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded approved Word Mail Merge package. Exporting did not mark invitations sent.";
+  const blob=await response.blob(),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded generated Word Mail Merge package. Exporting did not mark invitations sent.";
 }
 async function downloadResearchMailMergePackage(){
   if(!researchState.selected.size){showError(new Error("Select at least one approved invitation draft"));return;}
-  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected]})});
+  const response=await fetch("/api/research/mail-merge/package",{method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({profile_ids:[...researchState.selected],batch_id:researchState.batch?.batch_id})});
   if(!response.ok){let detail="Mail Merge package export failed";try{detail=(await response.json()).error||detail;}catch(_){ }throw new Error(detail);}
   const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="geo-research-mail-merge-package.zip";document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);$("research-status").textContent="Downloaded approved Word Mail Merge package (DOCX + XLSX + CSV).";
 }
 function reviewHeaders(){return `<p class="section-help review-auth-note">Authenticated administrator session required. Review actions are protected by the current session and CSRF validation.</p>`;}
 function renderConsentReview(row, profileId){
+  const communicationHistory=`<h4>Communication history</h4>${(row.email_events||[]).map(e=>`<p>${esc(e.created_at)} · ${esc(e.event_type)} · ${esc(e.provider)} · ${esc(e.message_id||"No provider message ID")}${e.error?" · "+esc(e.error):""}</p>`).join("")||"<p>No sending event recorded.</p>"}<h4>Email replies</h4>${(row.replies||[]).map(r=>`<p>${esc(r.sent_at||r.created_at)} · ${esc(r.sender)} · ${esc(r.subject)} · ${esc(r.invitation_reference||r.correlation_status)}</p>`).join("")||"<p>No verified inbound reply recorded.</p>"}<h4>Report delivery</h4>${(row.reports||[]).map(r=>`<p>${esc(r.report_id)} · ${esc(r.status)} · ${esc(r.delivery_status)} · ${esc(r.delivery_recipient||"")} · ${esc(r.sent_at||"Not sent")}${r.delivery_error?" · "+esc(r.delivery_error):""}</p>`).join("")||"<p>No report produced.</p>"}`;
   const submissions=row.questionnaire_submissions||[], conflicts=row.questionnaire_conflicts||[], reviews=row.consent_reviews||[];
   const response=submissions[0];
   const responseHtml=response?`<div class="consent-response"><div><strong>${esc(response.submission_id)}</strong> · ${esc(response.response_source||"UNKNOWN")}</div><div>Invitation: ${esc(response.invitation_reference||response.invitation_id)}</div><div>Interest: ${esc(response.research_interest)} · Authorization: ${esc(response.research_authorization)}</div><div>Respondent: ${esc(response.representative_full_name)} · ${esc(response.representative_job_title)} · ${esc(response.contact_email)}</div><div>Submitted: ${esc(response.submitted_at)} · Consent: ${esc(response.consent_status)} · Review: ${esc(response.review_status)} · Identity: ${esc(response.identity_review_status)}</div></div>`:`<p class="section-help">No questionnaire response is recorded.</p>`;
@@ -752,7 +757,7 @@ function renderConsentReview(row, profileId){
   const history=reviews.length?reviews.map(item=>`<li>${esc(item.created_at)} · ${esc(item.reviewer)} · ${esc(item.decision)} · ${esc(item.notes||"No notes")}</li>`).join(""):"<li>No review decisions recorded.</li>";
   const actionable=response && !conflicts.length && ["NEEDS_REVIEW","PENDING"].includes(String(response.review_status||""));
   const form=actionable?`<div class="review-checks"><label><input type="checkbox" data-review-check="company_identity_verified"> Company identity verified</label><label><input type="checkbox" data-review-check="representative_authorized"> Representative authorization verified</label><label><input type="checkbox" data-review-check="consent_version_verified"> Consent wording/version verified</label><label><input type="checkbox" data-review-check="website_scope_verified"> Website-analysis scope verified</label><label><input type="checkbox" data-review-check="withdrawal_checked"> Withdrawal status checked</label></div><label class="field-label">Reviewer<input id="consent-reviewer" required placeholder="Reviewer name"></label><label class="field-label">Notes<textarea id="consent-review-notes" placeholder="Review evidence or rejection reason"></textarea></label><div class="review-actions"><button class="button primary" data-consent-decision="approve">Approve verified consent</button><button class="button outline" data-consent-decision="reject">Reject / keep blocked</button></div>`:`<p class="section-help">${response?conflicts.length?"Review controls disabled while a conflicting response is quarantined.":`No pending review action. Current state: ${esc(response.review_status||response.consent_status||"UNKNOWN")}.`:"Review controls appear after a response is synchronized."}</p>`;
-  return `<div class="subsection consent-review-card"><div class="section-head"><div><p class="eyebrow">HUMAN CONSENT REVIEW</p><h3>Response and authorization review</h3></div></div>${reviewHeaders()}${responseHtml}${conflictHtml}<h4>Review history</h4><ul class="review-history">${history}</ul>${form}</div>`;
+  return `${communicationHistory}<div class="subsection consent-review-card"><div class="section-head"><div><p class="eyebrow">HUMAN CONSENT REVIEW</p><h3>Response and authorization review</h3></div></div>${reviewHeaders()}${responseHtml}${conflictHtml}<h4>Review history</h4><ul class="review-history">${history}</ul>${form}</div>`;
 }
 async function loadResearchDetail(profileId){const row=await api(`/api/research/records/${encodeURIComponent(profileId)}`);$("research-detail").innerHTML=`<div class="detail-title"><div><h2>${esc(row.name)}</h2><div class="detail-url">${esc(row.official_website)}</div></div>${pill(row.consent_status)}</div><div class="detail-grid"><div class="detail-stat"><span>Type</span><strong>${esc(row.profile_type)}</strong></div><div class="detail-stat"><span>Recruitment</span><strong>${esc(row.recruitment_status)}</strong></div><div class="detail-stat"><span>Questionnaire</span><strong>${esc(row.questionnaire_status)}</strong></div><div class="detail-stat"><span>GEO</span><strong>${esc(row.geo_research_status)}</strong></div></div><div class="subsection"><h4>Screening evidence</h4>${listItems((row.screenings||[]).map(item=>JSON.parse(item.evidence_json||"[]")),"No screening evidence recorded.")}</div><div class="subsection"><h4>Drafts</h4>${listItems((row.email_drafts||[]).map(item=>`${item.draft_id} · ${item.approval_status} · ${item.recipient}`),"No recruitment drafts.")}</div><div class="subsection"><h4>GEO handoffs</h4>${listItems((row.handoffs||[]).map(item=>`${item.handoff_id} · ${item.status}`),"No GEO handoff records.")}</div>${renderConsentReview(row,profileId)}`;
   $("research-detail").querySelectorAll("[data-consent-decision]").forEach(button=>button.addEventListener("click",async()=>{const reviewer=$("research-detail").querySelector("#consent-reviewer").value.trim();if(!reviewer){showError(new Error("Reviewer name is required"));return;}const checks={};$("research-detail").querySelectorAll("[data-review-check]").forEach(input=>checks[input.dataset.reviewCheck]=input.checked);try{await researchAction("/api/research/consent-review",{profile_id:profileId,submission_id:(row.questionnaire_submissions||[])[0]?.submission_id,reviewer,approve:button.dataset.consentDecision==="approve",notes:$("research-detail").querySelector("#consent-review-notes").value,...checks});await loadResearchDetail(profileId);}catch(error){showError(error);}}));
@@ -1001,3 +1006,5 @@ function navigate() {
   }
 }
 start().catch(showError);
+
+$("research-batch-send").addEventListener("click",()=>sendResearchBatch().catch(showError));

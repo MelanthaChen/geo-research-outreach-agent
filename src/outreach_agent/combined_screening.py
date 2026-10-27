@@ -48,7 +48,6 @@ def _rule_based(*, name: str, industry: str | None, location: str | None, pages:
     if not signals["entity_clarity"]: opportunities.append({"title": "Clarify the organization and location", "problem": "The inspected text does not clearly connect the organization name to its location.", "suggestion": "Add a concise organization, location, and service summary near the top of the site."})
     if not signals["service_discoverability"]: opportunities.append({"title": "Make products or services easier to identify", "problem": "The inspected text has limited explicit product or service language.", "suggestion": "Use descriptive service headings and plain-language summaries."})
     if not signals["question_answerability"]: opportunities.append({"title": "Answer common customer questions", "problem": "No clear FAQ or customer-question section was observed.", "suggestion": "Add factual answers for common questions such as services, hours, location, and booking."})
-    if not opportunities: opportunities.append({"title": "Strengthen factual answer paths", "problem": "The site contains useful information but can make key facts easier to retrieve.", "suggestion": "Organize the strongest factual details into concise, linked sections."})
     opportunities = opportunities[:3]
     queries = [f"What does {name} offer in {location or 'the local area'}?", f"How can I contact or visit {name}?", f"What should customers know before choosing {name}?"]
     talking_points = [f"{item['title']}: {item['suggestion']}" for item in opportunities[:2]]

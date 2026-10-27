@@ -35,15 +35,14 @@ def test_select_all_matching_has_explicit_large_scope_confirmation():
     assert "This will select ${result.total} matching records across all pages" in source
 
 
-def test_small_select_all_is_local_and_does_not_reload_or_call_selection_api():
+def test_select_all_always_uses_server_eligibility_validation():
     source = APP.read_text(encoding="utf-8")
     start = source.index("async function selectAllMatchingResearch()")
     end = source.index("async function generateResearchBatch()", start)
-    small_path = source[start:end]
-    assert "if(researchState.total<=researchState.pageSize)" in small_path
-    assert "selectVisibleResearchRows(true)" in small_path
-    assert small_path.index("selectVisibleResearchRows(true)") < small_path.index("apiWrite(\"/api/recruitment/selection\"")
-    assert "reloadResearchQueue().catch(showError)" not in small_path.split("const result=", 1)[0]
+    handler = source[start:end]
+    assert 'apiWrite("/api/recruitment/selection"' in handler
+    assert "selectVisibleResearchRows(true)" not in handler
+    assert "if(researchState.total<=researchState.pageSize)" not in handler
 
 
 def test_visible_selection_updates_only_loaded_ids_and_preserves_other_pages():

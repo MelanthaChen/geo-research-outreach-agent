@@ -1,3 +1,4 @@
+from workflow_test_support import add_personalization
 import sqlite3
 
 import pytest
@@ -103,6 +104,7 @@ def test_manual_invitation_uses_test_override_without_mutating_source(tmp_path):
     db = tmp_path / "registry.db"
     register_profile({**profile("owner", "owner_controlled_test"), "identity": {"name": "GeoAIResume", "website": "https://geo-ai-resume.vercel.app", "verification_evidence": [{"url": "https://geo-ai-resume.vercel.app", "text": "Owner-controlled test website"}]}}, db)
     before = sqlite3.connect(db).execute("SELECT contact_channels_json,source_candidate_id FROM research_records WHERE profile_id='owner'").fetchone()
+    add_personalization(db, "owner")
     result = create_manual_invitation_draft("owner", delivery_recipient="yuxuan.chen.1031@outlook.com", secret="secret", path=db, test_override=True)
     assert result["status"] == "DRAFTED"
     assert result["test_override"] is True
@@ -120,6 +122,7 @@ def test_manual_invitation_rejects_unallowlisted_test_recipient_and_requires_sen
     register_profile(profile("owner", "owner_controlled_test"), db)
     with pytest.raises(PermissionError, match="allowlist"):
         create_manual_invitation_draft("owner", delivery_recipient="other@example.com", secret="secret", path=db, test_override=True)
+    add_personalization(db, "owner")
     result = create_manual_invitation_draft("owner", delivery_recipient="yuxaun.chen.1031@outlook.com", secret="secret", path=db, test_override=True)
     with pytest.raises(PermissionError, match="approved"):
         reconcile_manual_send(result["draft_id"], provider="OUTLOOK_WORD_MAIL_MERGE", provider_message_id="m1", evidence_ref="sent-item-1", path=db)
@@ -257,7 +260,7 @@ def test_post_form_confirmation_blocks_explicit_no_and_unverified_email(tmp_path
     draft = create_email_draft("company-1", "invitation@example.test", "Invitation", path=db)
     with sqlite3.connect(db) as conn:
         conn.execute("UPDATE email_drafts SET invitation_id=? WHERE draft_id=?", (invitation_id, draft))
-    row = {"Invitation Reference": reference, "Is your company interested in participating in this research?": "Yes", "Does your company authorize our research team to conduct the research described above?": "No", "Full Name of the Authorized Company Representative": "Representative", "Job Title of the Authorized Company Representative": "CEO", "Business Email Address of the Authorized Company Representative": "representative@example.test"}
+    row = {"Timestamp": "2026-10-27T12:00:00Z", "Invitation Reference": reference, "Is your company interested in participating in this research?": "Yes", "Does your company authorize our research team to conduct the research described above?": "No", "Full Name of the Authorized Company Representative": "Representative", "Job Title of the Authorized Company Representative": "CEO", "Business Email Address of the Authorized Company Representative": "representative@example.test"}
     assert ingest_google_form_response(row, path=db) == "INTERESTED_NOT_AUTHORIZED"
     submission_id = sqlite3.connect(db).execute("SELECT submission_id FROM questionnaire_submissions").fetchone()[0]
     assert create_post_form_confirmation_draft(submission_id, path=db)["status"] == "BLOCKED_EXPLICIT_AUTHORIZATION_NO"

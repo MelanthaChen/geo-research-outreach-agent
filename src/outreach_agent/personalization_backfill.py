@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from outreach_agent.combined_screening import _rule_based
 from outreach_agent.preliminary_screening import ScreeningConfig, _fetch
-from outreach_agent.research_lifecycle import _connect, init_registry, now
+from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, init_registry, now
 
 
 JOB_VERSION = "personalization-backfill/v1"
@@ -145,7 +145,7 @@ def _profile_payload(record: Any, pages: list[dict[str, str]], fetched: dict[str
     for key, label in (("question_answerability", "pages with question-answerable information"), ("structured_information", "pages with factual contact/location information"), ("service_discoverability", "pages with explicit service or product language")):
         numerator = sum(bool(repr_page.get("text") and _rule_based(name=record["name"], industry=record["industry"], location=record["location"], pages=[repr_page])["signals"].get(key)) for repr_page in pages)
         if page_count:
-            findings.append({"observation": label, "numerator": numerator, "denominator": page_count, "percentage": round(100 * numerator / page_count, 1), "source_urls": [str(page.get("url") or "") for page in pages], "observed_at": observed_at, "data_classification": "OBSERVED"})
+            findings.append({"observation": label, "numerator": numerator, "denominator": page_count, "percentage": round(100 * numerator / page_count, 1), "calculation": f"100 * {numerator} / {page_count}", "source_urls": [str(page.get("url") or "") for page in pages], "observed_at": observed_at, "data_classification": "OBSERVED"})
     opportunities = []
     for item in screening["opportunities"][:2]:
         opportunities.append({**item, "source_urls": [str(page.get("url") or "") for page in pages], "observed_at": observed_at, "data_classification": "OBSERVED"})
@@ -176,6 +176,8 @@ def run_job(job_id: str, path: Path | str, *, config: ScreeningConfig | None = N
                 if not pages:
                     raise RuntimeError("NO_PUBLIC_PAGES")
                 observed = now(); payload = _profile_payload(item, pages, meta, observed)
+                if not payload["recommendations"]:
+                    raise ValueError("NO_DEFENSIBLE_IMPROVEMENT_OBSERVATION")
                 content_hash = _sha({"profile_id": profile_id, "pages": [(p.get("url"), p.get("text")) for p in pages]})
                 analysis_id = "analysis-" + hashlib.sha256((profile_id + content_hash + "RULE_BASED").encode()).hexdigest()[:20]
                 evidence = [{"url": p.get("url", ""), "excerpt": str(p.get("text") or "")[:800], "captured_at": observed, "content_hash": hashlib.sha256(str(p.get("text") or "").encode()).hexdigest(), "fetch": meta} for p in pages]
@@ -198,3 +200,24 @@ def run_job(job_id: str, path: Path | str, *, config: ScreeningConfig | None = N
         status = "PAUSED" if pause_after is not None and remaining else ("COMPLETE" if not remaining else "RUNNING")
         db.execute("UPDATE personalization_backfill_jobs SET status=?,completed_at=?,processed=processed+?,succeeded=succeeded+?,failed=failed+?,last_profile_id=?,error_summary_json=? WHERE job_id=?", (status, now() if status == "COMPLETE" else None, processed, counts["succeeded"], counts["failed"], queue[min(processed, len(queue))-1]["profile_id"] if processed else None, json.dumps(dict(counts), sort_keys=True), job_id))
     return {"job_id": job_id, "status": status, "processed": processed, "remaining": remaining, "succeeded": counts["succeeded"], "failed": counts["failed"]}
+
+
+def save_observed_personalization(profile_id: str, payload: dict, pages: list[dict], *, path=REGISTRY_DB) -> str:
+    """Save a reviewed lightweight observation in the existing screening store.
+
+    Used for bounded browser-rendered evidence when the existing HTTP fetcher
+    cannot read a client-rendered site. No invitation or GEO job is created.
+    """
+    from outreach_agent.research_lifecycle import get_record, stored_invitation_personalization
+    _ensure_schema(path)
+    record = get_record(profile_id, path)
+    stored_invitation_personalization({**record, "personalization_json": json.dumps(payload)})
+    observed = payload['retrieved_at']
+    content_hash = _sha({"pages": pages, "profile": payload})
+    analysis_id = "analysis-" + _sha([profile_id, content_hash])[:20]
+    evidence = [{"url": p['url'], "excerpt": p['text'], "captured_at": observed, "content_hash": _sha(p['text']), "method": "BOUNDED_BROWSER_OBSERVATION"} for p in pages]
+    with _connect(path) as db:
+        db.execute("INSERT INTO screening_analysis_results(analysis_id,profile_id,profile_version,mode,content_hash,result_json,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(profile_id,content_hash,mode) DO NOTHING", (analysis_id, profile_id, record['profile_version'], 'RULE_BASED', content_hash, json.dumps({"pages": pages, "evidence": evidence, "profile": payload}, sort_keys=True), observed))
+        db.execute("INSERT INTO screenings(screening_id,profile_id,profile_version,status,opportunities_json,evidence_json,provider,model,prompt_version,methodology,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(screening_id) DO NOTHING", ('screening-'+content_hash[:20], profile_id, record['profile_version'], 'PRELIMINARY_OBSERVED', json.dumps(payload['recommendations']), json.dumps(evidence), 'BOUNDED_BROWSER_OBSERVATION', 'none', 'research-personalization/v1', 'Read-only rendered page sample; no GEO analysis or AI visibility experiment', observed))
+        db.execute("UPDATE research_records SET personalization_status='COMPLETE',personalization_json=?,personalization_completed_at=?,personalization_error=NULL,screening_status='SCREENING_COMPLETE',screening_completed_at=?,updated_at=? WHERE profile_id=?", (json.dumps(payload, sort_keys=True), observed, observed, now(), profile_id))
+    return analysis_id

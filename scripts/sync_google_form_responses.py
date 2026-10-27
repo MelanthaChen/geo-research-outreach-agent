@@ -78,6 +78,31 @@ def materialize_secret_credentials() -> Path | None:
     return target
 
 
+def sync_once(*, path=REGISTRY_DB, service=None):
+    """One deployed scheduler tick: read Forms, then resume durable follow-up work."""
+    from outreach_agent.geo_result_delivery import resume_accepted_research
+    from outreach_agent.geo_engine_handoff import OWNER_TEST_AUTOMATION_PROFILES
+    from outreach_agent.research_lifecycle import _connect, init_registry
+    credential_file = None
+    if service is None:
+        credential_file = materialize_secret_credentials()
+        try:
+            configured = os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_FILE")
+            service = build_service(credential_file or (Path(configured) if configured else None))
+        finally:
+            if credential_file:
+                credential_file.unlink(missing_ok=True)
+    rows = authenticated_sheets_reader(spreadsheet_id=RESPONSE_SPREADSHEET_ID, range_name=os.environ.get("GEO_RESEARCH_SHEETS_RANGE", DEFAULT_RANGE), service=service)
+    init_registry(path)
+    with _connect(path) as db:
+        references = {r[0] for r in db.execute("SELECT invitation_reference FROM questionnaire_invitations WHERE profile_id IN (?,?)", tuple(sorted(OWNER_TEST_AUTOMATION_PROFILES)))}
+    # This staging run never alters any real-company or third-fixture response.
+    scoped = [row for row in rows if str(row.get("Invitation Reference", "")).strip() in references]
+    counts = sync_sheet_rows(scoped, process=lambda row: ingest_google_form_response(row.raw, path=path))
+    outcomes = resume_accepted_research(path=path)
+    return {"status": "COMPLETED" if not any(o.get("status") in {"BLOCKED", "FAILED", "INCOMPLETE"} for o in outcomes) else "BLOCKED", "counts": counts, "follow_up": outcomes}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read Google Forms responses into the local Outreach Agent registry")
     parser.add_argument("--credentials", default=os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_FILE"), help="Existing service-account JSON path; never created by this command")
@@ -115,7 +140,7 @@ def main() -> int:
             if args.dry_run:
                 print(f"read_ok rows={len(rows)} dry_run=true", flush=True)
             else:
-                counts = sync_sheet_rows(rows, process=lambda row: ingest_google_form_response(row.raw, path=args.registry))
+                counts = sync_once(path=args.registry, service=service)
                 print("sync_ok " + " ".join(f"{key}={value}" for key, value in counts.items()), flush=True)
             write_status(args.status_file, "HEALTHY", rows=len(rows), counts=counts)
         except Exception as exc:

@@ -354,6 +354,7 @@ def save_export(directory: Path, filename: str, content: str) -> tuple[Path, str
 
 def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None = None,
                              include_pending: bool = False,
+                             draft_ids: list[str] | None = None,
                              allowed_recipients: set[str] | None = None) -> list[dict[str, Any]]:
     """Build Word-compatible rows from the existing Research Queue.
 
@@ -362,16 +363,21 @@ def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None
     function is read-only with respect to the registry.
     """
     from outreach_agent.research_lifecycle import init_registry, _connect
-    init_registry(Path(registry_db))
+    init_registry(registry_db)
     where = ""
     params: list[Any] = []
     if profile_ids:
         marks = ",".join("?" for _ in profile_ids)
         where = f" AND r.profile_id IN ({marks})"
         params.extend(profile_ids)
+    if draft_ids is not None:
+        if not draft_ids:
+            return []
+        where += " AND d.draft_id IN (" + ",".join("?" for _ in draft_ids) + ")"
+        params.extend(draft_ids)
     statuses = ("'APPROVED','PENDING'" if include_pending else "'APPROVED'")
     rows: list[dict[str, Any]] = []
-    with _connect(Path(registry_db)) as db:
+    with _connect(registry_db) as db:
         query = f"""SELECT r.name,d.draft_id,d.profile_id,d.recipient,d.subject,d.body,
                     d.approval_status,i.invitation_id,i.invitation_reference,i.status AS invitation_status
                     FROM email_drafts d JOIN research_records r ON r.profile_id=d.profile_id
@@ -391,7 +397,7 @@ def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None
                 "profile_id": row["profile_id"], "company_name": row["name"],
                 "recipient_email": row["recipient"], "Email Address": row["recipient"],
                 "email_subject": mail_merge_safe_subject(row["subject"]),
-                "email_body": body, "questionnaire_url": urls[0] if urls else "",
+                "email_body": body, "questionnaire_url": next((url for url in urls if "docs.google.com/forms/" in url), urls[0] if len(urls) == 1 else ""),
                 "invitation_reference": row["invitation_reference"] or "",
                 "draft_id": row["draft_id"], "invitation_id": row["invitation_id"] or "",
                 "draft_status": row["approval_status"], "invitation_status": row["invitation_status"] or "",
@@ -469,6 +475,28 @@ def save_word_mail_merge_template(directory: Path, filename: str = "geo-research
     digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
     os.replace(temporary, path)
     return path, digest
+
+
+def save_merged_invitation_preview(directory: Path, rows: list[dict]) -> Path:
+    """Materialize the persisted messages alongside the reusable merge template."""
+    from docx import Document
+    from docx.shared import Pt
+    document = Document()
+    document.styles["Normal"].font.name = "Calibri"
+    document.styles["Normal"].font.size = Pt(11)
+    for index, row in enumerate(rows):
+        if index:
+            document.add_page_break()
+        document.add_paragraph(row["company_name"], "Title")
+        document.add_paragraph("To: " + row["recipient_email"])
+        document.add_paragraph("Subject: " + row["email_subject"])
+        document.add_paragraph("Invitation reference: " + row["invitation_reference"])
+        for text in row["email_body"].split("\n\n"):
+            paragraph = document.add_paragraph(text)
+            paragraph.paragraph_format.space_after = Pt(6)
+    target = Path(directory) / "generated-invitations.docx"
+    document.save(target)
+    return target
 
 
 def record_word_mail_merge_reconciliation(registry_db: Path, draft_id: str, *, status: str,

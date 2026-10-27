@@ -312,6 +312,10 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
             "withdrawal_status": "TEXT NOT NULL DEFAULT 'NOT_WITHDRAWN'",
             "source_candidate_id": "TEXT",
             "source_row_checksum": "TEXT",
+            "personalization_status": "TEXT NOT NULL DEFAULT 'NOT_STARTED'",
+            "personalization_json": "TEXT NOT NULL DEFAULT '{}'",
+            "personalization_completed_at": "TEXT",
+            "personalization_error": "TEXT",
         }
         for name, definition in additions.items():
             if name not in record_columns:
@@ -332,6 +336,17 @@ def init_registry(path: Path | str = REGISTRY_DB) -> Path | str:
         }.items():
             if name not in draft_columns:
                 db.execute(f"ALTER TABLE email_drafts ADD COLUMN {name} {definition}")
+        for table, additions in {
+            "questionnaire_invitations": {"automation_authorized": "INTEGER NOT NULL DEFAULT 0", "scope_website": "TEXT"},
+            "questionnaire_submissions": {"raw_response_json": "TEXT NOT NULL DEFAULT '{}'"},
+            "email_drafts": {"content_key": "TEXT", "attachment_report_id": "TEXT"},
+            "research_reports": {"result_json": "TEXT", "document_base64": "TEXT", "delivery_draft_id": "TEXT", "delivery_recipient": "TEXT", "sent_at": "TEXT", "delivery_error": "TEXT"},
+        }.items():
+            existing_columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+            for name, definition in additions.items():
+                if name not in existing_columns:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS draft_content_key_idx ON email_drafts(content_key)")
         reply_columns = {row[1] for row in db.execute("PRAGMA table_info(replies)")}
         for name, definition in {
             "recipient": "TEXT NOT NULL DEFAULT ''",
@@ -426,8 +441,8 @@ def create_questionnaire_invitation(profile_id: str, *, secret: str, path: Path 
             raise ValueError("profile is not registered")
         if record["profile_type"] != "owner_controlled_test" and not is_us_eligible(record["geographic_classification"]):
             raise PermissionError("outreach invitation requires VERIFIED_US geographic eligibility")
-        db.execute("INSERT INTO questionnaire_invitations(invitation_id,profile_id,invitation_reference,token_hash,token_expires_at,status,created_at) VALUES (?,?,?,?,?,?,?)", (invitation_id, profile_id, invitation_reference, token_hash, expires_at, "INVITED", now()))
-        db.execute("UPDATE research_records SET recruitment_status='INVITED',questionnaire_status='INVITED',promotion_state=CASE WHEN promotion_state='OUTREACH_READY' THEN 'INVITED' ELSE promotion_state END,updated_at=? WHERE profile_id=?", (now(), profile_id))
+        db.execute("INSERT INTO questionnaire_invitations(invitation_id,profile_id,invitation_reference,token_hash,token_expires_at,status,created_at) VALUES (?,?,?,?,?,?,?)", (invitation_id, profile_id, invitation_reference, token_hash, expires_at, "DRAFTED", now()))
+        db.execute("UPDATE research_records SET recruitment_status='EMAIL_DRAFTED',questionnaire_status=CASE WHEN questionnaire_status='NOT_INVITED' THEN 'DRAFTED' ELSE questionnaire_status END,updated_at=? WHERE profile_id=?", (now(), profile_id))
     return invitation_id, raw
 
 
@@ -474,7 +489,7 @@ def submit_questionnaire(token: str, *, secret: str, response: dict[str, Any], p
 
 
 def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB, bridge: Any | None = None) -> str:
-    """Import one authenticated Sheets row without granting automatic consent."""
+    """Persist Sheets answers; only explicitly bound owner fixtures may auto-consent."""
     parsed = parse_sheet_row(row)
     init_registry(path)
     response_hash = _hash(json.dumps(parsed.raw, sort_keys=True, separators=(",", ":")))
@@ -486,16 +501,32 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
         if duplicate:
             return "DUPLICATE"
         prior_submission = db.execute("SELECT submission_id FROM questionnaire_submissions WHERE invitation_id=? ORDER BY submitted_at LIMIT 1", (invitation["invitation_id"],)).fetchone()
-        record = db.execute("SELECT profile_id,profile_type,withdrawal_status FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone()
+        record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone()
         allowed_emails = {str(invitation_email[0]).casefold() for invitation_email in db.execute("SELECT recipient FROM email_drafts WHERE invitation_id=?", (invitation["invitation_id"],)).fetchall()}
         invitation_email_matches = parsed.contact_email.casefold() in allowed_emails if parsed.contact_email else False
         interest = parsed.research_interest
         authorization = parsed.research_authorization
         valid_pair = interest in {"YES", "NO"} and authorization in {"YES", "NO"}
         conflicting = prior_submission is not None
-        from outreach_agent.geo_engine_handoff import owner_test_automation_enabled
-        auto_test = bool(record and record["profile_type"] == "owner_controlled_test" and owner_test_automation_enabled(record["profile_id"]))
-        if conflicting or not valid_pair or not parsed.representative_name or not parsed.representative_role or not parsed.contact_email:
+        from outreach_agent.geo_engine_handoff import owner_test_automation_enabled, owner_fixture_matches
+        auto_test = bool(record and owner_test_automation_enabled(record["profile_id"])
+                         and len(allowed_emails) == 1
+                         and owner_fixture_matches(record, next(iter(allowed_emails)))
+                         and invitation["automation_authorized"]
+                         and invitation["scope_website"] == record["official_website"]
+                         and parsed.contact_email.casefold() in allowed_emails)
+        valid_timestamp = False
+        for date_format in (None, "%m/%d/%Y %H:%M:%S"):
+            try:
+                if date_format:
+                    datetime.strptime(parsed.submitted_at, date_format)
+                else:
+                    datetime.fromisoformat(parsed.submitted_at.replace("Z", "+00:00"))
+                valid_timestamp = True
+                break
+            except ValueError:
+                pass
+        if conflicting or not valid_pair or not parsed.representative_name or not parsed.representative_role or not EMAIL_RE.match(parsed.contact_email) or not valid_timestamp:
             outcome = "NEEDS_REVIEW"
             review = "CONFLICT_QUARANTINED" if conflicting else "NEEDS_REVIEW"
         elif interest == "YES" and authorization == "YES":
@@ -520,6 +551,7 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
            research_interest,research_authorization,representative_full_name,representative_job_title,identity_review_status,
            invitation_recipient_email,representative_email)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (submission_id, invitation["invitation_id"], response_hash, parsed.representative_name, parsed.representative_role, parsed.contact_email, outcome, int(outcome == "CONSENTED"), int(outcome == "CONSENTED"), 0, 0, 0, 0, CONSENT_VERSION, parsed.submitted_at or now(), review, "GOOGLE_SHEETS", parsed.invitation_reference, interest, authorization, parsed.representative_name, parsed.representative_role, "VERIFIED" if outcome == "CONSENTED" else identity_review, invitation_recipient_email, parsed.contact_email))
+        db.execute("UPDATE questionnaire_submissions SET raw_response_json=? WHERE submission_id=?", (json.dumps(parsed.raw, sort_keys=True), submission_id))
         if conflicting:
             conflict_id = "conflict-" + _hash(invitation["invitation_id"] + response_hash)[:20]
             db.execute("""INSERT INTO questionnaire_conflicts
@@ -533,14 +565,9 @@ def ingest_google_form_response(row: dict[str, Any], *, path: Path = REGISTRY_DB
             db.execute("UPDATE research_records SET consent_status='CONSENTED',promotion_state='RESEARCH_PARTICIPANT',geo_research_status='HANDOFF_PENDING',geo_integration_status='HANDOFF_PENDING',updated_at=? WHERE profile_id=?", (now(), invitation["profile_id"]))
             review_id = "review-auto-owner-test-" + _hash(submission_id)[:20]
             db.execute("INSERT INTO consent_reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (review_id) DO NOTHING", (review_id, submission_id, invitation["profile_id"], "APPROVED", "OWNER_CONTROLLED_TEST_AUTOMATION", 1, 1, 1, 1, 1, "Explicit staging automation allowlist; owner-controlled test only", now()))
-    if outcome == "CONSENTED":
-        from outreach_agent.geo_engine_handoff import process_geo_handoff, start_controlled_research
-        handoff = process_geo_handoff(submission_id, path=path, bridge=bridge)
-        if handoff.get("status") != "HANDED_OFF":
-            return "AUTO_HANDOFF_FAILED"
-        research = start_controlled_research(submission_id, path=path, bridge=bridge)
-        return "AUTO_RESEARCH_COMPLETED" if research.get("status") == "COMPLETED" else "AUTO_RESEARCH_FAILED"
-    return outcome if outcome in {"DECLINED", "INTERESTED_NOT_AUTHORIZED"} else "NEEDS_REVIEW"
+    # External work is resumed independently by the deployed scheduler. A crash
+    # after persisting a response must not strand it behind duplicate-row detection.
+    return outcome
 
 
 def withdraw_consent(profile_id: str, *, reason: str | None = None, path: Path = REGISTRY_DB) -> None:
@@ -566,6 +593,9 @@ def get_record(profile_id: str, path: Path = REGISTRY_DB) -> dict[str, Any]:
         result["questionnaire_submissions"] = [dict(row) for row in db.execute("SELECT * FROM questionnaire_submissions WHERE invitation_id IN (SELECT invitation_id FROM questionnaire_invitations WHERE profile_id=?) ORDER BY submitted_at DESC", (profile_id,))]
         result["questionnaire_conflicts"] = [dict(row) for row in db.execute("SELECT * FROM questionnaire_conflicts WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
         result["consent_reviews"] = [dict(row) for row in db.execute("SELECT * FROM consent_reviews WHERE profile_id=? ORDER BY created_at DESC", (profile_id,))]
+        result["email_events"] = [dict(row) for row in db.execute("SELECT e.* FROM email_events e JOIN email_drafts d ON d.draft_id=e.draft_id WHERE d.profile_id=? ORDER BY e.created_at", (profile_id,))]
+        result["replies"] = [dict(row) for row in db.execute("SELECT * FROM replies WHERE profile_id=? ORDER BY created_at", (profile_id,))]
+        result["reports"] = [dict(row) for row in db.execute("SELECT report_id,status,delivery_status,delivery_recipient,sent_at,delivery_error FROM research_reports WHERE profile_id=?", (profile_id,))]
         result["contact_channels"] = json.loads(result["contact_channels_json"] or "[]")
         return result
 
@@ -793,6 +823,29 @@ def _synthetic_personalization(record: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def stored_invitation_personalization(record: dict[str, Any]) -> dict[str, Any]:
+    """Validate saved research only; generation performs no website requests."""
+    payload = json.loads(record.get("personalization_json") or "{}")
+    if payload.get("data_classification") != "OBSERVED":
+        raise PermissionError("observed personalization is missing; synthetic fixture data is not completed screening")
+    for field in ("business_description", "company_strength", "source_urls", "retrieved_at", "recommendations"):
+        if not payload.get(field):
+            raise PermissionError(f"stored personalization missing {field}")
+    if record.get("identity_verification_status") != "VERIFIED":
+        raise PermissionError("official website identity is not verified")
+    for item in payload["recommendations"][:2]:
+        if not all(item.get(key) for key in ("problem", "suggestion", "source_urls", "observed_at")):
+            raise PermissionError("observation needs a problem, recommendation, sources and timestamp")
+        if not all(_same_first_party_site(record["official_website"], url) for url in item["source_urls"]):
+            raise PermissionError("observation evidence belongs to another website")
+    for finding in payload.get("findings", []):
+        if "percentage" in finding:
+            n, d = finding.get("numerator"), finding.get("denominator")
+            if not isinstance(n, (int, float)) or not isinstance(d, (int, float)) or d <= 0 or not 0 <= n <= d or abs(finding["percentage"] - 100*n/d) > 0.11 or not finding.get("source_urls"):
+                raise PermissionError("percentage lacks defensible numerator, denominator or evidence")
+    return payload
+
+
 def create_manual_invitation_draft(
     profile_id: str,
     *,
@@ -835,28 +888,17 @@ def create_manual_invitation_draft(
     if not test_override and not intended:
         raise PermissionError("no single eligible first-party company email is available")
 
+    personalization = stored_invitation_personalization(record)
+    content_key = _hash(json.dumps([profile_id, recipient, record["official_website"], personalization, "manual-invitation-v1/evidence-2"], sort_keys=True))
     with _connect(path) as db:
-        existing = db.execute(
-            "SELECT d.*,i.invitation_reference FROM email_drafts d LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id "
-            "WHERE d.profile_id=? AND lower(COALESCE(d.delivery_recipient,d.recipient))=? "
-            "AND d.approval_status IN ('PENDING','APPROVED') AND COALESCE(i.status,'INVITED') NOT IN ('SENT','EXPIRED') ORDER BY d.draft_id DESC LIMIT 1",
-            (profile_id, recipient),
-        ).fetchone()
-        if existing and not force_new:
-            if test_override and not existing["test_override"]:
-                with _connect(path) as update_db:
-                    update_db.execute("UPDATE email_drafts SET intended_recipient=NULL,delivery_recipient=?,recipient_mode='TEST_OVERRIDE',test_override=1 WHERE draft_id=?", (recipient, existing["draft_id"]))
-            return {"status": "EXISTING", "draft_id": existing["draft_id"], "invitation_id": existing["invitation_id"],
-                    "invitation_reference": existing["invitation_reference"], "questionnaire_url": prefilled_form_url(existing["invitation_reference"]),
-                    "subject": existing["subject"], "body": existing["body"], "delivery_recipient": recipient,
-                    "intended_recipient": existing["intended_recipient"], "test_override": bool(existing["test_override"]),
-                    "evidence": json.loads(existing["evidence_json"] or "[]")}
+        existing = db.execute("SELECT d.*,i.invitation_reference FROM email_drafts d JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id WHERE d.content_key=?", (content_key,)).fetchone()
+        if existing:
+            return {**dict(existing), "status": "EXISTING", "questionnaire_url": prefilled_form_url(existing["invitation_reference"])}
 
     invitation_id, _token = create_questionnaire_invitation(profile_id, secret=secret, path=path, expires_at=expires_at)
     reference = get_invitation_reference(invitation_id, path=path)
     form_url = prefilled_form_url(reference)
-    observations = _manual_observations(record)
-    personalization = _synthetic_personalization(record)
+    observations = personalization["recommendations"][:2]
     evidence = []
     try:
         evidence.extend(json.loads(record.get("verification_evidence_json") or "[]"))
@@ -868,10 +910,10 @@ def create_manual_invitation_draft(
     for item in observations:
         title = item.get("title") or item.get("observation") or "Preliminary observation"
         urls = ", ".join(item.get("source_urls", [])) if isinstance(item.get("source_urls"), list) else ""
-        observation_lines.append(f"- {title}{(' (' + urls + ')') if urls else ''}")
+        observation_lines.append(f"- {title}: {item['problem']} Recommendation: {item['suggestion']} ({urls}; observed {item['observed_at']})")
     if not observation_lines:
         observation_lines.append("- No preliminary GEO observation is established in the current registry.")
-    synthetic_label = "DEMO_SYNTHETIC: metrics and observations are workflow fixtures, not website measurements.\n\n" if personalization else ""
+    synthetic_label = ""
     introduction = str(personalization.get("introduction") or "")
     description = str(personalization.get("business_description") or "")
     label = "OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n" if test_override else ""
@@ -880,16 +922,23 @@ def create_manual_invitation_draft(
             f"{introduction + chr(10) + chr(10) if introduction else ''}"
             f"We are inviting {record['name']} to participate in a research study about how public website information is represented in AI search. The website in this record is {record['official_website']}.\n\n"
             f"{('Business description: ' + description + chr(10) + chr(10)) if description else ''}"
+            f"Company strength: {personalization['company_strength']}\n\n"
             "Preliminary website observations already recorded in the research registry:\n" + "\n".join(observation_lines) + "\n\n"
             "These are observations and research hypotheses, not measured AI visibility results or guaranteed improvements. The proposed work is read-only public-website analysis; no website changes, experiments, or monitoring begin from this invitation.\n\n"
             f"Questionnaire: {form_url}\nInvitation reference: {reference}\n\n"
-            "Please review the questionnaire carefully. Any response remains subject to human review and explicit authorization.\n\n"
+            "Please answer both research interest and research authorization separately. Detailed research starts only after valid consent and identity and scope checks.\n\n"
             "Best regards\nGEO Research Outreach")
+    if re.search(r"\{\{?[^{}]+\}\}?", body):
+        raise ValueError("invitation contains unresolved template variables")
     draft_id = "draft-manual-" + secrets.token_urlsafe(12)
     with _connect(path) as db:
         db.execute("UPDATE email_drafts SET intended_recipient=?,delivery_recipient=?,recipient_mode=?,test_override=?,evidence_json=? WHERE invitation_id=?", (intended, recipient, "TEST_OVERRIDE" if test_override else "OFFICIAL_CONTACT", int(test_override), json.dumps(evidence, sort_keys=True), invitation_id))
         db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,invitation_id,intended_recipient,delivery_recipient,recipient_mode,test_override,evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (draft_id, profile_id, "manual-draft-v1", "manual-invitation-v1", recipient, _hash(subject + "\n" + body), body, "PENDING", None, None, subject, invitation_id, intended, recipient, "TEST_OVERRIDE" if test_override else "OFFICIAL_CONTACT", int(test_override), json.dumps(evidence, sort_keys=True)))
+    from outreach_agent.geo_engine_handoff import owner_fixture_matches
+    with _connect(path) as db:
+        db.execute("UPDATE email_drafts SET content_key=? WHERE draft_id=?", (content_key, draft_id))
+        db.execute("UPDATE questionnaire_invitations SET automation_authorized=?,scope_website=? WHERE invitation_id=?", (int(owner_fixture_matches(record, recipient)), record["official_website"], invitation_id))
     return {"status": "DRAFTED", "draft_id": draft_id, "invitation_id": invitation_id, "invitation_reference": reference,
             "questionnaire_url": form_url, "subject": subject, "body": body, "delivery_recipient": recipient,
             "intended_recipient": intended, "test_override": test_override, "evidence": evidence}
@@ -925,42 +974,26 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
                     categories["owner_controlled_test_excluded"].append(profile_id)
                     continue
                 recipient = str(binding["recipient"]).strip().casefold()
-                existing = next((item for item in record.get("email_drafts", [])
-                                 if str(item.get("approval_status")) in {"PENDING", "APPROVED"}
-                                 and str(item.get("delivery_recipient") or item.get("recipient") or "").casefold() == recipient), None)
-                if existing and str(existing.get("approval_status")) == "PENDING":
-                    categories["duplicate_already_invited"].append(profile_id)
-                    generated.append({"profile_id": profile_id, "draft_id": existing["draft_id"], "status": "EXISTING"})
-                    continue
-                # Preserve historical approved drafts, but prepare a fresh
-                # pending draft for the operator's current staging run. The
-                # force is limited to the explicit owner-test binding branch.
-                result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=path, test_override=True, force_new=True)
-                generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
-                categories["ready_for_approval"].append(profile_id)
+                result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=path, test_override=True)
+                generated.append({**result, "profile_id": profile_id})
+                categories["duplicate_already_invited" if result["status"] == "EXISTING" else "ready_for_approval"].append(profile_id)
                 continue
             discovered = _discovered_official_email_channels(record)
             official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})
             if len(official) != 1:
                 categories["missing_verified_recipient"].append(profile_id)
                 continue
-            existing = next((item for item in record.get("email_drafts", [])
-                             if str(item.get("approval_status")) in {"PENDING", "APPROVED"}
-                             and str(item.get("recipient", "")).casefold() == official[0]), None)
-            if existing:
-                categories["duplicate_already_invited"].append(profile_id)
-                generated.append({"profile_id": profile_id, "draft_id": existing["draft_id"], "status": "EXISTING"})
-                continue
             result = create_manual_invitation_draft(profile_id, delivery_recipient=official[0], secret=secret, path=path)
-            generated.append({"profile_id": profile_id, "draft_id": result["draft_id"], "status": result["status"]})
-            categories["ready_for_approval"].append(profile_id)
+            generated.append({**result, "profile_id": profile_id})
+            categories["duplicate_already_invited" if result["status"] == "EXISTING" else "ready_for_approval"].append(profile_id)
             if not any(str(item.get("review_status") or "").upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"} for item in discovered if str(item.get("email") or "").strip().casefold() == official[0]):
                 categories["discovered_unverified_recipient"].append(profile_id)
-        except PermissionError:
-            categories["insufficient_verified_evidence"].append(profile_id)
+        except PermissionError as exc:
+            categories["insufficient_verified_evidence"].append({"profile_id": profile_id, "error": str(exc)})
         except (KeyError, ValueError, RuntimeError, sqlite3.Error) as exc:
             categories["generation_failed"].append({"profile_id": profile_id, "error": str(exc)})
     draft_ids = [item["draft_id"] for item in generated]
+    batch_id = "batch-invitations-" + _hash("|".join(sorted(draft_ids or unique_ids)))[:20]
     summary = {
         "total_selected": len(unique_ids),
         "successfully_generated": len(generated),
@@ -973,7 +1006,7 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
         "generation_failed": len(categories["generation_failed"]),
     }
     with _connect(path) as db:
-        db.execute("INSERT INTO invitation_batches(batch_id,selected_profile_ids_json,draft_ids_json,summary_json,status,created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(batch_id) DO UPDATE SET draft_ids_json=excluded.draft_ids_json,summary_json=excluded.summary_json,status=CASE WHEN invitation_batches.status='APPROVED' THEN 'APPROVED' ELSE 'GENERATED' END", (batch_id, json.dumps(unique_ids), json.dumps(draft_ids), json.dumps(summary, sort_keys=True), "GENERATED", now()))
+        db.execute("INSERT INTO invitation_batches(batch_id,selected_profile_ids_json,draft_ids_json,summary_json,status,created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(batch_id) DO UPDATE SET draft_ids_json=excluded.draft_ids_json,summary_json=excluded.summary_json,status=invitation_batches.status", (batch_id, json.dumps(unique_ids), json.dumps(draft_ids), json.dumps(summary, sort_keys=True), "GENERATED", now()))
     return {"batch_id": batch_id, "summary": summary, "categories": categories, "draft_ids": draft_ids,
             "generated": generated, "status": "GENERATED"}
 

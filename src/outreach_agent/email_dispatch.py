@@ -65,7 +65,65 @@ class GmailProviderAdapter:
             result = send_gmail_message(recipient=recipient, sender=sender, subject=subject, body=body, settings=self.settings)
         except Exception as exc:
             raise EmailProviderError(str(exc), retryable=False) from exc
-        return ProviderResult(message_id=str(result.get("message_id") or result.get("id") or "gmail-accepted"))
+        return ProviderResult(message_id=str(result.get("provider_message_id") or result.get("message_id") or result.get("id") or ""))
+
+    def send_document(self, *, sender, recipient, subject, body, filename, content):
+        from outreach_agent.gmail_integration import send_gmail_message
+        result = send_gmail_message(sender=sender, recipient=recipient, subject=subject, body=body,
+                                    settings=self.settings, attachment=(filename, content))
+        return ProviderResult(result["provider_message_id"])
+
+
+def configured_dispatch():
+    """Use the existing sender identity and credentials; never silently simulate."""
+    import os
+    from outreach_agent.email_test_settings import PREFERRED_SENDER, AUTHORIZED_TEST_RECIPIENTS
+    if os.environ.get("OUTREACH_MAIL_PROVIDER", "outlook_desktop") == "outlook_desktop":
+        raise RuntimeError("Authorized sender chen.yuxuan9@northeastern.edu uses Word Mail Merge for Mac and Outlook Desktop. This local connection cannot send unattended from Render. No cloud mail API is authorized; export the persisted Word/CSV batch or authorize an API connection separately.")
+    from outreach_agent.gmail_integration import gmail_connection_status
+    if os.environ.get("SEND_MODE", "dry_run") != "live":
+        raise RuntimeError("SEND_MODE=live is required on the Outreach service; no message was sent")
+    status = gmail_connection_status()
+    if not status["authenticated"]:
+        raise RuntimeError(status["prerequisite"])
+    return GmailProviderAdapter(settings={}), PREFERRED_SENDER, DispatchConfig(allowed_recipients=frozenset(AUTHORIZED_TEST_RECIPIENTS))
+
+
+def send_invitation_batch(batch_id: str, *, path=REGISTRY_DB, provider=None, sender=None, config=None):
+    """The Send action is batch authorization; recipient restrictions still apply."""
+    import json
+    from dataclasses import asdict
+    from outreach_agent.geo_engine_handoff import owner_fixture_matches
+    init_registry(path)
+    with _connect(path) as db:
+        batch = db.execute("SELECT draft_ids_json FROM invitation_batches WHERE batch_id=?", (batch_id,)).fetchone()
+        if not batch:
+            raise ValueError("invitation batch not found")
+        ids = json.loads(batch["draft_ids_json"])
+        if not ids:
+            raise ValueError("invitation batch contains no generated drafts")
+        for draft_id in ids:
+            draft = db.execute("SELECT * FROM email_drafts WHERE draft_id=?", (draft_id,)).fetchone()
+            record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (draft["profile_id"],)).fetchone()
+            if record["withdrawal_status"] == "WITHDRAWN" or record["consent_status"] == "DECLINED":
+                raise PermissionError("Invitation blocked by withdrawal or declined participation")
+            if not owner_fixture_matches(record, draft["recipient"]):
+                raise PermissionError("Controlled staging dispatch is restricted to the two exact owner fixtures")
+    if provider is None:
+        try:
+            provider, sender, config = configured_dispatch()
+        except RuntimeError as exc:
+            with _connect(path) as db:
+                db.execute("UPDATE invitation_batches SET status='BLOCKED' WHERE batch_id=?", (batch_id,))
+                for draft_id in ids:
+                    key = f"blocked:{batch_id}:{draft_id}"
+                    if not db.execute("SELECT 1 FROM email_events WHERE idempotency_key=?", (key,)).fetchone():
+                        _event(db, draft_id, key, "DISPATCH_BLOCKED", "outlook_desktop", False, None, str(exc))
+            raise
+    outcomes = approve_and_dispatch_batch(ids, "EXPLICIT_DASHBOARD_SEND", provider=provider, sender=sender, path=path, config=config or DispatchConfig())
+    with _connect(path) as db:
+        db.execute("UPDATE invitation_batches SET status=? WHERE batch_id=?", ("SENT" if all(o.status in {"SENT", "DUPLICATE"} and o.message_id for o in outcomes) else "PARTIAL_OR_BLOCKED", batch_id))
+    return {"batch_id": batch_id, "outcomes": [asdict(o) for o in outcomes], "delivery_confirmation": "NOT_CONFIRMED"}
 
 
 def _utc_cutoff() -> str:
@@ -97,8 +155,10 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
             draft = db.execute("SELECT * FROM email_drafts WHERE draft_id=?", (draft_id,)).fetchone()
             if not draft:
                 outcomes.append(DispatchOutcome(draft_id, "NOT_FOUND", error="draft not found")); continue
-            key = f"dispatch:{draft_id}:{draft['preview_hash']}:{provider.name}"
-            prior = db.execute("SELECT event_id,event_type,message_id,error FROM email_events WHERE idempotency_key=?", (key,)).fetchone()
+            key = f"dispatch:{draft_id}"
+            prior = db.execute("SELECT event_id,event_type,message_id,error FROM email_events WHERE draft_id=? AND event_type IN ('DISPATCH_ACCEPTED','MANUAL_SEND_RECONCILED','MANUAL_PROVIDER_ACCEPTED')", (draft_id,)).fetchone()
+            if not prior:
+                prior = db.execute("SELECT event_id,event_type,message_id,error FROM email_events WHERE idempotency_key=?", (key,)).fetchone()
             if prior:
                 outcomes.append(DispatchOutcome(draft_id, "DUPLICATE", prior["event_id"], prior["message_id"], prior["error"])); continue
             if draft["approval_status"] != "APPROVED":
@@ -117,9 +177,20 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
             for attempt in range(1, config.max_attempts + 1):
                 attempt_id = "attempt-" + secrets.token_urlsafe(10)
                 created = now()
-                db.execute("INSERT INTO dispatch_attempts(attempt_id,draft_id,idempotency_key,provider,sender,recipient,attempt_number,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (attempt_id, draft_id, key, provider.name, sender, draft["recipient"], attempt, "PENDING", None, created, created))
+                claimed = db.execute("INSERT INTO dispatch_attempts(attempt_id,draft_id,idempotency_key,provider,sender,recipient,attempt_number,status,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(draft_id,idempotency_key,attempt_number) DO NOTHING", (attempt_id, draft_id, key, provider.name, sender, draft["recipient"], attempt, "PENDING", None, created, created))
+                db.commit()  # Durable claim precedes the irreversible provider call.
+                if claimed.rowcount != 1:
+                    outcomes.append(DispatchOutcome(draft_id, "IN_PROGRESS_OR_UNKNOWN", error="An existing attempt requires provider reconciliation; no resend attempted"))
+                    break
                 try:
-                    result = provider.send(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"])
+                    if draft["attachment_report_id"]:
+                        report = db.execute("SELECT document_base64 FROM research_reports WHERE report_id=?", (draft["attachment_report_id"],)).fetchone()
+                        if not report or not report["document_base64"]:
+                            raise EmailProviderError("persisted report document is missing")
+                        import base64
+                        result = provider.send_document(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"], filename=draft["attachment_report_id"] + ".docx", content=base64.b64decode(report["document_base64"]))
+                    else:
+                        result = provider.send(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"])
                 except EmailProviderError as exc:
                     last_error = str(exc)
                     status = "FAILED_RETRYABLE" if exc.retryable and attempt < config.max_attempts else "FAILED"
@@ -140,7 +211,9 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
                     invitation_id = draft["invitation_id"]
                     if invitation_id:
                         db.execute("UPDATE questionnaire_invitations SET status='SENT' WHERE invitation_id=? AND status IN ('DRAFTED','INVITED')", (invitation_id,))
-                    db.execute("UPDATE research_records SET recruitment_status='INVITED',promotion_state='INVITED',updated_at=? WHERE profile_id=?", (now(), draft["profile_id"]))
+                    if not draft["attachment_report_id"]:
+                        db.execute("UPDATE research_records SET recruitment_status='INVITED',promotion_state='INVITED',updated_at=? WHERE profile_id=?", (now(), draft["profile_id"]))
+                    db.commit()
                     outcomes.append(DispatchOutcome(draft_id, "SENT", event_id, result.message_id, attempts=attempt)); break
             else:
                 event_id = _event(db, draft_id, key, "DISPATCH_FAILED", provider.name, provider.enabled, None, last_error or "retry limit exhausted")
@@ -151,5 +224,7 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
 def approve_and_dispatch_batch(draft_ids: list[str], reviewer: str, *, provider: EmailProvider, sender: str,
                                path=REGISTRY_DB, config: DispatchConfig = DispatchConfig()) -> list[DispatchOutcome]:
     """The production batch path: human approval followed by dispatch."""
-    approve_email_batch(draft_ids, reviewer, path=path)
+    with _connect(path) as db:
+        pending = [row["draft_id"] for draft_id in draft_ids for row in db.execute("SELECT draft_id FROM email_drafts WHERE draft_id=? AND approval_status='PENDING'", (draft_id,))]
+    approve_email_batch(pending, reviewer, path=path)
     return dispatch_approved_drafts(draft_ids, provider=provider, sender=sender, path=path, config=config)

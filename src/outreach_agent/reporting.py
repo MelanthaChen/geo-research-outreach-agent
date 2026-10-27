@@ -122,8 +122,8 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     subtitle = doc.add_paragraph()
     subtitle.add_run("Evidence-backed website audit and research hypotheses").italic = True
     doc.add_paragraph(
-        "This is an independent owner-controlled staging analysis of a fictional demo website. "
-        "It is not a consent-gated Outreach handoff, does not represent a real shelter, and does not claim a measured improvement. "
+        "This report presents the GEO Engine evidence and findings for the website identified below. "
+        "Recommendations are research hypotheses and do not promise a measured improvement. "
         "Values not supplied by the source envelope are marked Not established; legacy fields marked Not supplied are not silently inferred."
     )
     if not evidence_complete or not baseline_complete:

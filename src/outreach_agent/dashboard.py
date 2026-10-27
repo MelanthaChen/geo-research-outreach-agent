@@ -35,7 +35,7 @@ from outreach_agent.gmail_integration import (
 )
 from outreach_agent.mail_merge import (
     DEFAULT_EXPORT_DIR, ExportLedger, assess_company_mail_merge, make_test_mail_merge, safe_file_component, save_export,
-    research_mail_merge_rows, save_research_mail_merge_xlsx, save_word_mail_merge_template,
+    research_mail_merge_rows, save_research_mail_merge_xlsx, save_word_mail_merge_template, save_merged_invitation_preview,
 )
 from outreach_agent.candidate_pool import export_candidate_csv
 from outreach_agent.phase6e_screening import PHASE6E_DB, list_phase6e_candidates, phase6e_summary
@@ -257,10 +257,14 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                             "admin_configured": password_hash_configured()})
                 return
             if parsed.path == "/health":
-                self._json({"status": "healthy", "service": "outreach-dashboard"})
+                self._json({"status": "healthy", "service": "outreach-dashboard", "commit": os.environ.get("RENDER_GIT_COMMIT", "local")})
                 return
             if parsed.path.startswith("/api/") and not self._dashboard_authenticated():
                 self._json({"error": "dashboard authentication required"}, 401)
+                return
+            if parsed.path == "/api/research/runtime":
+                target = urlparse(str(REGISTRY_DB))
+                self._json({"commit": os.environ.get("RENDER_GIT_COMMIT", "local"), "database_host": target.hostname, "database_name": target.path.lstrip("/"), "mail_provider": os.environ.get("OUTREACH_MAIL_PROVIDER", "outlook_desktop"), "sheets_credentials_present": bool(os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64") or os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_FILE")), "owner_automation": os.environ.get("OUTREACH_OWNER_TEST_AUTOMATION_ENABLED", "false")})
                 return
             if parsed.path == "/api/public/summary":
                 self._json({"error": "dashboard authentication required"}, 401)
@@ -572,7 +576,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
 
         def do_POST(self) -> None:  # noqa: N802
             parsed_path = urlparse(self.path).path
-            internal_result_import = parsed_path == "/api/integration/results"
+            internal_result_import = parsed_path in {"/api/integration/results", "/api/integration/tick"}
             auth_login = parsed_path == "/api/auth/login"
             auth_logout = parsed_path == "/api/auth/logout"
             if self.path.startswith("/api/") and self.path != "/api/questionnaire" and not internal_result_import and not auth_login and not self._dashboard_authenticated():
@@ -696,7 +700,32 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     if result["total"] > 500:
                         self._json({"error": "Narrow the filters before selecting more than 500 records", "total": result["total"], "max_selectable": 500}, 409)
                         return
-                    self._json({"total": result["total"], "profile_ids": [row["profile_id"] for row in result["records"]], "scope": filters})
+                    from outreach_agent.research_lifecycle import stored_invitation_personalization
+                    from outreach_agent.geo_engine_handoff import OWNER_FIXTURES
+                    eligible, excluded = [], []
+                    for row in result["records"]:
+                        try:
+                            stored_invitation_personalization(row)
+                            if row["profile_type"] == "owner_controlled_test" and row["profile_id"] not in OWNER_FIXTURES:
+                                raise PermissionError("owner fixture is not authorized for this run")
+                            eligible.append(row["profile_id"])
+                        except (ValueError, PermissionError) as exc:
+                            excluded.append({"profile_id": row["profile_id"], "error": str(exc)})
+                    self._json({"total": len(eligible), "profile_ids": eligible, "excluded": excluded, "scope": filters})
+                    return
+                if parsed.path == "/api/recruitment/batch-send":
+                    from outreach_agent.email_dispatch import send_invitation_batch
+                    try:
+                        self._json(send_invitation_batch(str(body.get("batch_id") or ""), path=REGISTRY_DB))
+                    except (ValueError, RuntimeError, PermissionError) as exc:
+                        self._json({"status": "BLOCKED", "error": str(exc)}, 409)
+                    return
+                if parsed.path == "/api/integration/tick":
+                    from scripts.sync_google_form_responses import sync_once
+                    try:
+                        self._json(sync_once(path=REGISTRY_DB))
+                    except Exception as exc:
+                        self._json({"status": "BLOCKED", "error": str(exc)}, 503)
                     return
                 if parsed.path == "/api/recruitment/batch-approve":
                     try:
@@ -714,16 +743,26 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         allowed_recipients = {str(value).strip() for value in requested_recipients if str(value).strip()}
                     with tempfile.TemporaryDirectory(prefix="geo-research-mail-merge-") as directory:
                         export_dir = Path(directory)
+                        batch_draft_ids = None
+                        if body.get("batch_id"):
+                            from outreach_agent.research_lifecycle import _connect
+                            with _connect(REGISTRY_DB) as db:
+                                batch = db.execute("SELECT draft_ids_json FROM invitation_batches WHERE batch_id=?", (str(body["batch_id"]),)).fetchone()
+                            if not batch:
+                                self._json({"error": "Batch not found"}, 404); return
+                            batch_draft_ids = json.loads(batch["draft_ids_json"])
                         rows = research_mail_merge_rows(
                             REGISTRY_DB,
                             profile_ids=profile_ids or None,
                             allowed_recipients=allowed_recipients,
+                            draft_ids=batch_draft_ids, include_pending=batch_draft_ids is not None,
                         )
                         if not rows:
-                            self._json({"error": "No approved invitation drafts matched the selected records"}, 409)
+                            self._json({"error": "No generated invitation drafts matched the selected batch"}, 409)
                             return
                         xlsx_path, xlsx_digest = save_research_mail_merge_xlsx(export_dir, "research_queue.xlsx", rows)
                         docx_path, docx_digest = save_word_mail_merge_template(export_dir)
+                        preview_path = save_merged_invitation_preview(export_dir, rows)
                         csv_path = export_dir / "research_queue.csv"
                         with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
                             writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), extrasaction="ignore")
@@ -733,6 +772,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
                             bundle.write(xlsx_path, arcname=xlsx_path.name)
                             bundle.write(docx_path, arcname=docx_path.name)
+                            bundle.write(preview_path, arcname=preview_path.name)
                             bundle.write(csv_path, arcname=csv_path.name)
                         payload = archive.getvalue()
                     self.send_response(200)

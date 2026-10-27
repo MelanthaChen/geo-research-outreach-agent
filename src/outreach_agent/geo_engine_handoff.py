@@ -13,6 +13,7 @@ import os
 import secrets
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -170,6 +171,19 @@ OWNER_TEST_AUTOMATION_PROFILES = frozenset({
     "whisker-haven-owner-demo-20261023-v1",
 })
 
+OWNER_FIXTURES = {
+    "geoairesume-owner-test-v1": ("geo-ai-resume.vercel.app", "yuxuan.chen.1031@outlook.com"),
+    "whisker-haven-owner-demo-20261023-v1": ("whisker-haven-demo.vercel.app", "yuxaun.chen.1031@outlook.com"),
+}
+
+
+def owner_fixture_matches(record, recipient: str) -> bool:
+    from urllib.parse import urlsplit
+    expected = OWNER_FIXTURES.get(record["profile_id"])
+    return bool(expected and record["profile_type"] == "owner_controlled_test"
+                and record["identity_verification_status"] == "VERIFIED"
+                and (urlsplit(record["official_website"]).hostname, recipient.casefold()) == expected)
+
 
 def owner_test_automation_enabled(profile_id: str) -> bool:
     """Fail closed unless the staging-only switch and exact IDs both match."""
@@ -195,11 +209,16 @@ def start_controlled_research(submission_id: str, *, path: Path, bridge: Propert
         handoff = db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? AND profile_version=?", (record["profile_id"], record["profile_version"])).fetchone()
         if not handoff or handoff["status"] != "HANDED_OFF" or not handoff["property_id"]:
             raise PermissionError("controlled research requires a completed GEO handoff")
+        if handoff["research_run_status"] == "INCOMPLETE":
+            return {"status": "INCOMPLETE", "result_record_id": handoff["research_result_record_id"], "error": handoff["research_error"], "idempotent": True}
         if handoff["research_run_status"] == "COMPLETED":
             return {"status": "COMPLETED", "idempotent": True, "property_id": handoff["property_id"], "result_record_id": handoff["research_result_record_id"]}
         if record["withdrawal_status"] == "WITHDRAWN":
             raise PermissionError("controlled research is blocked by withdrawal")
-        db.execute("UPDATE geo_handoffs SET research_run_status='RUNNING',research_started_at=?,research_error=NULL,updated_at=? WHERE handoff_id=?", (now(), now(), handoff["handoff_id"]))
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        claimed = db.execute("UPDATE geo_handoffs SET research_run_status='RUNNING',research_started_at=COALESCE(research_started_at,?),research_error=NULL,updated_at=? WHERE handoff_id=? AND (research_run_status!='RUNNING' OR updated_at<?)", (now(), now(), handoff["handoff_id"], cutoff))
+        if claimed.rowcount != 1:
+            return {"status": "RUNNING", "property_id": handoff["property_id"], "idempotent": True}
         db.execute("UPDATE research_records SET geo_research_status='RESEARCH_RUNNING',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
         db.commit()
         profile = _profile_for_handoff(record, submission)
@@ -209,14 +228,25 @@ def start_controlled_research(submission_id: str, *, path: Path, bridge: Propert
         if runner is None:
             raise RuntimeError("configured GEO Engine bridge does not support controlled research")
         result = runner(profile)
+        if result.get("status") != "COMPLETED":
+            raise RuntimeError("GEO Engine did not confirm completed research")
         nested = result.get("result") if isinstance(result, dict) else None
         result_record_id = (nested or {}).get("record_id") if isinstance(nested, dict) else None
         result_record_id = result_record_id or (result.get("record_id") if isinstance(result, dict) else None)
+        if not result_record_id:
+            raise RuntimeError("GEO Engine returned no persisted result identifier")
     except Exception as exc:
         with _connect(path) as db:
             db.execute("UPDATE geo_handoffs SET research_run_status='FAILED',research_error=?,updated_at=? WHERE handoff_id=?", (str(exc), now(), handoff["handoff_id"]))
             db.execute("UPDATE research_records SET geo_research_status='RESEARCH_FAILED',geo_integration_error=?,updated_at=? WHERE profile_id=?", (str(exc), now(), record["profile_id"]))
         return {"status": "FAILED", "property_id": handoff["property_id"], "error": str(exc), "retryable": True}
+    baseline = (nested or {}).get("baseline") or ((nested or {}).get("baseline_reference") or {}).get("results") or {}
+    if baseline.get("provider") == "CONTROLLED_FIXTURE":
+        with _connect(path) as db:
+            error = "GEO Engine research-run uses CONTROLLED_FIXTURE with no real model baseline; an authorized real provider and rendered website evidence are required"
+            db.execute("UPDATE geo_handoffs SET research_run_status='INCOMPLETE',research_result_record_id=?,research_error=?,updated_at=? WHERE handoff_id=?", (result_record_id, error, now(), handoff["handoff_id"]))
+            db.execute("UPDATE research_records SET geo_research_status='RESEARCH_INCOMPLETE',geo_integration_error=?,updated_at=? WHERE profile_id=?", (error, now(), record["profile_id"]))
+        return {"status": "INCOMPLETE", "result_record_id": result_record_id, "error": error}
     with _connect(path) as db:
         db.execute("UPDATE geo_handoffs SET research_run_status='COMPLETED',research_result_record_id=?,research_completed_at=?,updated_at=? WHERE handoff_id=?", (result_record_id, now(), now(), handoff["handoff_id"]))
         db.execute("UPDATE research_records SET geo_research_status='RESEARCH_COMPLETED',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))

@@ -49,7 +49,7 @@ def test_approved_export_and_reconciliation_do_not_assume_delivery(tmp_path):
     assert research_mail_merge_rows(db)[0]["merge_status"] == "READY_FOR_WORD_MAIL_MERGE"
     record_word_mail_merge_reconciliation(db, draft, status="EXPORTED_PREPARED", evidence="XLSX hash recorded", reviewer="human")
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT status FROM questionnaire_invitations").fetchone()[0] == "INVITED"
+        assert conn.execute("SELECT status FROM questionnaire_invitations").fetchone()[0] == "DRAFTED"
     record_word_mail_merge_reconciliation(db, draft, status="SENT_CONFIRMED", evidence="Outlook Sent Items message ID reviewed", reviewer="human")
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT status FROM questionnaire_invitations").fetchone()[0] == "SENT"

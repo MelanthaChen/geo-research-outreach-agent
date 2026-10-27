@@ -18,7 +18,7 @@ def profile(profile_id="company-backfill-1", *, owner=False, qualification="ELIG
 
 
 def fetcher(*args, **kwargs):
-    return ([{"url": "https://cedar.example/", "title": "Cedar Studio", "text": "Cedar Studio in Austin offers design services. Contact us for hours and services."}], {"robots": "ALLOWED", "mode": "TEST", "http_status": "200"})
+    return ([{"url": "https://cedar.example/", "title": "Cedar Studio", "text": "Cedar Studio in Austin offers design services."}], {"robots": "ALLOWED", "mode": "TEST", "http_status": "200"})
 
 
 def test_isolated_backfill_persists_profile_and_is_idempotent(tmp_path):

@@ -5,8 +5,16 @@ from outreach_agent.research_lifecycle import (
     generate_invitation_batch,
     get_record,
     init_registry,
-    register_profile,
+    register_profile as _register_profile,
 )
+
+
+from workflow_test_support import add_personalization
+
+def register_profile(profile, path):
+    result = _register_profile(profile, path)
+    add_personalization(path, profile['profile_id'])
+    return result
 
 
 def profile(profile_id: str, *, email: str | None = "hello@example.test", owner_test: bool = False) -> dict:
@@ -108,7 +116,7 @@ def test_bound_owner_test_recipients_use_normal_batch_workflow(tmp_path):
     assert [row[0] for row in rows] == ["yuxuan.chen.1031@outlook.com", "yuxaun.chen.1031@outlook.com"]
 
 
-def test_owner_test_batch_preserves_approved_history_and_refreshes_current_draft(tmp_path):
+def test_owner_test_batch_reuses_unchanged_approved_draft(tmp_path):
     path = tmp_path / "registry.db"
     register_profile(profile("owner-one", owner_test=True), path)
     with sqlite3.connect(path) as db:
@@ -118,19 +126,19 @@ def test_owner_test_batch_preserves_approved_history_and_refreshes_current_draft
     approve_invitation_batch(first["batch_id"], "operator", path=path)
 
     refreshed = generate_invitation_batch(["owner-one"], secret="test-secret", path=path)
-    assert refreshed["summary"]["ready_for_approval"] == 1
-    assert refreshed["generated"][0]["status"] == "DRAFTED"
-    assert refreshed["draft_ids"] != first["draft_ids"]
+    assert refreshed["summary"]["duplicate_already_invited"] == 1
+    assert refreshed["generated"][0]["status"] == "EXISTING"
+    assert refreshed["draft_ids"] == first["draft_ids"]
 
     record = get_record("owner-one", path)
-    assert len(record["email_drafts"]) == 2
-    assert {draft["approval_status"] for draft in record["email_drafts"]} == {"APPROVED", "PENDING"}
+    assert len(record["email_drafts"]) == 1
+    assert {draft["approval_status"] for draft in record["email_drafts"]} == {"APPROVED"}
 
     repeated = generate_invitation_batch(["owner-one"], secret="test-secret", path=path)
     assert repeated["summary"]["duplicate_already_invited"] == 1
     assert repeated["draft_ids"] == refreshed["draft_ids"]
     with sqlite3.connect(path) as db:
-        assert db.execute("select count(*) from email_drafts").fetchone()[0] == 2
+        assert db.execute("select count(*) from email_drafts").fetchone()[0] == 1
 
 
 def test_batch_approval_requires_explicit_reviewer_and_is_idempotent(tmp_path):

@@ -383,7 +383,7 @@ def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None
                     FROM email_drafts d JOIN research_records r ON r.profile_id=d.profile_id
                     LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id
                     WHERE d.approval_status IN ({statuses}) {where}
-                    ORDER BY r.name COLLATE NOCASE,d.draft_id"""
+                    ORDER BY lower(r.name),d.draft_id"""
         for row in db.execute(query, params):
             recipient = str(row["recipient"]).casefold()
             if allowed_recipients is not None and recipient not in {x.casefold() for x in allowed_recipients}:

@@ -1306,7 +1306,7 @@ def ingest_candidate_stores(*, business_db: Path, hotel_db: Path, registry_db: P
 
 def list_records(path: Path = REGISTRY_DB, *, q: str = "", profile_type: str = "", consent_status: str = "", identity_status: str = "", contact_status: str = "", screening_status: str = "", recruitment_status: str = "", geo_status: str = "", geographic_status: str = "", promotion_state: str = "", industry: str = "", location: str = "", sort: str = "name", limit: int = 50, offset: int = 0) -> dict[str, Any]:
     init_registry(path)
-    clauses, args = [], []
+    clauses, args = ["profile_id!=?"], ["cloud-owner-fixture-20261023-v2"]
     if q:
         clauses.append("(name LIKE ? OR official_website LIKE ? OR profile_id LIKE ?)"); args.extend([f"%{q}%"] * 3)
     if profile_type:

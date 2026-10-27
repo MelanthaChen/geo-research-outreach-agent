@@ -929,7 +929,6 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                                         "exclusion_counts": result["exclusion_counts"]}, 409)
                             return
                         from outreach_agent.mail_merge import MAIL_MERGE_COLUMNS
-                        import csv, io
                         output = io.StringIO(newline="")
                         writer = csv.DictWriter(output, fieldnames=MAIL_MERGE_COLUMNS, lineterminator="\r\n")
                         writer.writeheader()

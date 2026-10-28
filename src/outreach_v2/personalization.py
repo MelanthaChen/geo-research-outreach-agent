@@ -47,6 +47,9 @@ def fetch_page(url):
             if not rules.can_fetch('GEOResearchOutreach', url):
                 raise ValueError('Website robots rules disallow this page')
         elif robots.status_code not in {404, 410}:
+            # Preserve the HTTP status so 429/5xx failures receive the same
+            # bounded retry policy as other transient site responses.
+            robots.raise_for_status()
             raise ValueError('Website robots policy could not be checked')
         target = url
         for _ in range(3):

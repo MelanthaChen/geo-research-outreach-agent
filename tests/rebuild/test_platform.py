@@ -460,6 +460,22 @@ def test_personalization_backfill_claims_distinct_domains_and_persists_transient
     assert rows['batch-b']['personalization_retry_after']
     assert rows['batch-c']['personalization_lease_token'] is None
 
+def test_robots_server_error_is_classified_as_transient(monkeypatch):
+    import httpx
+    import outreach_v2.personalization as personalization
+    request=httpx.Request('GET','https://example.test/robots.txt')
+    response=httpx.Response(503,request=request)
+    class Client:
+        def __init__(self,*args,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,url):return response
+    monkeypatch.setattr(personalization,'public_url',lambda url:None)
+    monkeypatch.setattr(personalization.httpx,'Client',Client)
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        personalization.fetch_page('https://example.test/')
+    assert personalization._failure_kind(raised.value)=='TRANSIENT_HTTP'
+
 def test_postgres_text_keeps_embedded_nul_visible():
     assert postgres_text('before\x00after')=='before\ufffdafter'
     assert postgres_text(None) is None

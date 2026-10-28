@@ -61,8 +61,7 @@ jobs:
               state = subsystem.get('status', 'unknown')
               print(f'{name} status:', state)
               if state == 'ATTENTION_REQUIRED':
-                  detail = '; '.join(subsystem.get('errors') or [])
-                  print(f'::warning title={name} subsystem requires attention::{detail or state}')
+                  print(f'::warning title={name} subsystem requires attention::See Outreach Dashboard worker diagnostics.')
               if name == 'personalization':
                   batch = subsystem.get('batch') or {}
                   print('Personalization batch:', json.dumps(batch, sort_keys=True))

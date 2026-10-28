@@ -1,0 +1,23 @@
+{
+  "status": 200,
+  "headers": [
+    "Timestamp",
+    "Invitation Reference",
+    "Business Name",
+    "Is your company interested in participating in this research?",
+    "Your Role / Position",
+    "Does your company authorize our research team to conduct the research described above?",
+    "Business Website",
+    "How familiar are you with AI-powered search tools such as ChatGPT, Gemini, or Perplexity?",
+    "What would you most like to improve about your business's online presence?",
+    "What challenges do you currently face with your website or online visibility?",
+    "Would your business be interested in participating in further GEO research?",
+    "Full Name of the Authorized Company Representative",
+    "Job Title of the Authorized Company Representative",
+    "Business Email Address of the Authorized Company Representative",
+    "Do you confirm that you are authorized to provide this permission on behalf of your business?",
+    "May the research team contact you about your responses and possible next steps?",
+    "Additional comments or questions (optional)"
+  ],
+  "response_rows": 6
+}

@@ -1,0 +1,19 @@
+{
+  "reason": "Destination mistakenly encountered during source enumeration; no legacy source or live database modified",
+  "source_ids": [
+    "6d0ac62e38310df24a2251be4c083c77833f0e7fb662a9a8563ade03990b6acf",
+    "3b615e1accdcb7455219ceb6beddbdab87639e35a0fa0d21267919c75d1e2c6d",
+    "a06af9c53342334dc20778bcc11fd74395a0f618504affa48e973e792c39658e",
+    "fa9abc459a69cf04de5f05fa1f25bc5fdc13e78084d1927ba7872d24f7a5f776",
+    "bd68752af2f7be7dba3dacaaa2f3b0e5a571365908563cbf98d9e8abdf7a3385",
+    "f0eef62d590bd60bb7d313e2ae7f6ec71ee35fe883978d27702c91a4eea8b48e",
+    "929e21e5daf641bc0deb9bf83a71263f44e4bcdf5edf5f444599e9ab43f4fb16",
+    "49fda897b3e8cc1d90b689de7f89d04b3344d881ae2f6c755db74e18686657a3",
+    "303264b25c30412cdee7b67835fae3cdb365921ba75ae87b3841e9e3679f27e2",
+    "f9a6edea6d2d4ddd491f47834dc1a0a3a0143e0b815d05f2753b4a798920e250",
+    "2e5cbf64dd4abefca3add30aa98c7c7be685a5f7681c5dd410e03df4f2846ef8",
+    "c28549288bc828e3aeb28a561f375435c59ac7251506f3d422200653dd71e4a0"
+  ],
+  "source_rows": 344092,
+  "memberships": 689
+}

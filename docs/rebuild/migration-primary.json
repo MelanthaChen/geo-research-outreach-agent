@@ -1,0 +1,414 @@
+{
+  "candidates": {
+    "company": 57664,
+    "hotel": 15262
+  },
+  "contacts": 25709,
+  "personalization_ready": 244,
+  "source_rows": 572397,
+  "isolated_rows": 6,
+  "sources": [
+    {
+      "id": "7c8b83424c56e2589ef689c6fc2a5f71a8a183af3d0f191c39209e4245d8e274",
+      "path": "data/phase7_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:08.281300+00:00"
+    },
+    {
+      "id": "aa02d092fd35cb0022d9230135f9461889e59f2927ab14e1661a8ded6f80ba3a",
+      "path": "data/phase7_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:28.521781+00:00"
+    },
+    {
+      "id": "03d35e0c49a9eff2041f585871a495cf23125607872c1f78959fd677a39e2cd6",
+      "path": "data/phase7_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:28.525584+00:00"
+    },
+    {
+      "id": "5a0ba5b3889ac3ce4fd7e0df05fc00c912cde6c33cef8dfcf5af4220b80cf4e2",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:43.697900+00:00"
+    },
+    {
+      "id": "f9d41cefaca2db1812ccef616d33de2a9c11406229a40635a8d404d77ebccc09",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_contact_channels",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 24859,
+      "processed": 24859,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:59.083509+00:00"
+    },
+    {
+      "id": "4c1feb0a407cf21e9879bfaa2361f7ded73bcdf4788737361b13131d2398da4e",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 25,
+      "processed": 25,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:59.087736+00:00"
+    },
+    {
+      "id": "8a3a4bf538ec32e2c17b6828e82f5e0f4562680fb7fbf3c79b36f99b8721bbac",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:59.589186+00:00"
+    },
+    {
+      "id": "6ed52ad313e72cd818e2fad089b2da5ba288043031bedaab272a3dbe040390f6",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:41:59.591468+00:00"
+    },
+    {
+      "id": "171fb0c7b72d4f22b7e213df502dfc4aecb7f5498790540d321b7f2f9761fa65",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 4072,
+      "processed": 4072,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:01.707600+00:00"
+    },
+    {
+      "id": "aca814dfe4c6cfcdbdb0ece95e374f4cd88234aedf910dc26a39efc6006242ae",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_shortlist",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 5000,
+      "processed": 5000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:03.674141+00:00"
+    },
+    {
+      "id": "041059f22960354d862334b8696867cd07b76618f81124931339c301e7dbf254",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase7_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 1798,
+      "processed": 1798,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:04.651363+00:00"
+    },
+    {
+      "id": "0cef83d11b790b641cbf227985f59e699096b127760f7b237d9520203d49bee7",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase7_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 55911,
+      "processed": 55911,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:26.634343+00:00"
+    },
+    {
+      "id": "6ee782e5ce833647db2a20cbb4c58014d7c328276defddd120c34e563f541f73",
+      "path": "data/hotel_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 15262,
+      "processed": 15262,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:37.060924+00:00"
+    },
+    {
+      "id": "536d1d1c6a34d65f550d9631e42ab1055d1e37afffc7ecaf47b5c5e5aa55a417",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_contact_channels",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 850,
+      "processed": 850,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:37.500091+00:00"
+    },
+    {
+      "id": "a8a8510f1842f5a8cb237e9f745a4cf1b3d487a0059b153c48999f71ac451095",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_provenance",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 9787,
+      "processed": 9787,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:38.924248+00:00"
+    },
+    {
+      "id": "89f847cc13b857105121aa87a4195288740d797c0a0bd4088f73a995d2de2966",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_runs",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 524,
+      "processed": 524,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:38.992844+00:00"
+    },
+    {
+      "id": "f7f4a1c1f44c808be05e4c05a62db0bd66a729a801aee314a7b02c58e2d210bd",
+      "path": "data/hotel_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 4,
+      "processed": 4,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:42:38.994473+00:00"
+    },
+    {
+      "id": "0ab7a01a32db7ebe436f39473f005e95dc8c2d858f3636c11e04542640277780",
+      "path": "data/research_registry.db",
+      "relation": "research_records",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 72927,
+      "processed": 72927,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.593308+00:00"
+    },
+    {
+      "id": "b44da393c84bbf24c0367d43b04be72f9c9c1a54b4cf59b467cc39c251fa08ec",
+      "path": "data/research_registry.db",
+      "relation": "confirmation_emails",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.600889+00:00"
+    },
+    {
+      "id": "c1b165c4d2c75b612d5bbe037ce4518cd834577a07c78149ee1f4d9957d03e8e",
+      "path": "data/research_registry.db",
+      "relation": "consent_reviews",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.601633+00:00"
+    },
+    {
+      "id": "fed22a076980543aa52bfa7f4777cc50c2f9b539fb125befd1be3a6cd4299dae",
+      "path": "data/research_registry.db",
+      "relation": "dispatch_attempts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.602346+00:00"
+    },
+    {
+      "id": "fa439790bf57fcec262717766bf74b1f4fa197c189bd4ec2889c62c8e950f217",
+      "path": "data/research_registry.db",
+      "relation": "email_drafts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.603051+00:00"
+    },
+    {
+      "id": "1a575eab06b9c47375b2877dbb1615b7fa8759786f955d91c421342ef10ebd14",
+      "path": "data/research_registry.db",
+      "relation": "email_events",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.603576+00:00"
+    },
+    {
+      "id": "3605ea496e964797d9825e0722e06b762c09f94c276c216ad72bbc8337de3de8",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_content_cache",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.604249+00:00"
+    },
+    {
+      "id": "5e8ff6f079e652dec9be9e69961d333f396caafc15d13b1d07e0147329b7cc99",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_jobs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:43:28.607424+00:00"
+    },
+    {
+      "id": "5741f7a98540eae8a9c5d9aa40de42d894ed85a42aaeb9167103f6a4373254a9",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_queue",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 145854,
+      "processed": 145854,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.022765+00:00"
+    },
+    {
+      "id": "5dd9133234b178515d2b2671c4b9cb6c3ef2838802d533f35a68106a4d785655",
+      "path": "data/research_registry.db",
+      "relation": "geo_handoff_attempts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.026893+00:00"
+    },
+    {
+      "id": "45ba89d3f2c41a5602b5c7b36011a08946a4f1822038c0addc40bba26cae7903",
+      "path": "data/research_registry.db",
+      "relation": "geo_handoffs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.028201+00:00"
+    },
+    {
+      "id": "388af16e4a085d5fbd9084e08c9c5d97ebb4fd4c49a264c9c54356f62b783b18",
+      "path": "data/research_registry.db",
+      "relation": "invitation_batches",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.028967+00:00"
+    },
+    {
+      "id": "dcd569688225e34135e0f37c2218e96ace58b8a015938fbbf7c9c4138583f48d",
+      "path": "data/research_registry.db",
+      "relation": "owner_test_recipient_bindings",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.029475+00:00"
+    },
+    {
+      "id": "707e0ba0e3f58bd67a1902e059618cdf3c0ef7954e2107d6f465f05ba1583053",
+      "path": "data/research_registry.db",
+      "relation": "personalization_backfill_jobs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.030744+00:00"
+    },
+    {
+      "id": "7e1d213997c765788c2a65013e99dacd08485a7345bce7d74d69dc3006acf04c",
+      "path": "data/research_registry.db",
+      "relation": "personalization_backfill_queue",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 8785,
+      "processed": 8785,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.911768+00:00"
+    },
+    {
+      "id": "ea1729fc8bcec83b731e19c20f9176185c2679e71a986d44da16d46d5423f969",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_conflicts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.913015+00:00"
+    },
+    {
+      "id": "709d58cdf4c6a5353b649594d48c273eff081e38d991751ab2684e90488cd5e5",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_invitations",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.914051+00:00"
+    },
+    {
+      "id": "08926e74d22f9b8e88c52270b81057bb1c25fa9759887a922a98e20620c78af9",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_submissions",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.915402+00:00"
+    },
+    {
+      "id": "d9d521bc0e5ae887d79602db6809cd058af0b5522b28efd9fb4b3d450a185f1e",
+      "path": "data/research_registry.db",
+      "relation": "replies",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.915944+00:00"
+    },
+    {
+      "id": "c9c90c7c8f5e98685f8aa8de225b1d0a928869f60bf2960d15039dd742931fb8",
+      "path": "data/research_registry.db",
+      "relation": "research_reports",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:01.916538+00:00"
+    },
+    {
+      "id": "59cb9a3ddeba7c47235c14392797e210d836af2ec837326af8516c9c27731888",
+      "path": "data/research_registry.db",
+      "relation": "screening_analysis_results",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 244,
+      "processed": 244,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:02.032706+00:00"
+    },
+    {
+      "id": "dd516c8000f7fdb1ee5d675eda56401dbeb9fa0f556f10838a0af11dc8f64751",
+      "path": "data/research_registry.db",
+      "relation": "screenings",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 244,
+      "processed": 244,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:02.053405+00:00"
+    },
+    {
+      "id": "2f42fa723b06a90ca100eb8aa13f5199780ae83e27c8ccffd26c0bae376210eb",
+      "path": "data/research_registry.db",
+      "relation": "suppressed_recipients",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:44:02.054735+00:00"
+    }
+  ],
+  "unmapped_preserved_rows": 2364,
+  "counts_reconcile": true
+}

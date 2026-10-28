@@ -1,0 +1,73 @@
+"""Authenticated Sheets responses, independent decisions and immutable scope binding."""
+import uuid
+from sqlalchemy import select
+from .db import invitations,submissions,jobs,candidates,events,now
+from .migrate import dump,parse,sha
+from .template import host,EMAIL
+from outreach_agent.google_forms_integration import parse_sheet_row
+
+REQUIRED_HEADERS={
+ 'Invitation Reference','Is your company interested in participating in this research?',
+ 'Does your company authorize our research team to conduct the research described above?',
+ 'Full Name of the Authorized Company Representative','Job Title of the Authorized Company Representative',
+ 'Business Email Address of the Authorized Company Representative','Timestamp','Business Name','Business Website',
+ 'Do you confirm that you are authorized to provide this permission on behalf of your business?'}
+
+def process(db,row):
+    parsed=parse_sheet_row(row)
+    # Identity is the immutable content fingerprint, not a spreadsheet row number.
+    ident='submission-'+sha(dump(row));stamp=now()
+    with db.transaction(serialized=True) as c:
+        prior=c.execute(select(submissions.c.status).where(submissions.c.id==ident)).first()
+        if prior:return 'DUPLICATE'
+        inv=c.execute(select(invitations).where(invitations.c.reference==parsed.invitation_reference)).mappings().first()
+        status='BLOCKED_REFERENCE';reason='Unknown exact invitation reference'
+        if inv:
+            candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
+            authority=parse(inv['authority']);email=parsed.contact_email.lower()
+            known=c.execute(select(submissions).where(submissions.c.invitation_id==inv['id'])).mappings().all()
+            decisions={(r['interest'],r['authorization']) for r in known}
+            decision=(parsed.research_interest,parsed.research_authorization)
+            if inv['consent_status'] in {'BLOCKED_CONFLICT','WITHDRAWN'}:
+                status=inv['consent_status'];reason='Prior conflicting or withdrawn authorization remains blocked'
+            elif decisions and decision not in decisions:
+                status='BLOCKED_CONFLICT';reason='Conflicting interest/authorization submissions'
+            elif parsed.research_interest not in {'YES','NO'} or parsed.research_authorization not in {'YES','NO'}:
+                status='BLOCKED_CONSENT';reason='Both independent YES/NO answers are required'
+            elif decision!=('YES','YES'):
+                status='DECLINED';reason='Research requires both interest and authorization YES'
+            elif candidate['suppressed']:
+                status='WITHDRAWN';reason='Candidate suppressed or authorization withdrawn'
+            elif not parsed.representative_name or not parsed.representative_role or not EMAIL.fullmatch(email):
+                status='BLOCKED_IDENTITY';reason='Representative identity is incomplete'
+            elif not parsed.submitted_at:
+                status='BLOCKED_IDENTITY';reason='Submission timestamp is missing'
+            elif str(row.get('Business Name') or '').strip().casefold()!=inv['company_name'].strip().casefold() or host(str(row.get('Business Website') or ''))!=host(inv['website']):
+                status='BLOCKED_SCOPE';reason='Declared business identity or website differs from the invitation'
+            elif str(row.get('Do you confirm that you are authorized to provide this permission on behalf of your business?') or '').strip().casefold() not in {'yes','yes, i confirm'}:
+                status='BLOCKED_IDENTITY';reason='Representative has not affirmed authority to provide permission'
+            elif authority.get('website')!=inv['website'] or host(candidate['website'])!=host(inv['website']):
+                status='BLOCKED_SCOPE';reason='Current company website does not match the invited scope'
+            elif authority.get('method')=='OWNER_BINDING' and email==authority.get('representative') and inv['recipient']==authority.get('recipient'):
+                status='AUTHORIZED';reason='Exact established owner identity and website scope'
+            else:
+                # The current form collects a SELF-REPORTED address, not a Google-verified identity.
+                # Do not treat a matching text field or possession of a public reference as proof.
+                status='BLOCKED_IDENTITY';reason='Form email is self-reported; no independently verified representative identity is available'
+            if known and decision==('YES','YES') and any(r['status']=='AUTHORIZED' for r in known) and status=='AUTHORIZED':
+                status='DUPLICATE_CONSENT';reason='Authorization already bound; no additional research job'
+        c.execute(submissions.insert().values(id=ident,invitation_id=inv['id'] if inv else None,reference=parsed.invitation_reference,
+            interest=parsed.research_interest,authorization=parsed.research_authorization,
+            representative_name=parsed.representative_name,representative_role=parsed.representative_role,
+            representative_email=parsed.contact_email,submitted_at=parsed.submitted_at,received_at=stamp,status=status,reason=reason,raw=dump(row)))
+        if inv and status!='DUPLICATE_CONSENT':
+            c.execute(invitations.update().where(invitations.c.id==inv['id']).values(consent_status=status))
+            if status=='AUTHORIZED':
+                db.upsert(c,jobs,[dict(id='job-'+sha(inv['id'])[:24],invitation_id=inv['id'],submission_id=ident,
+                    status='QUEUED',stage='RESEARCH',idempotency_key='outreach-v2:'+inv['id'],property_id=None,audit_id=None,
+                    opportunity_ids=None,engine_job_id=None,result_id=None,result=None,attempts=0,next_attempt_at=stamp,
+                    lease_until=None,lease_token=None,error=None,created_at=stamp,started_at=None,completed_at=None,updated_at=stamp)],update=False)
+            else:
+                c.execute(jobs.update().where(jobs.c.invitation_id==inv['id']).values(status='BLOCKED_CONSENT',error=reason,updated_at=stamp))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=inv['id'],event=status,detail=reason,created_at=stamp))
+        return status

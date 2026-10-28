@@ -418,7 +418,7 @@ def test_lean_snapshot_import_keeps_archive_refs_without_duplicate_payloads(tmp_
     assert result['source_archive_rows_preserved_outside_v2']==1 and result['v2_source_rows']==0
 
 def test_v1_personalization_backfill_is_bounded_and_resumable(db):
-    from outreach_v2.personalization import backfill
+    from outreach_v2.personalization import backfill, observe
     candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
         personalization=False,fixture=False)
     page='<html><head><title>Example services</title><meta name="description" content="Example provides software services to small businesses."></head><body><h1>Example services</h1><p>Example provides software services to small businesses and explains its core product offering.</p></body></html>'
@@ -431,6 +431,8 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
     assert json.loads(row['personalization'])['recommendations'][0]['title']=='Answer common customer questions'
     assert not any(x['title'] in {'Page title','Page description'} for x in json.loads(row['personalization'])['recommendations'])
+    partial=observe('https://example.com/',page,now(),truncated=True)
+    assert partial['evidence']['content_sample_truncated'] is True
     assert backfill(db,limit=1,fetcher=fetch)=={'completed':0,'incomplete':0}
 
 def test_postgres_text_keeps_embedded_nul_visible():

@@ -38,15 +38,20 @@ def fetch_page(url):
                     target=new;continue
                 response.raise_for_status()
                 if 'text/html' not in response.headers.get('content-type',''):raise ValueError('Website did not return HTML')
-                chunks=[];size=0
+                chunks=[];size=0;truncated=False
                 for chunk in response.iter_bytes():
-                    size+=len(chunk)
-                    if size>512_000:raise ValueError('Website exceeds the bounded evidence size')
-                    chunks.append(chunk)
-                return target,b''.join(chunks).decode(response.encoding or 'utf-8',errors='replace')
+                    remaining=512_000-size
+                    if remaining<=0:
+                        truncated=True
+                        break
+                    if len(chunk)>remaining:
+                        chunks.append(chunk[:remaining]);size+=remaining;truncated=True
+                        break
+                    chunks.append(chunk);size+=len(chunk)
+                return target,b''.join(chunks).decode(response.encoding or 'utf-8',errors='replace'),truncated
         raise ValueError('Website redirect limit exceeded')
 
-def observe(url,html,stamp,name=None):
+def observe(url,html,stamp,name=None,truncated=False):
     soup=BeautifulSoup(html,'html.parser')
     for tag in soup(['script','style','nav','footer']):tag.decompose()
     description=soup.find('meta',attrs={'name':'description'})
@@ -84,7 +89,8 @@ def observe(url,html,stamp,name=None):
     return {'data_classification':'OBSERVED','business_description':description,
        'company_strength':strength,
        'source_urls':[url],'retrieved_at':stamp,'recommendations':rec[:2],
-       'evidence':{'description_quote':description,'heading_quote':heading,'visible_text_excerpt':body_text[:1200],'sampled_urls':[url]}}
+       'evidence':{'description_quote':description,'heading_quote':heading,'visible_text_excerpt':body_text[:1200],
+                   'sampled_urls':[url],'content_sample_truncated':bool(truncated)}}
 
 def backfill(db,limit=25,fetcher=fetch_page):
     if not 1<=limit<=100:raise ValueError('Backfill request budget must be between 1 and 100 websites')
@@ -102,7 +108,10 @@ def backfill(db,limit=25,fetcher=fetch_page):
     for row in rows:
         stamp=now()
         try:
-            url,html=fetcher(row['website']);p=observe(url,html,stamp,row.get('name'));validate(p,row['website'])
+            fetched=fetcher(row['website'])
+            url,html=fetched[:2]
+            truncated=fetched[2] if len(fetched)>2 else False
+            p=observe(url,html,stamp,row.get('name'),truncated);validate(p,row['website'])
             values={'personalization':dump(p),'personalization_status':'READY','personalization_at':stamp,'personalization_error':None,'description':p['business_description']}
             result['completed']+=1
         except Exception as e:

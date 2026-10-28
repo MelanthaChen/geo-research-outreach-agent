@@ -226,6 +226,10 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
         or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp),
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until < stamp),
         first_party_email_count == 1, no_prior_invitation)
+    backlog = and_(candidates.c.kind == 'company', candidates.c.fixture.is_(False),
+        candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
+        candidates.c.suppressed.is_(False), candidates.c.personalization_status != 'READY',
+        first_party_email_count == 1, no_prior_invitation)
     claimed = []
     domains = set()
     with db.transaction(serialized=True) as c:
@@ -247,8 +251,11 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
                 break
 
     result = {'attempted': 0, 'completed': 0, 'incomplete': 0, 'permanent_insufficiency': 0,
-              'transient_failures': 0, 'failure_categories': {}, 'failure_reasons': {}, 'elapsed_seconds': 0}
+              'transient_failures': 0, 'failure_categories': {}, 'failure_reasons': {}, 'elapsed_seconds': 0,
+              'remaining_backlog': 0}
     if not claimed:
+        with db.transaction() as c:
+            result['remaining_backlog'] = c.scalar(select(func.count()).select_from(candidates).where(backlog)) or 0
         return result
     started = time.monotonic()
     deadline = started + time_budget_seconds
@@ -331,4 +338,6 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
                     candidates.c.personalization_lease_token == lease_token).values(
                     personalization_lease_token=None, personalization_lease_until=None))
     result['elapsed_seconds'] = round(time.monotonic() - started, 2)
+    with db.transaction() as c:
+        result['remaining_backlog'] = c.scalar(select(func.count()).select_from(candidates).where(backlog)) or 0
     return result

@@ -428,6 +428,7 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='real-backfill')).mappings().one()
     assert result['attempted']==1 and result['completed']==1 and result['incomplete']==0
+    assert result['remaining_backlog']==0
     assert result['failure_categories']=={} and result['permanent_insufficiency']==0
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
     assert json.loads(row['personalization'])['recommendations'][0]['title']=='Answer common customer questions'
@@ -452,6 +453,7 @@ def test_personalization_backfill_claims_distinct_domains_and_persists_transient
     assert result['attempted']==2
     assert result['completed']==1 and result['incomplete']==1
     assert result['failure_categories']=={'TRANSIENT_HTTP':1}
+    assert result['remaining_backlog']==2
     with db.transaction() as c:
         rows={r.id:dict(r) for r in c.execute(select(candidates).where(candidates.c.id.in_(['batch-a','batch-b','batch-c']))).mappings()}
     assert rows['batch-a']['personalization_status']=='READY'

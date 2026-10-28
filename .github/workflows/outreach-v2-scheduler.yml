@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Invoke the authenticated, bounded worker
+      - name: Run up to four independent bounded personalization batches
         env:
           WORKER_URL: ${{ secrets.OUTREACH_STAGING_URL }}
           WORKER_TOKEN: ${{ secrets.OUTREACH_WORKER_TOKEN }}
@@ -33,29 +33,61 @@ jobs:
             https://*) ;;
             *) echo 'Worker URL must use HTTPS.'; exit 1 ;;
           esac
-          response_file="$RUNNER_TEMP/outreach-worker-response.json"
-          status_code="$(curl --silent --show-error --output "$response_file" \
-            --write-out '%{http_code}' --max-time 480 \
-            --request POST \
-            --header "Authorization: Bearer ${WORKER_TOKEN}" \
-            --header 'Content-Type: application/json' \
-            --data '{"max_jobs":1}' \
-            "${WORKER_URL%/}/api/internal/worker-tick")"
-          if [[ "$status_code" == '409' ]]; then
-            echo 'A database-locked worker invocation is already active.'
-            exit 0
-          fi
-          if [[ "$status_code" != '200' ]]; then
-            echo "Worker returned HTTP ${status_code}."
-            exit 1
-          fi
-          python - "$response_file" <<'PY'
+          start_epoch=$(date +%s)
+          total_attempted=0
+          total_ready=0
+          total_deferred=0
+          total_transient=0
+          remaining_backlog='unknown'
+          max_batches=4
+          for batch_number in $(seq 1 "$max_batches"); do
+            elapsed=$(( $(date +%s) - start_epoch ))
+            if (( elapsed >= 450 )); then
+              echo 'Stopping at the 7m30s workflow budget; remaining work resumes next schedule.'
+              break
+            fi
+            response_file="$RUNNER_TEMP/outreach-worker-response-${batch_number}.json"
+            status_code="$(curl --silent --show-error --output "$response_file" \
+              --write-out '%{http_code}' --max-time 90 \
+              --request POST \
+              --header "Authorization: Bearer ${WORKER_TOKEN}" \
+              --header 'Content-Type: application/json' \
+              --data '{"max_jobs":1}' \
+              "${WORKER_URL%/}/api/internal/worker-tick")"
+            if [[ "$status_code" == '409' ]]; then
+              echo 'A database-locked worker invocation is already active; stopping safely.'
+              break
+            fi
+            if [[ "$status_code" != '200' ]]; then
+              echo "Worker batch ${batch_number} returned HTTP ${status_code}."
+              exit 1
+            fi
+            parsed="$({ python - "$response_file" <<'PY'
           import json, sys
           with open(sys.argv[1], encoding='utf-8') as response:
               result = json.load(response)
-          print('Worker run:', result.get('worker_run_id', 'missing'))
-          print('Worker status:', result.get('status', 'missing'))
-          print('Processed stages:', result.get('processed_stages', 'missing'))
-          if result.get('status') != 'COMPLETED':
-              raise SystemExit('Worker requires attention; inspect the persisted run before retrying.')
+          if result.get('invocation_status') != 'COMPLETED':
+              raise SystemExit('Worker invocation did not complete; inspect the persisted run.')
+          batch = result.get('personalization_backfill') or result.get('subsystems', {}).get('personalization', {}).get('batch')
+          if not isinstance(batch, dict):
+              raise SystemExit('Worker response omitted personalization batch diagnostics.')
+          print('	'.join(str(batch.get(key, 0)) for key in ('attempted', 'completed', 'incomplete', 'transient_failures')) + '	' + str(batch.get('remaining_backlog', 'unknown')))
+          print('run=' + str(result.get('worker_run_id', 'missing')), file=sys.stderr)
+          print('status=' + str(result.get('status', 'missing')), file=sys.stderr)
+          print('consent=' + str(result.get('subsystems', {}).get('consent', {}).get('status', 'unknown')), file=sys.stderr)
           PY
+          } 2>"$RUNNER_TEMP/outreach-worker-${batch_number}.log")"
+            cat "$RUNNER_TEMP/outreach-worker-${batch_number}.log"
+            IFS=$'	' read -r attempted ready deferred transient backlog <<< "$parsed"
+            total_attempted=$((total_attempted + attempted))
+            total_ready=$((total_ready + ready))
+            total_deferred=$((total_deferred + deferred))
+            total_transient=$((total_transient + transient))
+            remaining_backlog="$backlog"
+            echo "Batch ${batch_number}: attempted=${attempted}, READY=${ready}, DEFERRED=${deferred}, transient=${transient}, remaining_backlog=${backlog}"
+            if (( attempted == 0 )) || [[ "$remaining_backlog" == '0' ]]; then
+              echo 'No actionable candidates remain for this invocation.'
+              break
+            fi
+          done
+          echo "Invocation totals: attempted=${total_attempted}, READY=${total_ready}, DEFERRED=${total_deferred}, transient=${total_transient}, remaining_backlog=${remaining_backlog}"

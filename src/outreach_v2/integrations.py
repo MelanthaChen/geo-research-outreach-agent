@@ -214,6 +214,13 @@ class GraphReports:
         if r.status_code!=200:raise ConfigurationBlocked('Microsoft application authorization failed')
         self.client=httpx.Client(base_url='https://graph.microsoft.com/v1.0',headers={'Authorization':'Bearer '+r.json()['access_token'],'Prefer':'IdType="ImmutableId"'},timeout=30)
         self.mailbox='/users/'+quote(self.sender,safe='')
+        self.subject='Your GEO website research report'
+        self.body='Thank you for participating in the GEO research study. Your evidence-based website optimization report is attached. The report describes the observed findings, recommendations and limitations.\n\nBest regards\nGEO Research Outreach'
+    def configure_message(self,subject,body,sender=None):
+        if sender and sender.lower()!=self.sender.lower():
+            raise ConfigurationBlocked('Configured report sender does not match the authorized mailbox')
+        if not subject.strip() or not body.strip():raise ConfigurationBlocked('Configured report email template is empty')
+        self.subject=subject.strip();self.body=body.strip()
     def reconcile(self,key):
         value=key.replace("'","''")
         r=self.client.get(self.mailbox+'/messages',params={'$filter':f"singleValueExtendedProperties/Any(ep: ep/id eq '{GRAPH_PROPERTY}' and ep/value eq '{value}')",'$select':'id,isDraft,sentDateTime,internetMessageId,toRecipients'})
@@ -224,7 +231,7 @@ class GraphReports:
     def create(self,key,recipient,document):
         existing=self.reconcile(key)
         if existing:return existing
-        payload={'subject':'Your GEO website research report','body':{'contentType':'Text','content':'Thank you for participating in the GEO research study. Your evidence-based website optimization report is attached. The report describes the observed findings, recommendations and limitations.\n\nBest regards\nGEO Research Outreach'},
+        payload={'subject':self.subject,'body':{'contentType':'Text','content':self.body},
                  'toRecipients':[{'emailAddress':{'address':recipient}}],
                  'singleValueExtendedProperties':[{'id':GRAPH_PROPERTY,'value':key}],
                  'attachments':[{'@odata.type':'#microsoft.graph.fileAttachment','name':'GEO-research-report.docx','contentType':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','contentBytes':base64.b64encode(document).decode()}]}

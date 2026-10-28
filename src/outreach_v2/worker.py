@@ -1,10 +1,10 @@
 """One durable scheduler tick. No browser timer or web-process background loop."""
 from __future__ import annotations
-import hashlib,json,os,tempfile,uuid
+import hashlib,hmac,json,os,tempfile,uuid
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from sqlalchemy import select,or_,and_
-from .db import jobs,invitations,submissions,candidates,reports,deliveries,worker_runs,events,now
+from .db import jobs,invitations,submissions,candidates,reports,deliveries,worker_runs,events,report_reviews,admin_users,email_templates,now
 from .migrate import dump,parse,sha
 from .consent import process
 from .integrations import Sheets,Engine,GraphReports,ConfigurationBlocked,OutcomeUncertain,VerifiedFormResponse
@@ -97,8 +97,24 @@ def report_step(db,job,renderer=None):
 def delivery_step(db,job,mail_factory):
     with db.transaction() as c:
         inv,_=context(c,job);report=dict(c.execute(select(reports).where(reports.c.job_id==job['id'])).mappings().one())
+        template=c.execute(select(email_templates).where(email_templates.c.active.is_(True)).order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
         if report['recipient']!=inv['recipient']:raise ValueError('Report recipient does not match original invitation')
+        document_hash=hashlib.sha256(report['document'] or b'').hexdigest()
+        if not report['document'] or not report['sha256'] or not hmac.compare_digest(document_hash,report['sha256']):
+            raise ConfigurationBlocked('Stored DOCX integrity check failed; delivery is blocked')
+        review=c.execute(select(report_reviews).where(report_reviews.c.report_id==report['id'],
+            report_reviews.c.document_sha256==document_hash).order_by(report_reviews.c.reviewed_at.desc())).mappings().first()
+        if not review or review['decision']!='APPROVED':
+            raise ConfigurationBlocked('Exact DOCX version awaits approval from an authorized administrator')
+        reviewer=review['reviewer_email'].lower()
+        admin=c.execute(select(admin_users.c.role,admin_users.c.status).where(admin_users.c.email==reviewer)).mappings().first()
+        env_admin=os.environ.get('OUTREACH_ADMIN_EMAIL','chen.yuxuan9@northeastern.edu').lower()
+        authorized=bool(admin and admin['status']=='ACTIVE' and admin['role'] in {'ADMIN','APPROVER'}) or reviewer==env_admin
+        if not authorized:
+            raise ConfigurationBlocked('DOCX approval is no longer attributable to an active administrator')
     mail=mail_factory()  # Authorization is required before any provider action.
+    if template and hasattr(mail,'configure_message'):
+        mail.configure_message(template['subject'],template['body'],template['sender'])
     key='outreach-report:'+report['id']
     with db.transaction(serialized=True) as c:
         context(c,job)

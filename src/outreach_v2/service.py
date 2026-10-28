@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,secrets,uuid
 from sqlalchemy import select,func,and_,or_,exists
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,now
+from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from outreach_agent.google_forms_integration import prefilled_form_url
@@ -139,6 +139,10 @@ def generate(db,selection,key):
             if len(ids)>100000:raise ValueError('Selection too large')
             query=select(candidates).where(candidates.c.id.in_(ids)).order_by(candidates.c.id)
         batch_id='batch-'+uuid.uuid4().hex;generated=[];excluded=[];seen=set()
+        questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
+        questionnaire_fields=parse(questionnaire['field_map']) if questionnaire else {}
+        configured_form=questionnaire['form_url'] if questionnaire else None
+        reference_entry=questionnaire_fields.get('invitation_reference_entry_id') if questionnaire else None
         c.execute(batches.insert().values(id=batch_id,request_key=key,selection_hash=selection_hash,created_at=stamp,bulk_subject=BULK_SUBJECT))
         for row in c.execute(query).mappings():
             recipient,reasons=eligible_recipient(c,row)
@@ -147,7 +151,8 @@ def generate(db,selection,key):
             if reasons:
                 excluded.append({'candidate_id':row['id'],'company':row['name'],'reasons':reasons});continue
             p=parse(row['personalization'])
-            invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper();url=prefilled_form_url(reference)
+            invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper()
+            url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
             try:
                 subject,body=render(row['name'],row['website'],p,url,reference,row['fixture'])
             except ValueError as exc:
@@ -162,7 +167,8 @@ def generate(db,selection,key):
                 authority={'method':'OWNER_BINDING','website':row['website'],**binding}
             item=dict(id=invitation_id,candidate_id=row['id'],batch_id=batch_id,reference=reference,recipient=recipient,
                       website=row['website'],company_name=row['name'],subject=subject,body=body,form_url=url,
-                      template_version=VERSION,personalization=dump(p),generated_at=stamp,exported_at=stamp,
+                      template_version=VERSION,questionnaire_id=questionnaire['id'] if questionnaire else None,
+                      personalization=dump(p),generated_at=stamp,exported_at=stamp,
                       send_status='UNVERIFIED',consent_status='NOT_RECEIVED',authority=dump(authority))
             c.execute(invitations.insert().values(**item));generated.append(item);seen.add(recipient)
         if not generated:

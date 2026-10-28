@@ -4,12 +4,12 @@ from contextlib import contextmanager
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,worker_runs,now,sources,source_rows,source_memberships
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
-from outreach_v2.worker import tick,claim,research_step,report_step
+from outreach_v2.worker import tick,claim,research_step,report_step,delivery_step
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,Engine,verified_form_rows,VerifiedFormResponse,_sheet_row
 from outreach_agent.google_forms_integration import parse_sheet_row
 
@@ -214,7 +214,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==3
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==4
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -347,6 +347,133 @@ def test_disabled_outreach_reconciles_completed_engine_result_and_creates_docx_w
     with zipfile.ZipFile(io.BytesIO(report['document'])) as docx:
         assert 'word/document.xml' in docx.namelist()
     assert count(db,deliveries)==0
+
+def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    leased=_authorized_leased_job(db)
+    class CompletedEngine:
+        def reconcile(self,key):return _completed_engine_result(leased)
+    research_step(db,leased,CompletedEngine)
+    with db.transaction() as c:leased=dict(c.execute(select(jobs).where(jobs.c.id==leased['id'])).mappings().one())|{'lease_token':leased['lease_token']}
+    report_step(db,leased,renderer=lambda _result:b'PK\x03\x04isolated-docx-v1')
+    with db.transaction() as c:
+        report=dict(c.execute(select(reports).where(reports.c.job_id==leased['id'])).mappings().one())
+    class Mail:
+        def __init__(self):self.calls=[]
+        def configure_message(self,subject,body,sender):self.calls.append(('configure',subject,body,sender))
+        def reconcile(self,key):self.calls.append(('reconcile',key));return None
+        def create(self,key,recipient,document):self.calls.append(('create',recipient,document));return {'id':'draft-1'}
+        def send(self,message_id):self.calls.append(('send',message_id));return {'status':'ACCEPTED'}
+    mail=Mail()
+    def forbidden_mail_factory():pytest.fail('Mail provider must not be initialized before exact-version review')
+    with pytest.raises(ConfigurationBlocked,match='Exact DOCX version awaits approval'):
+        delivery_step(db,leased,forbidden_mail_factory)
+    assert count(db,deliveries)==0
+    monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
+    with db.transaction() as c:
+        c.execute(email_templates.insert().values(id='mail-template-test',version=1,subject='Approved report notice',
+            body='Your attached report is ready.',sender='reports@example.org',active=True,
+            created_by='chen.yuxuan9@northeastern.edu',created_at=now()))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    assert login.status_code==200 and login.json()['role']=='ADMIN'
+    csrf=login.json()['csrf'];headers={'X-CSRF-Token':csrf}
+    stale=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+        json={'decision':'APPROVED','document_sha256':'0'*64})
+    assert stale.status_code==422
+    approved=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+        json={'decision':'APPROVED','document_sha256':report['sha256']})
+    assert approved.status_code==200 and approved.json()['status']=='APPROVED'
+    changes=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+        json={'decision':'CHANGES_REQUESTED','document_sha256':report['sha256'],'note':'Clarify one finding.'})
+    assert changes.status_code==200
+    with pytest.raises(ConfigurationBlocked,match='Exact DOCX version awaits approval'):
+        delivery_step(db,leased,forbidden_mail_factory)
+    assert count(db,deliveries)==0
+    reapproved=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+        json={'decision':'APPROVED','document_sha256':report['sha256']})
+    assert reapproved.status_code==200
+    delivery_step(db,leased,lambda:mail)
+    assert [call[0] for call in mail.calls]==['configure','reconcile','create','send']
+    assert mail.calls[0]==('configure','Approved report notice','Your attached report is ready.','reports@example.org')
+    assert mail.calls[2][2]==report['document']
+    with db.transaction() as c:
+        current=dict(c.execute(select(reports).where(reports.c.id==report['id'])).mappings().one())
+        review=dict(c.execute(select(report_reviews).where(report_reviews.c.report_id==report['id'])
+            .order_by(report_reviews.c.reviewed_at.desc()).limit(1)).mappings().one())
+    assert review['document_sha256']==current['sha256']==hashlib.sha256(current['document']).hexdigest()
+    assert count(db,deliveries)==1
+
+def test_admin_invites_are_one_time_and_role_scoped(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    csrf=login.json()['csrf'];headers={'X-CSRF-Token':csrf}
+    invite_result=client.post('/api/admin/invites',headers=headers,json={'email':'reviewer@example.org','role':'APPROVER'})
+    assert invite_result.status_code==200 and invite_result.json()['delivery']=='MANUAL_HANDOFF_REQUIRED'
+    token=invite_result.json()['token']
+    accepted=client.post('/api/admin/invites/accept',json={'token':token,'password':'local-only-strong-password'})
+    assert accepted.status_code==200 and accepted.json()['role']=='APPROVER'
+    assert client.post('/api/admin/invites/accept',json={'token':token,'password':'local-only-strong-password'}).status_code==403
+    reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={
+        'email':'reviewer@example.org','password':'local-only-strong-password'})
+    assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
+    assert reviewer.get('/api/admin/users').status_code==403
+
+def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_exact_100_person_pilot(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    for i in range(100):
+        candidate(db,ident=f'pilot-{i:03}',email=f'contact{i}@pilot-example.org',
+            website=f'https://company-{i:03}.pilot-example.org',name=f'Pilot Company {i:03}',fixture=False)
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false');monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    form='https://docs.google.com/forms/d/e/existing-form-id/viewform'
+    monkeypatch.setenv('GEO_RESEARCH_FORM_URL',form);monkeypatch.setenv('GEO_RESEARCH_FORM_ENTRY_ID','entry.123456')
+    first=client.post('/api/admin/questionnaires',headers=headers,json={'form_url':form,
+        'field_map':{'invitation_reference_entry_id':'entry.123456'}})
+    second=client.post('/api/admin/questionnaires',headers=headers,json={'form_url':form,
+        'field_map':{'invitation_reference_entry_id':'entry.123456'}})
+    assert first.status_code==second.status_code==200
+    question_rows=client.get('/api/admin/questionnaires').json()['rows']
+    assert len(question_rows)==2 and [r['active'] for r in question_rows]==[True,False]
+    saved=client.post('/api/admin/email-templates',headers=headers,json={'subject':'Research report',
+        'body':'Your report is ready.','sender':'reports@example.org'})
+    assert saved.status_code==200 and saved.json()['sender_configured'] is True
+    cohort=client.post('/api/admin/pilot-cohorts',headers=headers,json={'name':'Cohort 1'})
+    assert cohort.status_code==200 and cohort.json()['member_count']==100
+    assert cohort.json()['invitations_created']==0 and count(db,invitations)==0
+    cohort_id=cohort.json()['id']
+    detail=client.get(f'/api/admin/pilot-cohorts/{cohort_id}')
+    assert detail.status_code==200 and len(detail.json()['members'])==100
+    first_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
+    second_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
+    assert first_package.status_code==second_package.status_code==200
+    manifest=json.loads(zipfile.ZipFile(io.BytesIO(first_package.content)).read('manifest.json'))
+    assert manifest['count']==100 and manifest['excluded']==[]
+    assert first_package.headers['X-Batch-Id']==second_package.headers['X-Batch-Id']
+    assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
+    candidate(db,ident='questionnaire-check',email='check@external-example.org',website='https://check.external-example.org',
+        name='Questionnaire Check',fixture=False)
+    package=invite(db,['questionnaire-check'],key='questionnaire-versioned-package-123')
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).where(invitations.c.candidate_id=='questionnaire-check')).mappings().one()
+    assert saved['questionnaire_id']==second.json()['id']
+    assert 'entry.123456' in saved['form_url'] and form.split('/viewform')[0] in saved['form_url']
+    with db.transaction() as c:
+        assert c.scalar(select(func.count()).select_from(pilot_members).where(pilot_members.c.cohort_id==cohort_id))==100
 
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)
@@ -592,3 +719,52 @@ def test_all_invalid_invitation_batch_rolls_back_without_partial_records(db):
     with pytest.raises(ValueError,match='No eligible invitations'):
         generate(db,{'ids':['invalid-only']},'all-invalid-invitation-request')
     assert count(db,batches)==0 and count(db,invitations)==0
+
+def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_package(db,monkeypatch):
+    from copy import deepcopy
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from openpyxl import load_workbook
+    from outreach_v2.app import create_app
+    candidate(db,'package-valid','yuxuan.chen.1031@outlook.com',name='Brace Company',website='https://geo-ai-resume.vercel.app')
+    candidate(db,'package-invalid','invalid@ordinary.example',name='Incomplete Company',website='https://ordinary.example',fixture=False)
+    valid_personalization={'data_classification':'OBSERVED','business_description':'The page documents {"mode": "public"}.',
+        'company_strength':'It presents {verified examples}.','source_urls':['https://geo-ai-resume.vercel.app'],
+        'retrieved_at':now(),'recommendations':[{'title':'Observed {schema} example','problem':'The page shows {field: value}.',
+            'suggestion':'Keep the {field} label consistent.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='package-valid').values(personalization=dump(valid_personalization)))
+        c.execute(candidates.update().where(candidates.c.id=='package-invalid').values(personalization=dump({
+            'data_classification':'OBSERVED','company_strength':'Observed only.','source_urls':['https://ordinary.example'],
+            'retrieved_at':now(),'recommendations':[{'title':'One observed item','problem':'Observed problem.',
+                'suggestion':'Possible correction.','source_urls':['https://ordinary.example'],'observed_at':now()}]})))
+    before={t.name:count(db,t) for t in (invitations,batches,submissions,jobs)}
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    assert login.status_code==200 and login.json()['role']=='ADMIN'
+    response=client.post('/api/batches',headers={'X-CSRF-Token':login.json()['csrf'],'Idempotency-Key':'isolated-api-package-key-123'},
+        json={'ids':['package-valid','package-invalid']})
+    assert response.status_code==200
+    package=zipfile.ZipFile(io.BytesIO(response.content));manifest=json.loads(package.read('manifest.json'))
+    assert manifest['count']==1 and manifest['excluded'][0]['candidate_id']=='package-invalid'
+    assert manifest['excluded'][0]['reasons']==['Missing V1 field: business_description']
+    csv_rows=list(csv.DictReader(io.StringIO(package.read('invitations.csv').decode('utf-8-sig'))))
+    workbook=load_workbook(io.BytesIO(package.read('invitations.xlsx')))
+    assert list(csv_rows[0])==[cell.value for cell in workbook.active[1]]
+    assert list(csv_rows[0].values())==[cell.value for cell in workbook.active[2]]
+    assert csv_rows[0]['company_name']=='Brace Company'
+    assert '{"mode": "public"}' in csv_rows[0]['email_body'] and '{field: value}' in csv_rows[0]['email_body']
+    assert manifest['invitations'][0]['invitation_id']==csv_rows[0]['invitation_id']
+    assert manifest['invitations'][0]['invitation_reference']==csv_rows[0]['invitation_reference']
+    from docx import Document
+    preview=Document(io.BytesIO(package.read('personalized-previews.docx')))
+    preview_text='\n'.join(p.text for p in preview.paragraphs)
+    assert '{"mode": "public"}' in preview_text and csv_rows[0]['invitation_reference'] in preview_text
+    merge=zipfile.ZipFile(io.BytesIO(package.read('invitation-mail-merge.docx')))
+    assert 'word/document.xml' in merge.namelist()
+    assert manifest['excluded']==json.loads(package.read('manifest.json'))['excluded']
+    after={t.name:count(db,t) for t in (invitations,batches,submissions,jobs)}
+    assert after=={'invitations':1,'batches':1,'submissions':0,'jobs':0}
+    assert all(after[t.name]-before[t.name] == (1 if t in (invitations,batches) else 0) for t in (invitations,batches,submissions,jobs))

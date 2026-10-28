@@ -51,7 +51,7 @@ invitations = table('invitations', col('id', String, primary_key=True),
     Column('batch_id', String, ForeignKey(f'{SCHEMA}.batches.id'), nullable=False, index=True),
     col('reference', String, unique=True, nullable=False), col('recipient', String, nullable=False),
     col('website', nullable=False), col('company_name', nullable=False), col('subject'), col('body'), col('form_url'),
-    col('template_version'), col('personalization'), col('generated_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
+    col('template_version'), col('questionnaire_id'), col('personalization'), col('generated_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
     col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'))
 submissions = table('submissions', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), index=True), col('reference'),
@@ -84,6 +84,26 @@ worker_runs = table('worker_runs', col('id', String, primary_key=True), col('sta
     col('status'), col('detail'))
 schema_migrations = table('schema_migrations', Column('version', Integer, primary_key=True),
     col('name', String, nullable=False), col('applied_at', nullable=False))
+admin_users = table('admin_users', col('id', String, primary_key=True), col('email', String, unique=True, nullable=False),
+    col('password_hash', String, nullable=False), col('role', String, nullable=False), col('status', String, nullable=False),
+    col('created_by', String), col('created_at', nullable=False))
+admin_invites = table('admin_invites', col('id', String, primary_key=True), col('email', String, nullable=False),
+    col('role', String, nullable=False), col('token_hash', String, unique=True, nullable=False), col('expires_at', nullable=False),
+    col('invited_by', String, nullable=False), col('accepted_at'))
+email_templates = table('email_templates', col('id', String, primary_key=True), col('version', Integer, nullable=False),
+    col('subject', String, nullable=False), col('body', Text, nullable=False), col('sender', String),
+    col('active', Boolean, nullable=False, default=False), col('created_by', String), col('created_at', nullable=False))
+questionnaires = table('questionnaires', col('id', String, primary_key=True), col('version', Integer, nullable=False),
+    col('form_url', Text, nullable=False), col('field_map', Text, nullable=False), col('active', Boolean, nullable=False, default=False),
+    col('created_by', String), col('created_at', nullable=False))
+pilot_cohorts = table('pilot_cohorts', col('id', String, primary_key=True), col('name', String, nullable=False),
+    col('target_size', Integer, nullable=False), col('created_by', String, nullable=False), col('created_at', nullable=False))
+pilot_members = table('pilot_members', Column('cohort_id', String, ForeignKey(f'{SCHEMA}.pilot_cohorts.id'), primary_key=True),
+    Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), primary_key=True), col('position', Integer, nullable=False),
+    col('eligibility_snapshot', Text, nullable=False))
+report_reviews = table('report_reviews', col('id', String, primary_key=True),
+    Column('report_id', String, ForeignKey(f'{SCHEMA}.reports.id'), nullable=False, index=True), col('document_sha256', String, nullable=False),
+    col('decision', String, nullable=False), col('reviewer_email', String, nullable=False), col('reviewed_at', nullable=False), col('note'))
 Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candidates.c.qualification)
 
 MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
@@ -99,6 +119,9 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
         'personalization_lease_token': 'TEXT',
         'personalization_lease_until': 'TEXT'
     }
+}), (4, 'multi-admin-pilot-and-versioned-report-review', {
+    'reports': {'approval_required': 'BOOLEAN NOT NULL DEFAULT TRUE'},
+    'invitations': {'questionnaire_id': 'TEXT'}
 })]
 
 class Database:

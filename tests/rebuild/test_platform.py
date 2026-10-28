@@ -471,6 +471,9 @@ def test_personalization_backfill_claims_distinct_domains_and_persists_transient
     assert rows['batch-b']['personalization_attempts']==1
     assert rows['batch-b']['personalization_retry_after']
     assert rows['batch-c']['personalization_lease_token'] is None
+    # A second worker invocation in the same scheduler window must honor the
+    # durable 15-minute domain cooldown as well as candidate retry backoff.
+    assert backfill(db,limit=3,fetcher=transient,concurrency=2)['attempted']==0
 
 def test_robots_server_error_is_classified_as_transient(monkeypatch):
     import httpx

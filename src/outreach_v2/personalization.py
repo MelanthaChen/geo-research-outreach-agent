@@ -234,7 +234,13 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
         first_party_email_count == 1, no_prior_invitation)
     claimed = []
     domains = set()
+    domain_cooldown = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
     with db.transaction(serialized=True) as c:
+        recently_processed = set(c.execute(select(candidates.c.domain).select_from(
+            events.join(candidates, events.c.entity_id == candidates.c.id)).where(
+                events.c.event.in_(['PERSONALIZATION_READY', 'PERSONALIZATION_INCOMPLETE']),
+                events.c.created_at >= domain_cooldown)).scalars())
+        recently_processed = {_domain_key(domain) for domain in recently_processed if domain}
         query = select(candidates).where(eligible).order_by(
             candidates.c.personalization_at.asc().nulls_first(), candidates.c.id).limit(min(1000, limit * 20))
         if db.postgres:
@@ -242,7 +248,7 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
         for item in c.execute(query).mappings():
             row = dict(item)
             domain = _domain_key(row.get('domain'))
-            if domain in domains:
+            if domain in domains or domain in recently_processed:
                 continue
             result = c.execute(candidates.update().where(candidates.c.id == row['id'], eligible).values(
                 personalization_lease_token=lease_token, personalization_lease_until=lease_until))

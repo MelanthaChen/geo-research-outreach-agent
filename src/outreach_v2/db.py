@@ -3,7 +3,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from sqlalchemy import (MetaData, Table, Column, String, Text, Integer, Boolean, LargeBinary,
-                        ForeignKey, UniqueConstraint, Index, create_engine, event, text)
+                        ForeignKey, UniqueConstraint, Index, create_engine, event, text, inspect, select)
 
 SCHEMA = 'outreach_v2'
 metadata = MetaData(schema=SCHEMA)
@@ -51,7 +51,8 @@ invitations = table('invitations', col('id', String, primary_key=True),
 submissions = table('submissions', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), index=True), col('reference'),
     col('interest'), col('authorization'), col('representative_name'), col('representative_role'), col('representative_email'),
-    col('submitted_at'), col('received_at'), col('status'), col('reason'), col('raw'))
+    col('submitted_at'), col('received_at'), col('identity_provider'), col('identity_verified_email'),
+    col('identity_reference'), col('status'), col('reason'), col('raw'))
 jobs = table('jobs', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), unique=True, nullable=False),
     Column('submission_id', String, ForeignKey(f'{SCHEMA}.submissions.id'), nullable=False),
@@ -76,7 +77,13 @@ auth_attempts = table('auth_attempts', col('id', String, primary_key=True), col(
     col('successful', Boolean), col('created_at'))
 worker_runs = table('worker_runs', col('id', String, primary_key=True), col('started_at'), col('finished_at'),
     col('status'), col('detail'))
+schema_migrations = table('schema_migrations', Column('version', Integer, primary_key=True),
+    col('name', String, nullable=False), col('applied_at', nullable=False))
 Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candidates.c.qualification)
+
+MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
+    'submissions': {'identity_provider': 'TEXT', 'identity_verified_email': 'TEXT', 'identity_reference': 'TEXT'}
+})]
 
 class Database:
     def __init__(self, url=None):
@@ -94,10 +101,22 @@ class Database:
                 dbapi.execute('PRAGMA foreign_keys=ON')
                 dbapi.execute('PRAGMA journal_mode=WAL')
     def initialize(self):
-        if self.postgres:
-            with self.engine.begin() as c:
+        with self.engine.begin() as c:
+            if self.postgres:
                 c.execute(text(f'CREATE SCHEMA IF NOT EXISTS {SCHEMA}'))
-        metadata.create_all(self.engine)
+            metadata.create_all(c)
+            if self.postgres:
+                c.execute(text(f'LOCK TABLE {SCHEMA}.schema_migrations IN EXCLUSIVE MODE'))
+            for version, name, changes in MIGRATIONS:
+                if c.execute(select(schema_migrations.c.version).where(schema_migrations.c.version == version)).first():
+                    continue
+                for table_name, columns in changes.items():
+                    existing = {column['name'] for column in inspect(c).get_columns(table_name, schema=SCHEMA if self.postgres else None)}
+                    for column_name, sql_type in columns.items():
+                        if column_name not in existing:
+                            schema = f'{SCHEMA}.' if self.postgres else ''
+                            c.execute(text(f'ALTER TABLE {schema}{table_name} ADD COLUMN {column_name} {sql_type}'))
+                c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
     @contextmanager
     def transaction(self, *, serialized=False):
         with self.engine.connect() as c:

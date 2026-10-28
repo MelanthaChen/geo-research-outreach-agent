@@ -2,9 +2,9 @@ services:
   - type: web
     name: geo-research-outreach
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install '.[gmail,cloud]'
-    startCommand: python scripts/phase5b_dashboard.py --host 0.0.0.0 --port $PORT
+    startCommand: python scripts/outreach_v2.py serve --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: false
     envVars:

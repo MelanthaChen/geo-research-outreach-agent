@@ -9,18 +9,18 @@ from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump
 from outreach_v2.worker import tick
-from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain
+from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse
 
 @pytest.fixture
 def db(tmp_path):
     result=Database('sqlite:///'+str(tmp_path/'test.db'));result.initialize();return result
 
-def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True):
+def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=True):
     p={'data_classification':'OBSERVED','business_description':'Resume building website.','company_strength':'The page describes resume building features.',
        'source_urls':[website],'retrieved_at':now(),'recommendations':[{'title':'Page title','problem':'The sampled page has no title.','suggestion':'Add a descriptive page title.','source_urls':[website],'observed_at':now()}]}
     with db.transaction() as c:
-        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',fixture=True,created_at=now(),updated_at=now()))
-        c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,verification='OWNER_AUTHORIZED',suppressed=False))
+        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',fixture=fixture,created_at=now(),updated_at=now()))
+        c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
     return ident
 
 def invite(db,ids=['a'],key='stable-request-key-123'):
@@ -93,6 +93,50 @@ def test_foreign_representative_does_not_redirect_report(db):
     candidate(db);invite(db);row=response(db,email='someone@other.example')
     assert process(db,row)=='BLOCKED_IDENTITY';assert count(db,jobs)==0
     with db.transaction() as c:assert c.scalar(select(invitations.c.recipient))=='yuxuan.chen.1031@outlook.com'
+
+def test_real_company_requires_google_verified_invited_mailbox(db):
+    candidate(db,ident='real',email='research@company.example',website='https://company.example',name='Example Company',fixture=False)
+    invite(db,['real'],key='real-invite-key-12345')
+    row=response(db,id='real',email='research@company.example')
+    assert process(db,row)=='BLOCKED_IDENTITY'
+    assert count(db,jobs)==0
+    identity={'provider':'GOOGLE_FORMS_VERIFIED','email':'research@company.example','response_id':'forms-response-1','email_collection_type':'VERIFIED'}
+    assert process(db,row,verified_identity=identity)=='AUTHORIZED'
+    assert count(db,jobs)==1
+    with db.transaction() as c:
+        sub=c.execute(select(submissions).where(submissions.c.identity_reference=='forms-response-1')).mappings().one()
+        assert sub['identity_provider']=='GOOGLE_FORMS_VERIFIED' and sub['identity_verified_email']=='research@company.example'
+
+@pytest.mark.parametrize('email',[None,'someone@company.example','research@other.example'])
+def test_real_company_verified_identity_must_match_invited_recipient(db,email):
+    candidate(db,ident='real',email='research@company.example',website='https://company.example',name='Example Company',fixture=False)
+    invite(db,['real'],key='real-invite-key-12345')
+    row=response(db,id='real',email='research@company.example')
+    identity={'provider':'GOOGLE_FORMS_VERIFIED','email':email or '','response_id':'forms-response-1','email_collection_type':'VERIFIED'}
+    assert process(db,row,verified_identity=identity)=='BLOCKED_IDENTITY'
+    assert count(db,jobs)==0
+
+def test_google_forms_verified_rows_require_verified_collection_and_match_sheet_contract():
+    from outreach_v2.consent import REQUIRED_HEADERS
+    form={'settings':{'emailCollectionType':'VERIFIED'},'items':[{'title':h,'questionItem':{'question':{'questionId':str(i)}}} for i,h in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))]}
+    row={'responseId':'r1','respondentEmail':'research@company.example','lastSubmittedTime':'2026-10-27T12:00:00Z',
+         'answers':{str(i):{'textAnswers':{'answers':[{'value':'GEO-1'}]}} for i,_ in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))}}
+    result=verified_form_rows(form,[row],list(REQUIRED_HEADERS))
+    assert len(result)==1 and isinstance(result[0],VerifiedFormResponse)
+    assert result[0].identity['email']=='research@company.example'
+    assert result[0].answers['Invitation Reference']=='GEO-1'
+    form['settings']['emailCollectionType']='RESPONDER_INPUT'
+    with pytest.raises(ConfigurationBlocked,match='VERIFIED'):verified_form_rows(form,[row],list(REQUIRED_HEADERS))
+
+def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
+    path=tmp_path/'prior.db'
+    with sqlite3.connect(path) as c:
+        c.execute('create table submissions (id text primary key, invitation_id text, reference text, interest text, authorization text, representative_name text, representative_role text, representative_email text, submitted_at text, received_at text, status text, reason text, raw text)')
+    migrated=Database('sqlite:///'+str(path));migrated.initialize();migrated.initialize()
+    with migrated.engine.connect() as c:
+        names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
+        assert {'identity_provider','identity_verified_email','identity_reference'}<=names
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==1
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)

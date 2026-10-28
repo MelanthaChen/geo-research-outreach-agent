@@ -1,13 +1,59 @@
 """Real authenticated transports. Missing configuration is an explicit block."""
 from __future__ import annotations
 import os,json,base64
+from dataclasses import dataclass
 from urllib.parse import quote
 import httpx
 from .consent import REQUIRED_HEADERS
-from outreach_agent.google_forms_integration import RESPONSE_SPREADSHEET_ID
+from outreach_agent.google_forms_integration import FORM_ID,RESPONSE_SPREADSHEET_ID
 
 class ConfigurationBlocked(RuntimeError):pass
 class OutcomeUncertain(RuntimeError):pass
+
+SHEETS_SCOPE='https://www.googleapis.com/auth/spreadsheets.readonly'
+FORMS_BODY_SCOPE='https://www.googleapis.com/auth/forms.body.readonly'
+FORMS_RESPONSES_SCOPE='https://www.googleapis.com/auth/forms.responses.readonly'
+
+@dataclass(frozen=True)
+class VerifiedFormResponse:
+    answers:dict
+    identity:dict
+
+class SheetRead(list):
+    def __init__(self,rows,identity_status='UNAVAILABLE',identity_error=None):
+        super().__init__(rows);self.identity_status=identity_status;self.identity_error=identity_error
+
+def _answer_value(answer):
+    for group in ('textAnswers','choiceAnswers'):
+        values=(answer.get(group) or {}).get('answers') or []
+        if values:return ', '.join(str(v.get('value','')) for v in values if v.get('value') is not None)
+    return ''
+
+def verified_form_rows(form,responses,sheet_headers):
+    """Convert only API-authenticated, VERIFIED Forms responses into consent rows."""
+    if (form.get('settings') or {}).get('emailCollectionType')!='VERIFIED':
+        raise ConfigurationBlocked('Google Form email collection must be VERIFIED')
+    from .consent import REQUIRED_HEADERS
+    titles={}
+    for item in form.get('items') or []:
+        question=((item.get('questionItem') or {}).get('question') or {})
+        qid=question.get('questionId');title=str(item.get('title') or '').strip()
+        if qid and title:titles[qid]=title
+    required_questions=REQUIRED_HEADERS-{'Timestamp'}
+    if not required_questions.issubset(set(titles.values())):
+        raise ConfigurationBlocked('Google Form questions do not match the live response-sheet consent contract')
+    if not REQUIRED_HEADERS.issubset(set(sheet_headers)):
+        raise ConfigurationBlocked('Live Sheet headers do not match the independent consent contract')
+    output=[]
+    for response in responses:
+        respondent=str(response.get('respondentEmail') or '').strip().lower()
+        if not respondent:continue
+        row={title:_answer_value(answer) for qid,answer in (response.get('answers') or {}).items() if (title:=titles.get(qid))}
+        row['Timestamp']=str(response.get('lastSubmittedTime') or response.get('createTime') or '')
+        if not row.get('Invitation Reference'):continue
+        output.append(VerifiedFormResponse(row,{'provider':'GOOGLE_FORMS_VERIFIED','email':respondent,
+            'response_id':str(response.get('responseId') or ''),'email_collection_type':'VERIFIED'}))
+    return output
 
 class Sheets:
     def read(self):
@@ -15,18 +61,43 @@ class Sheets:
         from google.auth.transport.requests import AuthorizedSession
         encoded=os.environ.get('GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64')
         path=os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        scopes=[SHEETS_SCOPE,FORMS_BODY_SCOPE,FORMS_RESPONSES_SCOPE]
         if encoded:
-            credentials=service_account.Credentials.from_service_account_info(json.loads(base64.b64decode(encoded)),scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+            credentials=service_account.Credentials.from_service_account_info(json.loads(base64.b64decode(encoded)),scopes=scopes)
         elif path:
-            credentials=service_account.Credentials.from_service_account_file(path,scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+            credentials=service_account.Credentials.from_service_account_file(path,scopes=scopes)
         else:raise ConfigurationBlocked('Authenticated Google Sheets service account is not configured')
         session=AuthorizedSession(credentials)
         range_name=os.environ.get('GEO_RESEARCH_SHEETS_RANGE','Form Responses 1!A:Z')
         response=session.get(f'https://sheets.googleapis.com/v4/spreadsheets/{RESPONSE_SPREADSHEET_ID}/values/{quote(range_name,safe="")}',timeout=30)
         if response.status_code!=200:raise ConfigurationBlocked(f'Google Sheets returned HTTP {response.status_code}')
         rows=response.json().get('values') or []
-        if not rows or not REQUIRED_HEADERS.issubset(rows[0]):raise ConfigurationBlocked('Live Sheet headers do not match the independent consent and identity contract')
-        return [dict(zip(rows[0],row)) for row in rows[1:]]
+        if not rows or not REQUIRED_HEADERS.issubset(rows[0]):raise ConfigurationBlocked('Live Sheet headers do not match the independent consent contract')
+        sheet_rows=[dict(zip(rows[0],row)) for row in rows[1:]]
+        # The Sheet's business-email question is self-reported. Only Forms API
+        # respondentEmail plus the VERIFIED collection setting can establish
+        # independent control of the account that submitted a response.
+        try:
+            form_response=session.get(f'https://forms.googleapis.com/v1/forms/{FORM_ID}',params={'fields':'formId,settings.emailCollectionType,items.title,items.questionItem.question.questionId'},timeout=30)
+            if form_response.status_code!=200:raise ConfigurationBlocked(f'Google Forms API unavailable (HTTP {form_response.status_code})')
+            form=form_response.json()
+            if (form.get('settings') or {}).get('emailCollectionType')!='VERIFIED':
+                raise ConfigurationBlocked('Google Form email collection is not configured as VERIFIED')
+            responses=[];page_token=None
+            while True:
+                params={'pageSize':500}
+                if page_token:params['pageToken']=page_token
+                result=session.get(f'https://forms.googleapis.com/v1/forms/{FORM_ID}/responses',params=params,timeout=30)
+                if result.status_code!=200:raise ConfigurationBlocked(f'Google Forms response access unavailable (HTTP {result.status_code})')
+                payload=result.json();responses.extend(payload.get('responses') or [])
+                page_token=payload.get('nextPageToken')
+                if not page_token:break
+            return SheetRead(verified_form_rows(form,responses,rows[0]),'VERIFIED')
+        except ConfigurationBlocked as exc:
+            # Continue processing already-authorized owner fixtures and record
+            # ordinary responses as blocked identity, while surfacing the missing
+            # verification capability in worker health.
+            return SheetRead(sheet_rows,'UNAVAILABLE',str(exc))
 
 class Engine:
     """Requires the durable job API; never falls back to historical fixture runs."""

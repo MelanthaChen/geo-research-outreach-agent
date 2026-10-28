@@ -13,10 +13,11 @@ REQUIRED_HEADERS={
  'Business Email Address of the Authorized Company Representative','Timestamp','Business Name','Business Website',
  'Do you confirm that you are authorized to provide this permission on behalf of your business?'}
 
-def process(db,row):
+def process(db,row,verified_identity=None):
     parsed=parse_sheet_row(row)
     # Identity is the immutable content fingerprint, not a spreadsheet row number.
-    ident='submission-'+sha(dump(row));stamp=now()
+    verification=verified_identity or {}
+    ident='submission-'+sha(dump({'answers':row,'verified_identity':verification}));stamp=now()
     with db.transaction(serialized=True) as c:
         prior=c.execute(select(submissions.c.status).where(submissions.c.id==ident)).first()
         if prior:return 'DUPLICATE'
@@ -50,16 +51,25 @@ def process(db,row):
                 status='BLOCKED_SCOPE';reason='Current company website does not match the invited scope'
             elif authority.get('method')=='OWNER_BINDING' and email==authority.get('representative') and inv['recipient']==authority.get('recipient'):
                 status='AUTHORIZED';reason='Exact established owner identity and website scope'
+            elif verification.get('provider')=='GOOGLE_FORMS_VERIFIED' and verification.get('email_collection_type')=='VERIFIED':
+                verified_email=str(verification.get('email') or '').strip().lower()
+                if (verified_email and verification.get('response_id') and verified_email==email==inv['recipient'].lower()):
+                    status='AUTHORIZED';reason='Google Forms verified the respondent account; it matches the original first-party invitation recipient and exact website scope'
+                else:
+                    status='BLOCKED_IDENTITY';reason='Verified Google respondent account does not match the representative email and original invitation recipient'
             else:
-                # The current form collects a SELF-REPORTED address, not a Google-verified identity.
-                # Do not treat a matching text field or possession of a public reference as proof.
-                status='BLOCKED_IDENTITY';reason='Form email is self-reported; no independently verified representative identity is available'
+                # The form's business-email question is self-reported. A match to
+                # that field alone or possession of a public reference is not proof.
+                status='BLOCKED_IDENTITY';reason='Form email is self-reported; Google Forms has not independently verified the respondent account'
             if known and decision==('YES','YES') and any(r['status']=='AUTHORIZED' for r in known) and status=='AUTHORIZED':
                 status='DUPLICATE_CONSENT';reason='Authorization already bound; no additional research job'
         c.execute(submissions.insert().values(id=ident,invitation_id=inv['id'] if inv else None,reference=parsed.invitation_reference,
             interest=parsed.research_interest,authorization=parsed.research_authorization,
             representative_name=parsed.representative_name,representative_role=parsed.representative_role,
-            representative_email=parsed.contact_email,submitted_at=parsed.submitted_at,received_at=stamp,status=status,reason=reason,raw=dump(row)))
+            representative_email=parsed.contact_email,submitted_at=parsed.submitted_at,received_at=stamp,
+            identity_provider=verification.get('provider'),identity_verified_email=verification.get('email'),
+            identity_reference=verification.get('response_id'),status=status,reason=reason,
+            raw=dump({'answers':row,'verified_identity':verification})))
         if inv and status!='DUPLICATE_CONSENT':
             c.execute(invitations.update().where(invitations.c.id==inv['id']).values(consent_status=status))
             if status=='AUTHORIZED':

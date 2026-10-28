@@ -7,7 +7,7 @@ from sqlalchemy import select,or_,and_
 from .db import jobs,invitations,submissions,candidates,reports,deliveries,worker_runs,events,now
 from .migrate import dump,parse,sha
 from .consent import process
-from .integrations import Sheets,Engine,GraphReports,ConfigurationBlocked,OutcomeUncertain
+from .integrations import Sheets,Engine,GraphReports,ConfigurationBlocked,OutcomeUncertain,VerifiedFormResponse
 from .template import same_site
 
 def later(seconds):return (datetime.now(timezone.utc)+timedelta(seconds=seconds)).isoformat()
@@ -131,7 +131,12 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
     run_id=uuid.uuid4().hex;errors=[];processed=0
     with db.transaction() as c:c.execute(worker_runs.insert().values(id=run_id,started_at=now(),status='RUNNING'))
     try:
-        for row in (sheets or Sheets()).read():process(db,row)
+        rows=(sheets or Sheets()).read()
+        if getattr(rows,'identity_status','VERIFIED')!='VERIFIED':
+            errors.append('Sheets identity verification: '+str(getattr(rows,'identity_error',None) or 'Google Forms verified respondent identity is unavailable'))
+        for row in rows:
+            if isinstance(row,VerifiedFormResponse):process(db,row.answers,verified_identity=row.identity)
+            else:process(db,row)
     except Exception as e:errors.append('Sheets: '+safe_error(e))
     for _ in range(max_jobs):
         job=claim(db)

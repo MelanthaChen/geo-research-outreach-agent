@@ -1,0 +1,159 @@
+{
+  "policy": "Historical workflow/test rows are retained only as compressed source evidence with disposition ISOLATED. They are not imported as candidates, invitations, responses, jobs, reports, or deliveries.",
+  "operational_workflow_rows_created": 0,
+  "isolated_source_rows": 392,
+  "sources": [
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "geo_handoffs",
+      "rows": 1
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "invitation_batches",
+      "rows": 1
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "owner_test_recipient_bindings",
+      "rows": 2
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "questionnaire_submissions",
+      "rows": 1
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "research_records",
+      "rows": 3
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "research_reports",
+      "rows": 1
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "screening_analysis_results",
+      "rows": 2
+    },
+    {
+      "source": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "screenings",
+      "rows": 4
+    },
+    {
+      "source": "data/full_screening/full_us_outreach_screening.csv",
+      "relation": "csv",
+      "rows": 1
+    },
+    {
+      "source": "data/phase5a_contact_form_drafts.csv",
+      "relation": "csv",
+      "rows": 1
+    },
+    {
+      "source": "data/phase5a_delivery_simulation.csv",
+      "relation": "csv",
+      "rows": 11
+    },
+    {
+      "source": "data/phase5a_email_drafts.csv",
+      "relation": "csv",
+      "rows": 9
+    },
+    {
+      "source": "data/phase5d_campaigns.db",
+      "relation": "campaign_audit",
+      "rows": 34
+    },
+    {
+      "source": "data/phase5d_campaigns.db",
+      "relation": "campaign_items",
+      "rows": 282
+    },
+    {
+      "source": "data/phase5d_campaigns.db",
+      "relation": "campaigns",
+      "rows": 2
+    },
+    {
+      "source": "data/phase5d_campaigns.db",
+      "relation": "demo_control",
+      "rows": 1
+    },
+    {
+      "source": "data/phase5d_campaigns.db",
+      "relation": "demo_interest_submissions",
+      "rows": 1
+    },
+    {
+      "source": "data/phase5d_demo_campaign_summary.csv",
+      "relation": "csv",
+      "rows": 1
+    },
+    {
+      "source": "data/phase5d_demo_outreach_status.csv",
+      "relation": "csv",
+      "rows": 20
+    },
+    {
+      "source": "data/research_registry.db",
+      "relation": "full_screening_queue",
+      "rows": 2
+    },
+    {
+      "source": "data/research_registry.db",
+      "relation": "geo_handoffs",
+      "rows": 1
+    },
+    {
+      "source": "data/research_registry.db",
+      "relation": "questionnaire_invitations",
+      "rows": 1
+    },
+    {
+      "source": "data/research_registry.db",
+      "relation": "questionnaire_submissions",
+      "rows": 1
+    },
+    {
+      "source": "data/research_registry.db",
+      "relation": "research_records",
+      "rows": 1
+    },
+    {
+      "source": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "email_drafts",
+      "rows": 2
+    },
+    {
+      "source": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "mail_merge_reconciliations",
+      "rows": 2
+    },
+    {
+      "source": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "questionnaire_invitations",
+      "rows": 2
+    },
+    {
+      "source": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "questionnaire_submissions",
+      "rows": 1
+    },
+    {
+      "source": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "research_records",
+      "rows": 1
+    }
+  ],
+  "fixture_database": {
+    "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+    "inventory_key": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+    "reason": "Explicit two-recipient owner-controlled demo fixture; its research profile, drafts, invitations, reconciliations, and submission are isolated."
+  },
+  "inventory_exclusions": [],
+  "scope_note": "This manifest describes isolation in the rebuilt operational data store. It does not claim deletion from the old staging database, Google Sheets, or the GEO Engine."
+}

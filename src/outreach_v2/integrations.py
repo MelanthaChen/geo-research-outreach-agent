@@ -43,6 +43,11 @@ class Engine:
             return None
         if r.status_code in {401,403}:raise ConfigurationBlocked('GEO Engine service authorization failed')
         r.raise_for_status();return r.json()
+    def advance(self,key):
+        try:r=self.client.post('/api/v1/integration/outreach-advance/'+quote(key,safe=''))
+        except httpx.TransportError as e:raise OutcomeUncertain('Engine execution response uncertain; reconcile the durable job') from e
+        if r.status_code in {401,403,404}:raise ConfigurationBlocked(f'Engine advance unavailable: HTTP {r.status_code}')
+        r.raise_for_status();return r.json()
     def start(self,key,payload):
         existing=self.reconcile(key)
         if existing:return existing

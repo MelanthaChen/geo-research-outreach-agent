@@ -1,0 +1,3577 @@
+{
+  "candidates": {
+    "company": 71325,
+    "hotel": 15262
+  },
+  "contacts": 52077,
+  "personalization_ready": 244,
+  "source_memberships": 2173051,
+  "source_rows": 1044070,
+  "isolated_rows": 392,
+  "sources": [
+    {
+      "id": "7c8b83424c56e2589ef689c6fc2a5f71a8a183af3d0f191c39209e4245d8e274",
+      "path": "data/phase7_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:09.136858+00:00"
+    },
+    {
+      "id": "aa02d092fd35cb0022d9230135f9461889e59f2927ab14e1661a8ded6f80ba3a",
+      "path": "data/phase7_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:18.161288+00:00"
+    },
+    {
+      "id": "03d35e0c49a9eff2041f585871a495cf23125607872c1f78959fd677a39e2cd6",
+      "path": "data/phase7_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:18.163306+00:00"
+    },
+    {
+      "id": "5a0ba5b3889ac3ce4fd7e0df05fc00c912cde6c33cef8dfcf5af4220b80cf4e2",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:22.884508+00:00"
+    },
+    {
+      "id": "f9d41cefaca2db1812ccef616d33de2a9c11406229a40635a8d404d77ebccc09",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_contact_channels",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 24859,
+      "processed": 24859,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:26.896256+00:00"
+    },
+    {
+      "id": "4c1feb0a407cf21e9879bfaa2361f7ded73bcdf4788737361b13131d2398da4e",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 25,
+      "processed": 25,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:26.899264+00:00"
+    },
+    {
+      "id": "8a3a4bf538ec32e2c17b6828e82f5e0f4562680fb7fbf3c79b36f99b8721bbac",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6f_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:26.965033+00:00"
+    },
+    {
+      "id": "6ed52ad313e72cd818e2fad089b2da5ba288043031bedaab272a3dbe040390f6",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:26.967146+00:00"
+    },
+    {
+      "id": "171fb0c7b72d4f22b7e213df502dfc4aecb7f5498790540d321b7f2f9761fa65",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 4072,
+      "processed": 4072,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:27.376145+00:00"
+    },
+    {
+      "id": "aca814dfe4c6cfcdbdb0ece95e374f4cd88234aedf910dc26a39efc6006242ae",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase6h_shortlist",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 5000,
+      "processed": 5000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:27.793739+00:00"
+    },
+    {
+      "id": "041059f22960354d862334b8696867cd07b76618f81124931339c301e7dbf254",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase7_runs",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 1798,
+      "processed": 1798,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:28.078616+00:00"
+    },
+    {
+      "id": "0cef83d11b790b641cbf227985f59e699096b127760f7b237d9520203d49bee7",
+      "path": "data/phase7_candidates.db",
+      "relation": "phase7_selection",
+      "fingerprint": "45b7495950e9731bc04b509804b75ca80c3eb4465442cc279460c5c869fc0a34",
+      "expected": 55911,
+      "processed": 55911,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:32.810546+00:00"
+    },
+    {
+      "id": "6ee782e5ce833647db2a20cbb4c58014d7c328276defddd120c34e563f541f73",
+      "path": "data/hotel_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 15262,
+      "processed": 15262,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:35.697739+00:00"
+    },
+    {
+      "id": "536d1d1c6a34d65f550d9631e42ab1055d1e37afffc7ecaf47b5c5e5aa55a417",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_contact_channels",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 850,
+      "processed": 850,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:35.848230+00:00"
+    },
+    {
+      "id": "a8a8510f1842f5a8cb237e9f745a4cf1b3d487a0059b153c48999f71ac451095",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_provenance",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 9787,
+      "processed": 9787,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:36.655512+00:00"
+    },
+    {
+      "id": "89f847cc13b857105121aa87a4195288740d797c0a0bd4088f73a995d2de2966",
+      "path": "data/hotel_candidates.db",
+      "relation": "hotel_runs",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 524,
+      "processed": 524,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:36.687993+00:00"
+    },
+    {
+      "id": "f7f4a1c1f44c808be05e4c05a62db0bd66a729a801aee314a7b02c58e2d210bd",
+      "path": "data/hotel_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "7ebb35ba5bd2e5917c3b18c61ff94dc9c5757925c41eb134db7ce5100b491d53",
+      "expected": 4,
+      "processed": 4,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:36.706249+00:00"
+    },
+    {
+      "id": "df581fcfa5f0ace7d0751d87efb39945f6e02790b2451e0b4729d00b96af01c0",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "research_records",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 8913,
+      "processed": 8913,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.154609+00:00"
+    },
+    {
+      "id": "9d2ac5f55c5ef999dad50c776d0674341cd3682e3a3176a7b301e34919b0ea07",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "confirmation_emails",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.156728+00:00"
+    },
+    {
+      "id": "8365cdbee6d61d6d0136373907cce4f0c0594c61bb0aa33b1739682968a043ac",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "consent_reviews",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.158129+00:00"
+    },
+    {
+      "id": "7ec7c1a49ddc057a81279bd79c90a13262039711f9eff23bbced4dd54b5e62f9",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "dispatch_attempts",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.158586+00:00"
+    },
+    {
+      "id": "64950f7a3065c2ff9d7d07763b67c4b9a669f8fd18ba8cda8d288497349ba4cc",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "email_drafts",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.159105+00:00"
+    },
+    {
+      "id": "3497803f99a6f08253bc24b28ef00b75c29b298c6196fe83541ba3a7a62c6b7f",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "email_events",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.159949+00:00"
+    },
+    {
+      "id": "5f0d6707eddb5f4a1d9984dc91b7e2a817921bf7c890e92b44a78fc8d08274c3",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "geo_handoff_attempts",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.160375+00:00"
+    },
+    {
+      "id": "666c7090f563bba930e324bc438d2ef0816c502af035c8947d016bc2ff71be84",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "geo_handoffs",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.161483+00:00"
+    },
+    {
+      "id": "c0e2196515b20d41b130ce5a9893582d89bc6c9b4a3d20424d7e66236683e682",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "hotel_discovery_events",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.161886+00:00"
+    },
+    {
+      "id": "0753f5a73edd9e47f93d5613a807f8f47cb5f48b7ffe1137fb5f577f8617bdd9",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "hotel_discovery_jobs",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.162417+00:00"
+    },
+    {
+      "id": "cb6eb080d5dfe3bd2890cc52a2e9fd244992a4f49e655285e91e5454aa10bd3e",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "hotel_discovery_source_stats",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.162815+00:00"
+    },
+    {
+      "id": "9789ae6073b0cfb25b323696f53ab0ba276bcd08cddfa27332b88b9917f82de0",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "invitation_batches",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.163564+00:00"
+    },
+    {
+      "id": "adc26798020635df2d4be8a8f79588bc81828f8dd2ff53a95160405e54c42e32",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "owner_test_recipient_bindings",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.164332+00:00"
+    },
+    {
+      "id": "95a00086e10ed27b278e09910903599390eac3cf3615dd8599b21e8e0baa90d5",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "personalization_backfill_jobs",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.164734+00:00"
+    },
+    {
+      "id": "a65a0543712c6a7753b84d2821b9c7759d1007290c4f20632741d3fef45abe0c",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "personalization_backfill_queue",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:40.165147+00:00"
+    },
+    {
+      "id": "492e622c787c0d4f042e4abbf22580d8f31af97318a9b988d373c9651b0cd7dc",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "prospect_contacts",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 14592,
+      "processed": 14592,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:41.548969+00:00"
+    },
+    {
+      "id": "64ba101abdc620524b17b2fea87748bd84cfac806c6d3bb7b9312ff8ace89619",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "prospect_identifiers",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:41.568088+00:00"
+    },
+    {
+      "id": "71a9794762fb131e7493d1aabce160aa5d418c25986e900f3506b0805b147f46",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "prospect_lifecycle_events",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 8910,
+      "processed": 8910,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:42.221927+00:00"
+    },
+    {
+      "id": "4c42f31798c0abf3810d075ca172b6ed5715c296a16f24a418ef6eabde7a74a5",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "prospect_provenance",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 8910,
+      "processed": 8910,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.171395+00:00"
+    },
+    {
+      "id": "958bfbcecabff65206484091017da679248eea0eb74cd050030eb7c2e8bdaa57",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "questionnaire_conflicts",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.172458+00:00"
+    },
+    {
+      "id": "ed1213836ee2caff19df946edc23b9fc36e9c01d37a1dbbcfb1f1469fb1280ee",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "questionnaire_invitations",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.173017+00:00"
+    },
+    {
+      "id": "96456cc80db2f570a1068ce3f5ac4fa74dd2540f0d6dd423ad2fab06ac380826",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "questionnaire_submissions",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.174299+00:00"
+    },
+    {
+      "id": "1b5876931a35a97be9db35d6c5721e6d332749a70026a3646926227fcef11502",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "replies",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.175287+00:00"
+    },
+    {
+      "id": "5a96408dce590870b65737e634b5b0aab927222efa474f3ec97c66297a457614",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "research_reports",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.176730+00:00"
+    },
+    {
+      "id": "f41285321795655eb2fb1f636b35b2f9a59016320d12df680f04e81108a4adb8",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "screening_analysis_results",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.178626+00:00"
+    },
+    {
+      "id": "811dbd08009b096bf647cea92d4866e48fbe442cb0e821f6664bb823a9a8f92e",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "screenings",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 4,
+      "processed": 4,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.180467+00:00"
+    },
+    {
+      "id": "83979b8b0e37d7f49fb14794306d116b783af9486557c22ca665bb0f135e46d0",
+      "path": "/Users/melc/.config/geo-research-outreach-agent/rebuild-backup-20261027/cloud-lean.db",
+      "relation": "suppressed_recipients",
+      "fingerprint": "101274234cbc9664ddc1e9c854bdb6ac931d019129010661d665c531c1848b1d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:45:43.180947+00:00"
+    },
+    {
+      "id": "0ab7a01a32db7ebe436f39473f005e95dc8c2d858f3636c11e04542640277780",
+      "path": "data/research_registry.db",
+      "relation": "research_records",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 72927,
+      "processed": 72927,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.050179+00:00"
+    },
+    {
+      "id": "b44da393c84bbf24c0367d43b04be72f9c9c1a54b4cf59b467cc39c251fa08ec",
+      "path": "data/research_registry.db",
+      "relation": "confirmation_emails",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.053097+00:00"
+    },
+    {
+      "id": "c1b165c4d2c75b612d5bbe037ce4518cd834577a07c78149ee1f4d9957d03e8e",
+      "path": "data/research_registry.db",
+      "relation": "consent_reviews",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.053733+00:00"
+    },
+    {
+      "id": "fed22a076980543aa52bfa7f4777cc50c2f9b539fb125befd1be3a6cd4299dae",
+      "path": "data/research_registry.db",
+      "relation": "dispatch_attempts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.054312+00:00"
+    },
+    {
+      "id": "fa439790bf57fcec262717766bf74b1f4fa197c189bd4ec2889c62c8e950f217",
+      "path": "data/research_registry.db",
+      "relation": "email_drafts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.055241+00:00"
+    },
+    {
+      "id": "1a575eab06b9c47375b2877dbb1615b7fa8759786f955d91c421342ef10ebd14",
+      "path": "data/research_registry.db",
+      "relation": "email_events",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.055731+00:00"
+    },
+    {
+      "id": "3605ea496e964797d9825e0722e06b762c09f94c276c216ad72bbc8337de3de8",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_content_cache",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.056318+00:00"
+    },
+    {
+      "id": "5e8ff6f079e652dec9be9e69961d333f396caafc15d13b1d07e0147329b7cc99",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_jobs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:08.058778+00:00"
+    },
+    {
+      "id": "5741f7a98540eae8a9c5d9aa40de42d894ed85a42aaeb9167103f6a4373254a9",
+      "path": "data/research_registry.db",
+      "relation": "full_screening_queue",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 145854,
+      "processed": 145854,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.269386+00:00"
+    },
+    {
+      "id": "5dd9133234b178515d2b2671c4b9cb6c3ef2838802d533f35a68106a4d785655",
+      "path": "data/research_registry.db",
+      "relation": "geo_handoff_attempts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.275168+00:00"
+    },
+    {
+      "id": "45ba89d3f2c41a5602b5c7b36011a08946a4f1822038c0addc40bba26cae7903",
+      "path": "data/research_registry.db",
+      "relation": "geo_handoffs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.276903+00:00"
+    },
+    {
+      "id": "388af16e4a085d5fbd9084e08c9c5d97ebb4fd4c49a264c9c54356f62b783b18",
+      "path": "data/research_registry.db",
+      "relation": "invitation_batches",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.277499+00:00"
+    },
+    {
+      "id": "dcd569688225e34135e0f37c2218e96ace58b8a015938fbbf7c9c4138583f48d",
+      "path": "data/research_registry.db",
+      "relation": "owner_test_recipient_bindings",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.277979+00:00"
+    },
+    {
+      "id": "707e0ba0e3f58bd67a1902e059618cdf3c0ef7954e2107d6f465f05ba1583053",
+      "path": "data/research_registry.db",
+      "relation": "personalization_backfill_jobs",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:28.279332+00:00"
+    },
+    {
+      "id": "7e1d213997c765788c2a65013e99dacd08485a7345bce7d74d69dc3006acf04c",
+      "path": "data/research_registry.db",
+      "relation": "personalization_backfill_queue",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 8785,
+      "processed": 8785,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.434363+00:00"
+    },
+    {
+      "id": "ea1729fc8bcec83b731e19c20f9176185c2679e71a986d44da16d46d5423f969",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_conflicts",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.435620+00:00"
+    },
+    {
+      "id": "709d58cdf4c6a5353b649594d48c273eff081e38d991751ab2684e90488cd5e5",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_invitations",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.436713+00:00"
+    },
+    {
+      "id": "08926e74d22f9b8e88c52270b81057bb1c25fa9759887a922a98e20620c78af9",
+      "path": "data/research_registry.db",
+      "relation": "questionnaire_submissions",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.437960+00:00"
+    },
+    {
+      "id": "d9d521bc0e5ae887d79602db6809cd058af0b5522b28efd9fb4b3d450a185f1e",
+      "path": "data/research_registry.db",
+      "relation": "replies",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.438621+00:00"
+    },
+    {
+      "id": "c9c90c7c8f5e98685f8aa8de225b1d0a928869f60bf2960d15039dd742931fb8",
+      "path": "data/research_registry.db",
+      "relation": "research_reports",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.439281+00:00"
+    },
+    {
+      "id": "59cb9a3ddeba7c47235c14392797e210d836af2ec837326af8516c9c27731888",
+      "path": "data/research_registry.db",
+      "relation": "screening_analysis_results",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 244,
+      "processed": 244,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.583425+00:00"
+    },
+    {
+      "id": "dd516c8000f7fdb1ee5d675eda56401dbeb9fa0f556f10838a0af11dc8f64751",
+      "path": "data/research_registry.db",
+      "relation": "screenings",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 244,
+      "processed": 244,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.610738+00:00"
+    },
+    {
+      "id": "2f42fa723b06a90ca100eb8aa13f5199780ae83e27c8ccffd26c0bae376210eb",
+      "path": "data/research_registry.db",
+      "relation": "suppressed_recipients",
+      "fingerprint": "67e4d84b86df9175002f7639a44199a97800e2cb9ee705914d7c7d45fbc143f9",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.612249+00:00"
+    },
+    {
+      "id": "33ced0b014cba771cbbb297c771692b3425b2650aa6c67886c5c3dcc066a2516",
+      "path": "data/outreach.db",
+      "relation": "companies",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 5,
+      "processed": 5,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.619681+00:00"
+    },
+    {
+      "id": "49b7501ca115487954ad48b9c21b6bfe09c6b48d300676c3173f7f1893a93911",
+      "path": "data/outreach.db",
+      "relation": "contacts",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.620857+00:00"
+    },
+    {
+      "id": "1f96845a53bde991d7d0a4be4a16fa29a4f675f7a72cd94dbeacab57f45eb6c9",
+      "path": "data/outreach.db",
+      "relation": "discovery_records",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 6,
+      "processed": 6,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.622164+00:00"
+    },
+    {
+      "id": "1197d084c3d4e4dae7a7e22106ec95391dcc20a056896a2ef300c4e8e92e5c20",
+      "path": "data/outreach.db",
+      "relation": "outreach",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.622645+00:00"
+    },
+    {
+      "id": "4e89be47bab617ac1f678fc5498e22e87f3b46d32a999f16967425b226f2a8ff",
+      "path": "data/outreach.db",
+      "relation": "responses",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.623064+00:00"
+    },
+    {
+      "id": "4a68ab8243932cb655b95876135e3e71acb9e03526ed7a7cb33c9392e8cb164a",
+      "path": "data/outreach.db",
+      "relation": "website_pages",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.628371+00:00"
+    },
+    {
+      "id": "ef82fe1dbae354e88df8e0c709bfc10223042be17043a0ffd76970200ebf2e05",
+      "path": "data/outreach.db",
+      "relation": "website_snapshots",
+      "fingerprint": "47894c56d081f009de4ba756d405983159a646ed3cf388344ae604c0a5cbd6a6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:46:29.628893+00:00"
+    },
+    {
+      "id": "eabccb62c07cbff3913eb0fd6121d945816a3538e92224aadd097616c1c4fac3",
+      "path": "data/phase2_demo.db",
+      "relation": "companies",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.900348+00:00"
+    },
+    {
+      "id": "cde1771ccfb4006dcdefde2960f35c90e26feff833573823fe8b06debef45c5b",
+      "path": "data/phase2_demo.db",
+      "relation": "contacts",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 7,
+      "processed": 7,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.907551+00:00"
+    },
+    {
+      "id": "2bd64ec62b9a02e04793e8061c9da11a412e218c7fd80c430d76c5ace8eab7f3",
+      "path": "data/phase2_demo.db",
+      "relation": "discovery_records",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 80,
+      "processed": 80,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.924431+00:00"
+    },
+    {
+      "id": "29c840514ab0d4a52d318533c1bd0d88ffb7d5722ad11c086219b9d4a894036d",
+      "path": "data/phase2_demo.db",
+      "relation": "outreach",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.925093+00:00"
+    },
+    {
+      "id": "af82dc65176a7fdd55b10d6661fd7d92f2f754b1b1ce87cbebd97139b89ff67d",
+      "path": "data/phase2_demo.db",
+      "relation": "responses",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.925574+00:00"
+    },
+    {
+      "id": "3bad1620e98e3f1dd3c2756bfd6316ef78221e95cc2b4ea11c0a35e97f4ab3c8",
+      "path": "data/phase2_demo.db",
+      "relation": "website_pages",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 165,
+      "processed": 165,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.977674+00:00"
+    },
+    {
+      "id": "cffc772a0fed2cbbd220f3cfd2f16336eddd543206602319d642450737df2e69",
+      "path": "data/phase2_demo.db",
+      "relation": "website_snapshots",
+      "fingerprint": "6f5270a31040a1343bd5e3debab0dd9fcb6721cde9633e22316d703d05fe6c1f",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:57.991249+00:00"
+    },
+    {
+      "id": "40d47fc07fe7b33226b65cd2f8b4ca6237835742c1414e98216535434b0d8ec5",
+      "path": "data/phase3_validation.db",
+      "relation": "companies",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.002363+00:00"
+    },
+    {
+      "id": "c9e80d1e2a3eb0468a9731f2dad790104e96c9a41e0a1dac4917dd889de37fc0",
+      "path": "data/phase3_validation.db",
+      "relation": "contacts",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 12,
+      "processed": 12,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.028578+00:00"
+    },
+    {
+      "id": "63d97f579b916a3ef31c5d1e5fca7e6d1f48e0a5e14c477b6018c09fd83df072",
+      "path": "data/phase3_validation.db",
+      "relation": "discovery_records",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.031880+00:00"
+    },
+    {
+      "id": "fc74bea8039e910a9742b48abcd41ad97a343be380013631a3fc5b129a8d12bc",
+      "path": "data/phase3_validation.db",
+      "relation": "outreach",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.032459+00:00"
+    },
+    {
+      "id": "29793b7f57199f5c9f2efc243f8545dff2116d4139a3c8ef62f40ebcf51ffe62",
+      "path": "data/phase3_validation.db",
+      "relation": "responses",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.032852+00:00"
+    },
+    {
+      "id": "e98b440f83764dcc931a396493671aed130bb5c7c17529e525c47cdafda615dc",
+      "path": "data/phase3_validation.db",
+      "relation": "website_pages",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 239,
+      "processed": 239,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.101104+00:00"
+    },
+    {
+      "id": "7ef2ef49efc1275e86b8cb11a9aef6ec19f9bd7a9cc8e4c5a5d0b5b9fb3176cf",
+      "path": "data/phase3_validation.db",
+      "relation": "website_snapshots",
+      "fingerprint": "a63bc32451accfef7df3ace9004e68f8421d75877841c2325e26d3b1d040a0da",
+      "expected": 84,
+      "processed": 84,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.113147+00:00"
+    },
+    {
+      "id": "609eaadb5b8f84af93a4b4f6e40aa4223b9e7b13a8d7cb9161b4f51dcdbb4742",
+      "path": "data/phase3b_validation.db",
+      "relation": "companies",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.121594+00:00"
+    },
+    {
+      "id": "d2005f4b801a92e65328c75b8b468b17d96c5a46ccc45b1d81167b699c21e09f",
+      "path": "data/phase3b_validation.db",
+      "relation": "contact_evidence",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 36,
+      "processed": 36,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.128843+00:00"
+    },
+    {
+      "id": "0837c4de6530e8f5d080b34a70f6b67e06ce63d33071530c61f7b2e1ca647570",
+      "path": "data/phase3b_validation.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.131688+00:00"
+    },
+    {
+      "id": "f5f0bf0658d55d79cbb39c26fa24c2d9b16abd2badfcf88505989f956ac70467",
+      "path": "data/phase3b_validation.db",
+      "relation": "contacts",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 23,
+      "processed": 23,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.140975+00:00"
+    },
+    {
+      "id": "daa94958e33b91a4f3939344d44d7e9d4a04c985cf7a431e912363659936209c",
+      "path": "data/phase3b_validation.db",
+      "relation": "discovery_records",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.143207+00:00"
+    },
+    {
+      "id": "e9c8314240f9f0ab78e45ab4486554466179d2c4766d56882149cf0cada40214",
+      "path": "data/phase3b_validation.db",
+      "relation": "outreach",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.143705+00:00"
+    },
+    {
+      "id": "1f8a2b16f5047287a62b2e1690ae46e32efa325a56751b21e224f26c7770f2b2",
+      "path": "data/phase3b_validation.db",
+      "relation": "responses",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.144131+00:00"
+    },
+    {
+      "id": "cf295ffab58d26043e50dc0c3db2ecd788c9822f56a527867573b9d4df138d1a",
+      "path": "data/phase3b_validation.db",
+      "relation": "website_pages",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 395,
+      "processed": 395,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.264216+00:00"
+    },
+    {
+      "id": "9bded86ce8ca59c6a33fd801e01527438db514a226ab2cf4d9d53c143776c3bd",
+      "path": "data/phase3b_validation.db",
+      "relation": "website_snapshots",
+      "fingerprint": "42f0463a010cbc84e0415cad253721fbcf9ab8da3e289dab847ee9042c98a403",
+      "expected": 140,
+      "processed": 140,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.288914+00:00"
+    },
+    {
+      "id": "33ec357b8be0dec68cf6806d72b252df94705c85db6d0b6f21abddf900656bb1",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "companies",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.296566+00:00"
+    },
+    {
+      "id": "0acfa2cb983964d33b5e746660d095c3bdb9df3a4df8a7a39b20a8c2e02e04ae",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "contact_evidence",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 90,
+      "processed": 90,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.305992+00:00"
+    },
+    {
+      "id": "192dd834126cf19bb039cb557361caca511a3efbc0d715a7625ced9faa855470",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 14,
+      "processed": 14,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.308499+00:00"
+    },
+    {
+      "id": "a9efbb5eca6cf4d1597766b2d24e50c41ec6f20d1dd9e0a19d2342983b85a922",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "contacts",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 40,
+      "processed": 40,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.322903+00:00"
+    },
+    {
+      "id": "2134867bf19d28f7f485f606c46e2442e8b80cff490bc11b44a1bd9e3f206500",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "discovery_records",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.326545+00:00"
+    },
+    {
+      "id": "bb3214c8679638cf6873be959e20198a428d89f0e7039613bcb125a5cde34133",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "outreach",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.327212+00:00"
+    },
+    {
+      "id": "d7e7d291ced23ad2b0e0e47b742bdd113ee9c2cc2e13de1616a87039d8c58f1f",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "responses",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.327662+00:00"
+    },
+    {
+      "id": "dfd78f6c1dc5cf98eca670c633e89063588ea7ae16a29f2f6ce8f647e19f408c",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "website_pages",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 627,
+      "processed": 627,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.955315+00:00"
+    },
+    {
+      "id": "b389455b8785e0dc084625ce53ab49be3b2e0483667e22a5f5c47ca718a2f654",
+      "path": "data/phase3c1_validation_28.db",
+      "relation": "website_snapshots",
+      "fingerprint": "0a5dc49a828d8a5ab29e425025b9fc56794fcf298eb9fe15d0b85a5415d12512",
+      "expected": 224,
+      "processed": 224,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.973169+00:00"
+    },
+    {
+      "id": "9ebad035cb8267fd65b1159cb0d062046cb5a1a4f6cbb9f4abf70bb04a2a5708",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "companies",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:58.990469+00:00"
+    },
+    {
+      "id": "77c39de6da935c13488b19722bd21bbe1a0c0e13de0d9c3f670f69a7f35b515a",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "contact_evidence",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 204,
+      "processed": 204,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.014149+00:00"
+    },
+    {
+      "id": "0adcc6b1a2cac51ded91af815ccfb9253cfc9a50251addba71edf6c8c4e83431",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 15,
+      "processed": 15,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.016938+00:00"
+    },
+    {
+      "id": "a5df86cb329c798bc2abec1f121c1e6c7bdc662984bc2a53d09587215423ee49",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "contacts",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 83,
+      "processed": 83,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.070025+00:00"
+    },
+    {
+      "id": "710192ab839dcb50fe6e17b1ece2f6c5f49a209238fca800ff4e57bb3978e129",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "discovery_records",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 80,
+      "processed": 80,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.075684+00:00"
+    },
+    {
+      "id": "d9f61bad013ba55b0c06771ef63f0ce135be507d689a998447142cf65da28f89",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "outreach",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.076307+00:00"
+    },
+    {
+      "id": "c1da9f4c1c6f6fd3dd8da81d42c867531ad5c279fae4dea4d961ea6c28a805c1",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "responses",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.076755+00:00"
+    },
+    {
+      "id": "2f8be011bfa8f03a2d68b6bdec999c1c4046273e87992f8eb811c0c9a63bb2da",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "website_pages",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 498,
+      "processed": 498,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.200306+00:00"
+    },
+    {
+      "id": "e93ee2b9c7866f836b18dc0038226efb95758d7861eebb8d7cefaa5b5c7d35cf",
+      "path": "data/phase3c1_validation_77.db",
+      "relation": "website_snapshots",
+      "fingerprint": "3e0059a6192a487e46f4e06f12560ed5594b36c4c559fcfb7624acef2e02deca",
+      "expected": 231,
+      "processed": 231,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.241232+00:00"
+    },
+    {
+      "id": "59dee773d2899f6827ef6ffe3ae74e5881e2c012b1ad2e688c37899c3e854d8c",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "companies",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.249502+00:00"
+    },
+    {
+      "id": "eca7ad73556546d708c6b6d2336c59eddc1d150bc35a55fb7f3cf91cf2f4197d",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "contact_evidence",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 114,
+      "processed": 114,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.260758+00:00"
+    },
+    {
+      "id": "72327a326d33941636594021cf504ff8d9c09332c2b18a577054f5dfd2a7e7b2",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 14,
+      "processed": 14,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.264244+00:00"
+    },
+    {
+      "id": "2913528629efe60957f2b2789d6abc90029fe236a440ac9021f3a94a6a29f708",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "contacts",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 75,
+      "processed": 75,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.286117+00:00"
+    },
+    {
+      "id": "db371de799972a8eae8d59a2f815ac7828aa2d3c535d97f6e6cb4f57fee860dc",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "discovery_records",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.289094+00:00"
+    },
+    {
+      "id": "86b2bf566ee62d80bff9a41c0d955f4aee5e14c9482e7dd115bb079aee47c3e9",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "outreach",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.289608+00:00"
+    },
+    {
+      "id": "f0a8dba8f9ad7b0dddc4a959cb5b1732c4ec399c96043b116e8a00e63d56b536",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "responses",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.290017+00:00"
+    },
+    {
+      "id": "28b623332262f80365590a7d831d25266e7eb6cb717c4e8b03fc63e49c09272b",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "website_pages",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 473,
+      "processed": 473,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.395815+00:00"
+    },
+    {
+      "id": "ce8db83ce3e7ef10449a4062b20b71f1f8178fb67b87f0435a3f46d8b88ddae3",
+      "path": "data/phase3c_validation_28.db",
+      "relation": "website_snapshots",
+      "fingerprint": "941556b1cf9cdfddc4623fc3acd4c75593cefebdac898c105c87f15f240b9354",
+      "expected": 168,
+      "processed": 168,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.406900+00:00"
+    },
+    {
+      "id": "ba54cd6fdf2359e853ad57759ba1af70aff7cc13cf4da43ca1177f0623636500",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "companies",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.414573+00:00"
+    },
+    {
+      "id": "9c86097f74fc84f4e72eca4735bdf99368ba2b7bf066234789a96cc9bd944101",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "contact_evidence",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 63,
+      "processed": 63,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.422956+00:00"
+    },
+    {
+      "id": "a34b68e1043c948545d9394afe01486565ae981f095d7133b3ab5264ed223530",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.424992+00:00"
+    },
+    {
+      "id": "48dfcc6c74bf48a792a527b913e516c6f3ae03aa8f061c8ca42def7142f2a7a4",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "contacts",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 24,
+      "processed": 24,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.451311+00:00"
+    },
+    {
+      "id": "7a235e27567e4d1ae8ca284e87255de7d095f912ce0b2c09b416672048b14144",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "discovery_records",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.454119+00:00"
+    },
+    {
+      "id": "205e9263ea786f5706b714685ae2bce6e9ad2c990e6954ded79549117cb2ff27",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "outreach",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.454716+00:00"
+    },
+    {
+      "id": "8091dbcbc4100ed4bcd4fcd95a8a450d5d030c28a7e9b0671267542f86dd469d",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "responses",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.455330+00:00"
+    },
+    {
+      "id": "d3c0a9a4bf2b8c2e0fbcc6a5cd6744a9d75bb44744c57f4b6fba21a99882d23c",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "website_pages",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 551,
+      "processed": 551,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.569266+00:00"
+    },
+    {
+      "id": "9834c3457f3bb3030545269580ef80f3a17a6f412ae4cd75d9014f6b06e06d84",
+      "path": "data/phase3c_validation_28_clean.db",
+      "relation": "website_snapshots",
+      "fingerprint": "02e712f4df22a6f721ba843c89956cd61d0a854e15abfa8e8ec32a62f0d33d54",
+      "expected": 196,
+      "processed": 196,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.579569+00:00"
+    },
+    {
+      "id": "3f781c7df421acc922ee21d83609dc60b9153fe0f654c9e053fbda25a30f191f",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "companies",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.587802+00:00"
+    },
+    {
+      "id": "46ccbc9fe560d08fca861f7ecc806e5186f387a3440d30f2e0bc10192fda9707",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "contact_evidence",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 67,
+      "processed": 67,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.591247+00:00"
+    },
+    {
+      "id": "a5073c6eb6561fad36dbb93947120853c451037b0a987e044ab34cc7750f10ca",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 14,
+      "processed": 14,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.592803+00:00"
+    },
+    {
+      "id": "4938931a9da44718e93397a0d92bbcbb9f53362036d7cd7b843991ea46973959",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "contacts",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.596541+00:00"
+    },
+    {
+      "id": "663cf03573f18c88cf9b3b6dc8f7e88229768b8245ff0eb3707d5e37d0058f08",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "discovery_records",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.598951+00:00"
+    },
+    {
+      "id": "c1a63df3d97fbcfcc815e2760a52040842ab82d361e1aa1ce5cff9136d2d3615",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "outreach",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.599427+00:00"
+    },
+    {
+      "id": "b11621a7629fae4ab28a41be5a7d4ed154e1328f296ae41bf26e9711ae94660a",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "responses",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.599832+00:00"
+    },
+    {
+      "id": "286ef2cc7f264e1c553f6236eefbdcf600cc30badd45deb94955bfd23424a983",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "website_pages",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 551,
+      "processed": 551,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.714504+00:00"
+    },
+    {
+      "id": "ee03a28015d8d9ebf4e15291e8e160005fdbf2c109582aaf4194f84065718adf",
+      "path": "data/phase3c_validation_28_final.db",
+      "relation": "website_snapshots",
+      "fingerprint": "29d4dcc4ffcd9a270c72e45707afcc0436928cccb5ac71978f17943c86217bd5",
+      "expected": 196,
+      "processed": 196,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.723945+00:00"
+    },
+    {
+      "id": "ac968c78502c6a7eca7a12c235965899ade157fef11108fcc36023d5e30daf06",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "companies",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.739748+00:00"
+    },
+    {
+      "id": "4f1c91a44c9d8cd3d408828423d82b302c75c0eae65fe6a31737d911b902426c",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "contact_evidence",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 146,
+      "processed": 146,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.755875+00:00"
+    },
+    {
+      "id": "b7be3651d0717103b1d0d4fb8ce5222272e69ece6866931f95f15599ec10b068",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 19,
+      "processed": 19,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.759082+00:00"
+    },
+    {
+      "id": "464856a545bb4fb649229521aa6ba948cdfe6745158b06892f9183347992e2db",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "contacts",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 59,
+      "processed": 59,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.779093+00:00"
+    },
+    {
+      "id": "ba1f5abb9f908eae3700dd20aca9c0ef660ed26777ba5d7d6e747762eac91756",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "discovery_records",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 80,
+      "processed": 80,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.785271+00:00"
+    },
+    {
+      "id": "89119ccfac48790b3e5f9fee204c7c3e3b79751e5c20aa714866dc21700bcd6b",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "outreach",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.785737+00:00"
+    },
+    {
+      "id": "247d9dea1bb70f5658c4f34740a25569c9c2b8c28a0d7ade5d79764b02cfdda1",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "responses",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.786131+00:00"
+    },
+    {
+      "id": "f24d89a306c3f59d628cec55b47440cbe072c6f5264695226593796c86ca30f7",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "website_pages",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 332,
+      "processed": 332,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.845483+00:00"
+    },
+    {
+      "id": "7d2813d5823aa0e0e6d30c00c7ac4292c2c99bc08a1523cad949c2a55fd330fd",
+      "path": "data/phase3c_validation_77.db",
+      "relation": "website_snapshots",
+      "fingerprint": "a56db2d7f03dca6802c95dd2e6542ed7ee1f73ac8d376a8e45746719e583b6da",
+      "expected": 154,
+      "processed": 154,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.853914+00:00"
+    },
+    {
+      "id": "6d9291d366483821dc84dfb594aeccb15b102d0ba475571fc0f01bf3613330bc",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "companies",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.895567+00:00"
+    },
+    {
+      "id": "59d350a7a18de7dd8d0153ee094608030a04ef0a16c5d1850f1c45892955f80b",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "contact_evidence",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 146,
+      "processed": 146,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.918164+00:00"
+    },
+    {
+      "id": "27a9269f1055e3b90b888fc6d1db8b869510ac26bf7cb7f26b0c4d0b69c5397e",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 19,
+      "processed": 19,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.923736+00:00"
+    },
+    {
+      "id": "e8ffa00957297b1b9fb41cadb7b7ca0402159beade79a6f091a9203805980df2",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "contacts",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 59,
+      "processed": 59,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.939898+00:00"
+    },
+    {
+      "id": "2efaf4f78b2b79e65a4523476d4d4438e9c3ecb7c60e7984bcac04d939926a9e",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "discovery_records",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 80,
+      "processed": 80,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.945767+00:00"
+    },
+    {
+      "id": "42cce97583eaacc452d44c4549999a6982697d461489e1c145d304df10769b52",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "outreach",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.946327+00:00"
+    },
+    {
+      "id": "28c3d327833908978519a17347c601c14ba16b4402865ebf68178b2e2ccc1ddd",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "responses",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:51:59.946948+00:00"
+    },
+    {
+      "id": "febac990415d0efa843523b8d0681a4b1166a43bee6ac7d751d7eadce009f6d1",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "website_pages",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 332,
+      "processed": 332,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.006759+00:00"
+    },
+    {
+      "id": "c4e631b2866f7801209fb8a5f0a0630dddb633640c9599e0466041115ba08e47",
+      "path": "data/phase3c_validation_77_clean.db",
+      "relation": "website_snapshots",
+      "fingerprint": "77fe3347f1e67c270b2289aac2e312d49296c8c8db5ffd9ef3c692c85b93c390",
+      "expected": 154,
+      "processed": 154,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.015499+00:00"
+    },
+    {
+      "id": "22d387e713157abc1434ff5ef8ea0a3ca383c8507f619e99e50ae9e354b4f891",
+      "path": "data/phase4d_experimental.db",
+      "relation": "companies",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 198,
+      "processed": 198,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.063562+00:00"
+    },
+    {
+      "id": "b949939d355d875c287a854cb6c5a0592a22615e3d0e57757ed60dcef8ce332c",
+      "path": "data/phase4d_experimental.db",
+      "relation": "contact_evidence",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 218,
+      "processed": 218,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.077683+00:00"
+    },
+    {
+      "id": "e3649e24281dba79f0c40bce069378027c772c6d2e71ce0f35d4ad1ea1f7174e",
+      "path": "data/phase4d_experimental.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 15,
+      "processed": 15,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.079818+00:00"
+    },
+    {
+      "id": "7738679fe1a5cdedcbcf494817dd3a32963107eb8a3a17633a1301e4ebb8a249",
+      "path": "data/phase4d_experimental.db",
+      "relation": "contacts",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 90,
+      "processed": 90,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.091359+00:00"
+    },
+    {
+      "id": "d87b15b25401ba04cd36cdca48ce8035980c2a05cd63004da7705ad5d09822ea",
+      "path": "data/phase4d_experimental.db",
+      "relation": "discovery_records",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 201,
+      "processed": 201,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.130563+00:00"
+    },
+    {
+      "id": "5535668566e8a4bc23ae699a640b9c21c4fc4951fb731b38f7141a386ba3950e",
+      "path": "data/phase4d_experimental.db",
+      "relation": "outreach",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.131499+00:00"
+    },
+    {
+      "id": "13cd3269f5d59d8ad3c1f45af45173d0ed38fc9b27c9cc679b74a638c176d565",
+      "path": "data/phase4d_experimental.db",
+      "relation": "responses",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.131973+00:00"
+    },
+    {
+      "id": "737f8b9d39922598bf6fef9a67d1c835232fdfc08d5c844426d62757bcfae2af",
+      "path": "data/phase4d_experimental.db",
+      "relation": "website_pages",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 690,
+      "processed": 690,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.354230+00:00"
+    },
+    {
+      "id": "cfad2dba4201c792e1b9d492c33b00669a4e63804e9df4d417b4efb71f7719f3",
+      "path": "data/phase4d_experimental.db",
+      "relation": "website_snapshots",
+      "fingerprint": "2dc2baada02ab4bad1242e025c3185cb33591407cbca4010672ba7913108d2e4",
+      "expected": 351,
+      "processed": 351,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.382245+00:00"
+    },
+    {
+      "id": "70c243dc67ffd463a75353cf898221e3810f622fe4937ca0ecc6fdaef650148c",
+      "path": "data/phase4f_experimental.db",
+      "relation": "companies",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 537,
+      "processed": 537,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.489832+00:00"
+    },
+    {
+      "id": "0eabcafcb0ab2cf7c204dea3c535b847756429a21b2baede491262efc0601d8c",
+      "path": "data/phase4f_experimental.db",
+      "relation": "contact_evidence",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 1293,
+      "processed": 1293,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.648503+00:00"
+    },
+    {
+      "id": "a649dcdf4b7d10f81ca7cfec8076203b8154ba029cffe20bb98faa596ee71be6",
+      "path": "data/phase4f_experimental.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 15,
+      "processed": 15,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.650195+00:00"
+    },
+    {
+      "id": "c4a435cff1d6712f635e0a15b5543d531431cb274cf379fa0a9a170de6981008",
+      "path": "data/phase4f_experimental.db",
+      "relation": "contacts",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 588,
+      "processed": 588,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.816438+00:00"
+    },
+    {
+      "id": "d844c0c361cb29bb390fe5fd7e8f52cb302a910eac6b7bf756b53cc175ba6142",
+      "path": "data/phase4f_experimental.db",
+      "relation": "discovery_records",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 540,
+      "processed": 540,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.860792+00:00"
+    },
+    {
+      "id": "b7e6eb5bad07bea4eb86da540b939eb4b24779fbe2191fe4914320a682cdf925",
+      "path": "data/phase4f_experimental.db",
+      "relation": "outreach",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.861546+00:00"
+    },
+    {
+      "id": "89090b88a0715b2263b3d024c14993c9653badfc721a34e71105bab450d87e67",
+      "path": "data/phase4f_experimental.db",
+      "relation": "responses",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:00.861974+00:00"
+    },
+    {
+      "id": "267a1dd595bad88a15d8e4fe301fbe693423a89ae5646d03ea23d52a395e94e8",
+      "path": "data/phase4f_experimental.db",
+      "relation": "website_pages",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 1279,
+      "processed": 1279,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.159734+00:00"
+    },
+    {
+      "id": "6f6399f33aed240f0855e247f99b303afb7cdc025c58622cf4b4edc57eed49ac",
+      "path": "data/phase4f_experimental.db",
+      "relation": "website_snapshots",
+      "fingerprint": "280d10a0df22b607c34c8c5e11b3fc70b6545d5ceb011b8fb33e43895031147d",
+      "expected": 690,
+      "processed": 690,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.232412+00:00"
+    },
+    {
+      "id": "25ba20a436a7f28d1e41f901009b5a5d7f98dcf99ec6c0540b737163cbd1addf",
+      "path": "data/phase5d_campaigns.db",
+      "relation": "campaign_audit",
+      "fingerprint": "9ee60fb050bf073dffc2c5f470e03d082171decb67fe874060bdfa165ec1d706",
+      "expected": 34,
+      "processed": 34,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.237688+00:00"
+    },
+    {
+      "id": "b64cc0f70a1bf6f0430b73631d7572a0532337f6eae7b84b6837b91b606988fd",
+      "path": "data/phase5d_campaigns.db",
+      "relation": "campaign_items",
+      "fingerprint": "9ee60fb050bf073dffc2c5f470e03d082171decb67fe874060bdfa165ec1d706",
+      "expected": 282,
+      "processed": 282,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.274818+00:00"
+    },
+    {
+      "id": "50cb9fcbb0c1cac7acb977015e235e00f37595027d4a14d9d62c4c20f1a64cea",
+      "path": "data/phase5d_campaigns.db",
+      "relation": "campaigns",
+      "fingerprint": "9ee60fb050bf073dffc2c5f470e03d082171decb67fe874060bdfa165ec1d706",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.276512+00:00"
+    },
+    {
+      "id": "8e28b71d85eb95afaad26b5c4ec469d9cf7746202ab6d9d674d61c780150ea77",
+      "path": "data/phase5d_campaigns.db",
+      "relation": "demo_control",
+      "fingerprint": "9ee60fb050bf073dffc2c5f470e03d082171decb67fe874060bdfa165ec1d706",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.277820+00:00"
+    },
+    {
+      "id": "163370918740ea0c0f308f3c8fc8dbfe5b3322a800cf9575adb13015a772dca1",
+      "path": "data/phase5d_campaigns.db",
+      "relation": "demo_interest_submissions",
+      "fingerprint": "9ee60fb050bf073dffc2c5f470e03d082171decb67fe874060bdfa165ec1d706",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.279064+00:00"
+    },
+    {
+      "id": "9a7d47658f9c4a0f44af88642b1d66d2b39da107c3145b8be4c4d9c883f32e0b",
+      "path": "data/phase6a_experimental.db",
+      "relation": "companies",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 537,
+      "processed": 537,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.321779+00:00"
+    },
+    {
+      "id": "0b87ae82e8b13be224eec0974a998c0417f1f45ffe3f69a87979f567987e49d9",
+      "path": "data/phase6a_experimental.db",
+      "relation": "contact_evidence",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 1293,
+      "processed": 1293,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.365538+00:00"
+    },
+    {
+      "id": "2b1c796d60f5679405e571bf239ed8598f53429c564d395c2eb83fea303d1b5a",
+      "path": "data/phase6a_experimental.db",
+      "relation": "contact_extraction_runs",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 15,
+      "processed": 15,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.366945+00:00"
+    },
+    {
+      "id": "8bded518ce680406e785836ae63ecc0e799d8c440bb828955bd299ed4d06fae2",
+      "path": "data/phase6a_experimental.db",
+      "relation": "contacts",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 588,
+      "processed": 588,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.411919+00:00"
+    },
+    {
+      "id": "391b95ba2f077983369e9b15b82a2b78bd8e3ac2c8dce9709e0f8131df0df55d",
+      "path": "data/phase6a_experimental.db",
+      "relation": "discovery_records",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 540,
+      "processed": 540,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.432134+00:00"
+    },
+    {
+      "id": "ae594044b8a98f1d6670b3820e8c0d99eb9c3466274868b5e41871c04da40f63",
+      "path": "data/phase6a_experimental.db",
+      "relation": "outreach",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.432679+00:00"
+    },
+    {
+      "id": "945ed0d81ef60d57a9171c93b7b56ca2e61e08d1cc80f37a60c6ba1a351d9cf8",
+      "path": "data/phase6a_experimental.db",
+      "relation": "responses",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.433083+00:00"
+    },
+    {
+      "id": "aa405be8adde61ac841d026e961cbd78a614980a0dd072f6ff0482081acbcbc8",
+      "path": "data/phase6a_experimental.db",
+      "relation": "website_pages",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 1279,
+      "processed": 1279,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.656483+00:00"
+    },
+    {
+      "id": "030c9a6c5bbbb6c04939cf090c318de29c2a3a47c1ba881fa857d699ed6500a4",
+      "path": "data/phase6a_experimental.db",
+      "relation": "website_snapshots",
+      "fingerprint": "50ad7f0ae5fd85fda6766a8c14cf6aa0a3f66553f784012c15629048dabf51f6",
+      "expected": 690,
+      "processed": 690,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:01.688037+00:00"
+    },
+    {
+      "id": "81f7cb983d319cbdb1c43474c2d4dcc7e9ca6d213340d448875aab0aa243a37a",
+      "path": "data/phase6d_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "7945e2167097073ea481b09689d97ab90cb7e48946a686d9dac9fd36a674f0e6",
+      "expected": 57127,
+      "processed": 57127,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:11.903908+00:00"
+    },
+    {
+      "id": "42c773d21e0d073929e1c6a7a1dfe90cacb7a5ac1df943c7fac47c84a8e7a216",
+      "path": "data/phase6d_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "7945e2167097073ea481b09689d97ab90cb7e48946a686d9dac9fd36a674f0e6",
+      "expected": 109867,
+      "processed": 109867,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:16.449060+00:00"
+    },
+    {
+      "id": "931355fecdb9ada6d9ce1717b6dd676103875aa1d30b5fdfef57a6a1042a955a",
+      "path": "data/phase6d_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "7945e2167097073ea481b09689d97ab90cb7e48946a686d9dac9fd36a674f0e6",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:16.450165+00:00"
+    },
+    {
+      "id": "0990c75292d4dcc1872ff00a68ac70f277cbfe9359379aa93af328fd703bf576",
+      "path": "data/phase6e_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "89a377827cdb1abd98327d8791df3487931cb93ba305328dcbfbebbde6fe2ac8",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:20.306562+00:00"
+    },
+    {
+      "id": "287b9fcc25b8a02a16499168735ebf186a0841ff2fbb4389b6a4dd2eaf43feb2",
+      "path": "data/phase6e_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "89a377827cdb1abd98327d8791df3487931cb93ba305328dcbfbebbde6fe2ac8",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:24.725631+00:00"
+    },
+    {
+      "id": "23ba9c11dc5d32ab12bfe5cd6f03fc4e9147abbd7c43e343d84491aa4ae013d0",
+      "path": "data/phase6e_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "89a377827cdb1abd98327d8791df3487931cb93ba305328dcbfbebbde6fe2ac8",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:24.726994+00:00"
+    },
+    {
+      "id": "9ff931f20073e89e0845a311b8365c9cd97f6f996c789643484b4e2d5f6620be",
+      "path": "data/phase6e_candidates.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "89a377827cdb1abd98327d8791df3487931cb93ba305328dcbfbebbde6fe2ac8",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:26.817467+00:00"
+    },
+    {
+      "id": "880f5bfc853b2d8375eee3fd2d2cff07051a6448f300decd210bb139f22cf614",
+      "path": "data/phase6f_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:30.484079+00:00"
+    },
+    {
+      "id": "b8cbc19e12ffbee90557795f03db4fe7ab82548292ae6ad85641a90b3a499f6a",
+      "path": "data/phase6f_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:34.372465+00:00"
+    },
+    {
+      "id": "12fdb0bc18498e9663dc6a04ffd8e3e9b5af6ca75d4a05635f6db1f81f8ce030",
+      "path": "data/phase6f_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:34.373798+00:00"
+    },
+    {
+      "id": "edfc00f032ac1c25162d585d0688790e5de33edf3b7fa931768365f0ded201fd",
+      "path": "data/phase6f_candidates.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:36.422134+00:00"
+    },
+    {
+      "id": "e178c3f2707b872912d8bf1a3cdfb32a90808d0800896d253121f4f3179c0710",
+      "path": "data/phase6f_candidates.db",
+      "relation": "phase6f_contact_channels",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 260,
+      "processed": 260,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:36.470530+00:00"
+    },
+    {
+      "id": "a838ab227b06af986ce266776f17c4b419798231070b37272e13db4481ab8927",
+      "path": "data/phase6f_candidates.db",
+      "relation": "phase6f_runs",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 25,
+      "processed": 25,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:36.485345+00:00"
+    },
+    {
+      "id": "fd38a4ac7cf533ac23f23e7ffcdfb0161719c68c18dfe69d65d1ae04118f7021",
+      "path": "data/phase6f_candidates.db",
+      "relation": "phase6f_selection",
+      "fingerprint": "3c12eb8e80941a56b928e8ab50c3ad64dc9e1e2a0e3ad255678c62ff36863fe3",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:52:36.501665+00:00"
+    },
+    {
+      "id": "3a024d97ea8d8cf93bc128625afbf911515fdfceb67b9163ac5eb59d5e4d01ab",
+      "path": "data/phase6g_contact_review.db",
+      "relation": "company_review",
+      "fingerprint": "a9a2f0505a26c4f893f602c125afdb1740a9741fcacac99953248e2c8f7561f0",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:42.103636+00:00"
+    },
+    {
+      "id": "19b9f82ee9e60f3ad4e22506235876d7387f5b88ed9cb8fa891165023683bf86",
+      "path": "data/phase6g_contact_review.db",
+      "relation": "contact_decisions",
+      "fingerprint": "a9a2f0505a26c4f893f602c125afdb1740a9741fcacac99953248e2c8f7561f0",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:42.105531+00:00"
+    },
+    {
+      "id": "1e4b8c045204a0a94523fdc2c0a30b58f59273db23ea5888e329a75bd5c87a64",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "candidates",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:48.191985+00:00"
+    },
+    {
+      "id": "db6e015c7a8cc8f373ab7228a3667e95032c77c1a361a594e53aa2c5db1ad162",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:52.459407+00:00"
+    },
+    {
+      "id": "d1a93c634d356b86da6a4d93302e11fad0f980159dcb05b9be0773830672a025",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "import_runs",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:52.461136+00:00"
+    },
+    {
+      "id": "d3ad1d4dc0a9c8f679634626dff6ec15262cde42fd7f27d19fa2752a4395079e",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.639326+00:00"
+    },
+    {
+      "id": "b1ee3e846a05689e92100990a05ffccb044fbd7de1fa8c86db7904f42849c89d",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6f_contact_channels",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 260,
+      "processed": 260,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.686286+00:00"
+    },
+    {
+      "id": "2a81f043b0de140c6fb462f75d60d46b65c8b132b4bf45040883694ae51b1fcd",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6f_runs",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 25,
+      "processed": 25,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.688645+00:00"
+    },
+    {
+      "id": "546ec86b9256025bfe50634b80b0a1473b4fde10f05760cd70d1fb24e0825c71",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6f_selection",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.703937+00:00"
+    },
+    {
+      "id": "fb2a5459a59af3b58242d9528ffbf5b7decd1de6856752773c128c0d296a92b8",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6g_eval_runs",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 6,
+      "processed": 6,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.705879+00:00"
+    },
+    {
+      "id": "733d3ea6e96610ba0bd21e9ddb0364dc51b309f41e10f7ff24e2dc49e42d5a0d",
+      "path": "data/phase6g_evaluation.db",
+      "relation": "phase6g_eval_sample",
+      "fingerprint": "b9119b469377e520be63e490075f6f09b0f46e9eddcd37d7d754fa48695a1457",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:54.709241+00:00"
+    },
+    {
+      "id": "d1076eae5a8b1344c5a1331d5da550c16db7fddc0ef2bdd264e142a217015370",
+      "path": "data/phase6h_candidates.db",
+      "relation": "candidates",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:54:58.332934+00:00"
+    },
+    {
+      "id": "bb0e35aafe5616b26b149cb53e71ec1eb4006d86c77e3b69bd5a12c91b4473e0",
+      "path": "data/phase6h_candidates.db",
+      "relation": "candidate_provenance",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 110407,
+      "processed": 110407,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:02.543967+00:00"
+    },
+    {
+      "id": "78b713a8653baed82e107f418c501ce95a9e56ae59338ff739c826745b7abaa3",
+      "path": "data/phase6h_candidates.db",
+      "relation": "import_runs",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:02.545128+00:00"
+    },
+    {
+      "id": "8b78b6158278072ca561dd7ca5d64ceb2c6bf581c743e5d56a773b1859ef85c3",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6e_screening",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:04.920475+00:00"
+    },
+    {
+      "id": "5f5adb85d0040496d7392f9504e17be577e3614107624f1a0cee0431555190b6",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6f_contact_channels",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 594,
+      "processed": 594,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:04.990795+00:00"
+    },
+    {
+      "id": "388ac2066b9249ccfd245773ad36fcba077cfbc7d7446a44689a2edcd267828e",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6f_runs",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 25,
+      "processed": 25,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:04.992886+00:00"
+    },
+    {
+      "id": "d52e1f42fe48c0979a96a5e40471267a0376acf5d8c17b59df7cc1f19048c82a",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6f_selection",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:05.011161+00:00"
+    },
+    {
+      "id": "46a5ef138c910062f5b73457603f9e52db06be4bd38f8a4aaec2f5b5174e72b3",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6h_runs",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:05.012895+00:00"
+    },
+    {
+      "id": "b59667c75b6340071baf35a1a39c8867e4aa46c0253f6fb19b27c4d8f2ef8342",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6h_selection",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 4072,
+      "processed": 4072,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:05.158177+00:00"
+    },
+    {
+      "id": "c8b6bd1072b55f87fe5cf4f5df449dd3021936f0a405da83adba0067686a6f92",
+      "path": "data/phase6h_candidates.db",
+      "relation": "phase6h_shortlist",
+      "fingerprint": "072de14801ec4678457644db93cb5892b4a92d06be5fd1bcb64d7fdd0fa456d6",
+      "expected": 5000,
+      "processed": 5000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:05.327790+00:00"
+    },
+    {
+      "id": "f945432e1561513aa7b639f36e97b577ca105b2fc29e165e4fd41570af3d625b",
+      "path": "data/all_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "535ab62e58cd41a7e65dbccfc12102c941ca1cafe36e675d6d9ce8d8668bd139",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.328875+00:00"
+    },
+    {
+      "id": "f278802db7960cbf1c22462cdf6e4d19845e75c3c168763cb5a37ffe8eae3098",
+      "path": "data/all_contactable_companies.csv",
+      "relation": "csv",
+      "fingerprint": "a03326c847bfa7dd311bbee998a4504c55c34d0995ff6afb99c9fa9083b71b73",
+      "expected": 7172,
+      "processed": 7172,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:46.874251+00:00"
+    },
+    {
+      "id": "3661b3551d6367a1b898ed8af61c99096d42fe75b93c643cf6528ab92e2dda3f",
+      "path": "data/all_geo_eligible_companies.csv",
+      "relation": "csv",
+      "fingerprint": "4ff926ffda21affe54152ac1476322bf3a9a8839016d078aae6b9780a399a015",
+      "expected": 19006,
+      "processed": 19006,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:55:52.877111+00:00"
+    },
+    {
+      "id": "79b8fc8917e481c8f95b1c07bc72d484bfa55d611b225e56711c21035364ba63",
+      "path": "data/all_processed_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "40e5bd3a5c5ff1679f1eaf7421438b3ef86bf18c603832bc0b43daf434e783b1",
+      "expected": 45504,
+      "processed": 45504,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:03.598964+00:00"
+    },
+    {
+      "id": "db4d8e4c2690a1d0711c6d0712fcee78bda83529ac8bebbfecd3138489b37075",
+      "path": "data/all_verified_companies.csv",
+      "relation": "csv",
+      "fingerprint": "bad296e4b249ac1e80d59ae98bbdcde294649512cc80a0deabb85fcf9286b78d",
+      "expected": 20879,
+      "processed": 20879,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:07.093625+00:00"
+    },
+    {
+      "id": "8d665bd6d167c8c080af80d95746cb7b2e75e076dc6a2a80b023ca1985d4bb98",
+      "path": "data/business_email_contacts.csv",
+      "relation": "csv",
+      "fingerprint": "15f505bb8641d80e3e5a4fc8ba7c0a326697e620a91916ca04ca9c10f4bd3859",
+      "expected": 5192,
+      "processed": 5192,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:08.212878+00:00"
+    },
+    {
+      "id": "188304381a079a9262fab07e32d745015e3a36749c18f5bd809c00235283df0e",
+      "path": "data/contact_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "8df34b04ceba37e53b3264e4ab3465a64144eb4c7dfe8203c2b068560cbd72fb",
+      "expected": 170,
+      "processed": 170,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.340201+00:00"
+    },
+    {
+      "id": "3b23d7b5b7c8bac9b59b211af7d74c9a06f7a4d44f25713e3571c3e8574cbfe3",
+      "path": "data/demo_companies.csv",
+      "relation": "csv",
+      "fingerprint": "b7424f98d311d4154bc61cfa7a798187f19ae35b5936af893cbeeee62cc66127",
+      "expected": 5,
+      "processed": 5,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.341890+00:00"
+    },
+    {
+      "id": "f77e6b87771cf383bc9b20bd17cadfed83b72be68e633b50b71763b61574fa28",
+      "path": "data/full_screening/full_us_outreach_screening.csv",
+      "relation": "csv",
+      "fingerprint": "3e3eced90f25548cc52e63a813886a933509a27bd5179ccdac0c2cfe04a16a21",
+      "expected": 72927,
+      "processed": 72927,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:21.067851+00:00"
+    },
+    {
+      "id": "bf02771cb6ffee82ff589ca9bc5b2670ead6517aebc19702a4403d46fe9e23d6",
+      "path": "data/geo_eligible_companies.csv",
+      "relation": "csv",
+      "fingerprint": "f6ec94bd23ad3b82bcb6dd956aedf9caedef1a251337df529b7c1f32e00adfab",
+      "expected": 418,
+      "processed": 418,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.363721+00:00"
+    },
+    {
+      "id": "2c31b59340a5024904c5c23daf74ad8e437195d4a4cf6ce7c88d0a2d8c644327",
+      "path": "data/hotel_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "c2f11814605b1470898e0a21c877f81def66b15716b0bbc0077ac87f44decacb",
+      "expected": 15262,
+      "processed": 15262,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:24.112103+00:00"
+    },
+    {
+      "id": "c2dc8ddabfdb17a5b37370fc80dc481f9d801b53bdfed7a9fceb8a6c071833e7",
+      "path": "data/hotel_contact_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "f3af573ca2b817341249ec48ee54ca42c272c44a23957d5a4996d9ff1ace58d7",
+      "expected": 850,
+      "processed": 850,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:24.254758+00:00"
+    },
+    {
+      "id": "4c157cef81cb983412e588941a0cd0c98d96c3817a902d774f7575e94dfb719e",
+      "path": "data/hotel_geo_eligible_properties.csv",
+      "relation": "csv",
+      "fingerprint": "4ef93e73dea4ac1451f97df0de4b1991d22c43f26a79baa71144c82dcfb22a18",
+      "expected": 879,
+      "processed": 879,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:24.533375+00:00"
+    },
+    {
+      "id": "b572a01feed0c41099e5ec221fdbc99dc9b37eb960a3c92626240914e82deac1",
+      "path": "data/hotel_validation_failures.csv",
+      "relation": "csv",
+      "fingerprint": "15801524f6c884dba92662d947496bfe08d74dfc0733a598a3c810822536d49b",
+      "expected": 2619,
+      "processed": 2619,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:25.102821+00:00"
+    },
+    {
+      "id": "8b6a71e201151cce286d7b8e094e98fdcacfbd19a959f271fff3045db708afc2",
+      "path": "data/hotel_verified_properties.csv",
+      "relation": "csv",
+      "fingerprint": "6a944d5e73b31c8bd307e2644b21c66fa75c5ed6c7e5db21369c532be15b7569",
+      "expected": 912,
+      "processed": 912,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:25.257902+00:00"
+    },
+    {
+      "id": "3ead9116c5e4d0ceb44e1a32b51220860fe2f967622b7aea3790cfe7f30ae4a9",
+      "path": "data/official_contact_forms.csv",
+      "relation": "csv",
+      "fingerprint": "404698aebb0303ad172dec4c4c29771dd4ded9c02accdd3c5771a34c7fd94917",
+      "expected": 3254,
+      "processed": 3254,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:26.061794+00:00"
+    },
+    {
+      "id": "65380e32cd5c147e29c9be247939e6ed27077bb1f95cfc1a9d480ae159c2e6c0",
+      "path": "data/pending_human_review.csv",
+      "relation": "csv",
+      "fingerprint": "eb8fa8cd5e97263cb70c65efb4d03f82d57c3bfe3c563abace4655ec2dd3890e",
+      "expected": 8446,
+      "processed": 8446,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T02:56:26.770552+00:00"
+    },
+    {
+      "id": "c0687188ef4a3ea77fe5607ebc70f498a0ae95f5c35fd4415752d8207e462dfd",
+      "path": "data/phase3_validation_after.csv",
+      "relation": "csv",
+      "fingerprint": "9f25e07d2bf9a0db451efb6ca3ed2b2a169b573dbb014d0fd9ea49e2dc465d47",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.367860+00:00"
+    },
+    {
+      "id": "56627950cef54fdc15460b2d9f40f62ca9b50985349c4af5f66ab265860bef09",
+      "path": "data/phase3_validation_initial.csv",
+      "relation": "csv",
+      "fingerprint": "09b6d26c6e2bbef0a1960b8a4af0df3d0918830922ba56c330936f9035cf5996",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.370707+00:00"
+    },
+    {
+      "id": "130c2544e5b690940e086034e92201be16185ee37b6854734587c172d28ca010",
+      "path": "data/phase3_validation_manual_audit.csv",
+      "relation": "csv",
+      "fingerprint": "1462d816237029a4c273fcc2e2ad080c798416714d85fca8ab589071712ebe6e",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.373449+00:00"
+    },
+    {
+      "id": "bcda8e60d4bead306fafb785a19eee9efc27eb57d107974480f5802e68e567a8",
+      "path": "data/phase3_validation_sample.csv",
+      "relation": "csv",
+      "fingerprint": "3d791f60e580187f6e07747231b1fe9eb1be4c27acf5ab6a3ce95063ae5599ba",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.375462+00:00"
+    },
+    {
+      "id": "f5c6767b7f0cf951e9aecaa2639e71385c9db8944054b0634276cd5dde254464",
+      "path": "data/phase3b_validation_fallback_runs.csv",
+      "relation": "csv",
+      "fingerprint": "11d75ac3f82a767377aae2981f7619b1c8aad77c4ed566ae9f0dc5e20bed9245",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.376851+00:00"
+    },
+    {
+      "id": "f2595b4fb5ad677885a24ffe4f578373c878d759792378a3a557d6e1395c4c31",
+      "path": "data/phase3b_validation_manual_named_audit.csv",
+      "relation": "csv",
+      "fingerprint": "83270237531bb2bbdb28ab5df9fa3667ed8122eb063a4afcc8bcc01885f8296d",
+      "expected": 11,
+      "processed": 11,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.378346+00:00"
+    },
+    {
+      "id": "8951c7bd37178a02301a5158c75f9640b5d47e02dbb0fc18f3d446df7fdd2862",
+      "path": "data/phase3b_validation_results.csv",
+      "relation": "csv",
+      "fingerprint": "790dbcc038a9bdb40ce8786b88e4942872edb5d26bc1c597235d598e3b76b988",
+      "expected": 28,
+      "processed": 28,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.380215+00:00"
+    },
+    {
+      "id": "a96aaa2451c879413b16d71ba225792f20f78e70cdaa05bf93e5488c1a2267b2",
+      "path": "data/phase3c1_company_diagnostics.csv",
+      "relation": "csv",
+      "fingerprint": "926ea76f08f6e9ac39609831aa79c866144bb495ec8169e81292961492edb137",
+      "expected": 76,
+      "processed": 76,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.384822+00:00"
+    },
+    {
+      "id": "0c263fb60c77b01c171f75449e95ac5a10d29ad0e7defc3727ba0313788ad79c",
+      "path": "data/phase3c1_validation_28_results.csv",
+      "relation": "csv",
+      "fingerprint": "26b6f8f4bd5734fc085ccf0be3d1046410b2c99968c55a8e843b547188a8162e",
+      "expected": 27,
+      "processed": 27,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.387581+00:00"
+    },
+    {
+      "id": "67565c3c26dc799abe78851602c2f2e5ffa0e89d840b02c79890ffabc7d1aaae",
+      "path": "data/phase3c1_validation_77_results.csv",
+      "relation": "csv",
+      "fingerprint": "a3f769a81b9d6b25f963fb6a1dc563bf357f660aeed6386558c0b1dfc4bcc77f",
+      "expected": 76,
+      "processed": 76,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.391269+00:00"
+    },
+    {
+      "id": "2719be14519121ed748de2025bd4f38e2791804ca01c47afdfed1807d7f872dc",
+      "path": "data/phase3c_validation_28_results.csv",
+      "relation": "csv",
+      "fingerprint": "432f706db43c89ed148d2a3955be7b8e130ed2c1804e4b4c1018acdbd71e7d15",
+      "expected": 27,
+      "processed": 27,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.393430+00:00"
+    },
+    {
+      "id": "8c82b9c27632045eed3dc73e81b9faad0f034fecd8f8b47ec156bc9816cb7b82",
+      "path": "data/phase3c_validation_77_results.csv",
+      "relation": "csv",
+      "fingerprint": "ec4121d2e1eff52513884b70432f889459036c99bba768ed3df9824d8500d28e",
+      "expected": 76,
+      "processed": 76,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.397009+00:00"
+    },
+    {
+      "id": "62185a847ab9be9be8ee0f3e7854fa70b12c0231ed0ed8e0453df2257c2bc29c",
+      "path": "data/phase3d_company_review_77.csv",
+      "relation": "csv",
+      "fingerprint": "50c8c62e2aff8019209516a47fea474780fa663d4c41543c09060be008625432",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.403497+00:00"
+    },
+    {
+      "id": "72d3217ac5b10dc8df947f8b31dee2e6b8d9e0fdf132fd88758edca2281eb209",
+      "path": "data/phase3d_company_selection_summary.csv",
+      "relation": "csv",
+      "fingerprint": "d3712abfc45e1d00c944e8bfa985e43ac7a31bd5e0b2337efa98afde08270cc6",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.405102+00:00"
+    },
+    {
+      "id": "c4268c79b8436ca48b87cd73b2df28c73651ffc9dfcdf9e90727bcca93e80e2d",
+      "path": "data/phase4a1_website_matching_pilot.csv",
+      "relation": "csv",
+      "fingerprint": "4529057c2ccf3fa543e27698bbf2f35a1cbbc4545a3e2ff336f41fdcc6124d9f",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.407528+00:00"
+    },
+    {
+      "id": "2e84491fe7a384c09c0ea8ede21088d0da67c163fb53cfc5c567429d0d6d08c5",
+      "path": "data/phase4c1_website_verification.csv",
+      "relation": "csv",
+      "fingerprint": "ef6422b712e279d9df44f47d90f483e28674777d489fc69a22b2bec6794fa041",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.409727+00:00"
+    },
+    {
+      "id": "be29fe7ce315bfd791872c87964c5af79e93e4cccb994f682364cd37e3792580",
+      "path": "data/phase4c1_wikidata_pilot.csv",
+      "relation": "csv",
+      "fingerprint": "1c9f70c5f0a102a89261c273aeed6e7165092b33de38cb6fc0c1b780a91a2199",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.411854+00:00"
+    },
+    {
+      "id": "91f1c3663e37a5887c650cff3db9ba75f20ed2c1048565134fcb4abd27bfe489",
+      "path": "data/phase4c2_company_quality_audit.csv",
+      "relation": "csv",
+      "fingerprint": "e9b6dfb740ef85b18098920801e25588826735f8bb5c661142bd39261f8d7545",
+      "expected": 30,
+      "processed": 30,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.414348+00:00"
+    },
+    {
+      "id": "b73fa8a659e27dfa432985894e3830d00b57da9c74c1b85b8f7f9ccc7a433401",
+      "path": "data/phase4c2_filter_comparison.csv",
+      "relation": "csv",
+      "fingerprint": "edf3fb3b2c8cd3fa0cfcc7cc7e9408c7eaba721de4a8f2f2f5a22d3ac3f9aa6b",
+      "expected": 9,
+      "processed": 9,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.415419+00:00"
+    },
+    {
+      "id": "c214ccc7b297850962d08ca0d584c2b73d71a9de4aade55acc07bd4a025d637a",
+      "path": "data/phase4c_expanded_company_cohort.csv",
+      "relation": "csv",
+      "fingerprint": "88b713a70b6d45ba89e5eba6f1e34750f5fab4e5af34f92686dffdc16bcc3e19",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.421858+00:00"
+    },
+    {
+      "id": "6bf62dc81c14ff3b9f3137f54eab017d9b45a92b203963e1f5bbf52f06ad5ed2",
+      "path": "data/phase4c_expanded_company_review.csv",
+      "relation": "csv",
+      "fingerprint": "bcda1969adc63b87695e59d900d73388675a97e24ec4afa74416002ff2b100e8",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.427556+00:00"
+    },
+    {
+      "id": "f69a495f6d49d80bfebb333c1cf3a8a2cbeab250394fb5e542871dc0ef007252",
+      "path": "data/phase4c_wikidata_pilot.csv",
+      "relation": "csv",
+      "fingerprint": "d28e0fe01cd9e3e120a2875ae6ef829c22fda5216a3154505fa78a38aad658d2",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.428696+00:00"
+    },
+    {
+      "id": "8aa7cce44cdcdef0d14e9d5ec04f4114cc666328731a79c6f0e09f2ad39ab06a",
+      "path": "data/phase4c_wikidata_source_quality.csv",
+      "relation": "csv",
+      "fingerprint": "5432d2f7c512a99c3d76f9c22248a863c0fc384836798e7ac397e699b6e2a442",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.434537+00:00"
+    },
+    {
+      "id": "d2c5b44c15cfd21ce9da910364538262a48789c7c147226322594a56b4f89fb9",
+      "path": "data/phase4d_expanded_company_cohort.csv",
+      "relation": "csv",
+      "fingerprint": "5e8918d3a1feb556d649add78c9d588039b1300a4dc5dc398589bb18d1a1d1e1",
+      "expected": 198,
+      "processed": 198,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.496742+00:00"
+    },
+    {
+      "id": "82d945bb8cfc5f7f9ef25051dc3d4dc3505669af48cdcf87c16a71691cf5732f",
+      "path": "data/phase4d_expanded_company_review.csv",
+      "relation": "csv",
+      "fingerprint": "2f7a38558bfcdbe75a7a7b06939c5d951b102528b9c298d38399dee2714c9914",
+      "expected": 198,
+      "processed": 198,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.515171+00:00"
+    },
+    {
+      "id": "89c0c0b8d8cd5f6310ea432c355ed5201149dffca3a43bc5ca5a59a537ef2f34",
+      "path": "data/phase4d_source_capacity_audit.csv",
+      "relation": "csv",
+      "fingerprint": "d4c527ee7be05291719ec9f2203334463376b10949ecd1164ce69d23e7abc7c8",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.516986+00:00"
+    },
+    {
+      "id": "b196b2a2647673b45618d19b8a079ed349a492cdde2c296076729a9b734e1688",
+      "path": "data/phase4e_expanded_company_review.csv",
+      "relation": "csv",
+      "fingerprint": "c4348aae09a5790ff6e1317353d006fd360459382a4f17d7bfde0ce5ae872635",
+      "expected": 198,
+      "processed": 198,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.534556+00:00"
+    },
+    {
+      "id": "7ca51500d314a850a13ca080369d07c76dfc387a96c86230d741de51f532011d",
+      "path": "data/phase4e_qualification_results.csv",
+      "relation": "csv",
+      "fingerprint": "1b8d33fc494c6fd9231eb59061bc3fa66328b1d99d173c54be4c12a00dd74b4b",
+      "expected": 121,
+      "processed": 121,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.548816+00:00"
+    },
+    {
+      "id": "6df7290e94efb28d9bcc3c9a0aee408645543a191e0e0b10aa7e43e18de2301d",
+      "path": "data/phase4e_website_verification.csv",
+      "relation": "csv",
+      "fingerprint": "caef55e5288027741c031f4c4b83a167990793d88ad0de7ca03c93f35e5954d8",
+      "expected": 121,
+      "processed": 121,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.585849+00:00"
+    },
+    {
+      "id": "c51a92dc48d4284f7d1f71bdbfdc672be1062716b27102387c3843c4a6bf0881",
+      "path": "data/phase4f_expanded_cohort.csv",
+      "relation": "csv",
+      "fingerprint": "d98130c4357d76ede95259b98bc7c596e48d72c1d64355e5e3c9b293fd6d5701",
+      "expected": 537,
+      "processed": 537,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.658107+00:00"
+    },
+    {
+      "id": "02ae80bf16b3c0f7543e3edc4c5cb8271b90505e795fe669e370068334e0d8be",
+      "path": "data/phase4f_qualification_results.csv",
+      "relation": "csv",
+      "fingerprint": "19994fa632f27d551a755552381c374465ddac2476a2324f30dc18a4e8047f08",
+      "expected": 339,
+      "processed": 339,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.691830+00:00"
+    },
+    {
+      "id": "4c95cc2380410018b866cea67305c685272672a3026bc8eece0d7f0bae46ef6a",
+      "path": "data/phase4f_review_queue.csv",
+      "relation": "csv",
+      "fingerprint": "7a5b217489bd2a3bfa528f45be688eeb1199c88465d07b1a72b454aafc5dcf83",
+      "expected": 339,
+      "processed": 339,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.756597+00:00"
+    },
+    {
+      "id": "5fe75e44c5c1ed877ed0b17503bd9de7c40338f6d286f7ae43cf55731313fcd2",
+      "path": "data/phase4f_website_verification.csv",
+      "relation": "csv",
+      "fingerprint": "4a5d1cd8af813e95ec0abdb80751fef9a67a4864a041195cd16291457d2d4a17",
+      "expected": 339,
+      "processed": 339,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.793790+00:00"
+    },
+    {
+      "id": "47c63a2146158f2d0e53a0bbb23071ec28a9fcdb2d96c714672c6ac08f3d8ec0",
+      "path": "data/phase4g_ambiguous_identity_review.csv",
+      "relation": "csv",
+      "fingerprint": "fe41b419c87e40d6a3e7371cd196e1f580893e923da651835ed70b0da761fc3c",
+      "expected": 60,
+      "processed": 60,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.800913+00:00"
+    },
+    {
+      "id": "4912c0b9717499953d5b156527de234867553332d38e26929a025c54d340a2a8",
+      "path": "data/phase4g_contact_channel_review.csv",
+      "relation": "csv",
+      "fingerprint": "0e8df475ea40db6c652b529b3d098fcf29f8f287287fa922ed6c6e336d93365e",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.802540+00:00"
+    },
+    {
+      "id": "8bb8c426df017f116c804371bd79de60c9dd2eaceec5e72d4fc8f36e97358d59",
+      "path": "data/phase4g_high_priority_company_review.csv",
+      "relation": "csv",
+      "fingerprint": "d79c8f31ddc08bf831d4ca6e631979ec21f1f53f3576f79203558d18b30bac2c",
+      "expected": 235,
+      "processed": 235,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.844883+00:00"
+    },
+    {
+      "id": "8c60511de7ac256edfe2f940b380841c613b482632813d03de7d493dc1f5c42b",
+      "path": "data/phase4g_legacy_identity_unassessed.csv",
+      "relation": "csv",
+      "fingerprint": "3aa4da5e7ec04d878bb0b69988be0d1c7473b1cdcb35f7370a6062e06e25cbbb",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.853458+00:00"
+    },
+    {
+      "id": "a51409e8e50d972a7bb11690f4c9c865666cc91932b94b4edb3915018fc3e4c3",
+      "path": "data/phase4g_missing_qualification_evidence.csv",
+      "relation": "csv",
+      "fingerprint": "3dc1788837de59200c34cc55a60c4182d5cb8d66f31570e1ba0cb303696f58dd",
+      "expected": 228,
+      "processed": 228,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.869457+00:00"
+    },
+    {
+      "id": "251f7f3b2113e46d0647218506bda738e9a7fc9cb5b86820fb515f65c5b64d1e",
+      "path": "data/phase4g_review_queue.csv",
+      "relation": "csv",
+      "fingerprint": "93613e8df103f20c00e88782036c40f54969f1cea9fa731ac243106457fc1680",
+      "expected": 537,
+      "processed": 537,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.905992+00:00"
+    },
+    {
+      "id": "cc4d07e2ffce2bce255de1d0b84fea3f88af5f6f774d016ffb202d4bcf096d75",
+      "path": "data/phase4g_scale_projection.csv",
+      "relation": "csv",
+      "fingerprint": "b1a8f733affebe2614eb7bdeeb39288c3ecdce502a7e4d69af9ba7fb563925f1",
+      "expected": 4,
+      "processed": 4,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.907471+00:00"
+    },
+    {
+      "id": "fffb765812a65cee327af116d9165aae59ef7bd4862af231a02c416541f4596f",
+      "path": "data/phase4g_source_diversity.csv",
+      "relation": "csv",
+      "fingerprint": "93f9ca515ccb6932ebb326b714756ee68380c4aa382a42d50e370923dfb71a3d",
+      "expected": 205,
+      "processed": 205,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.917315+00:00"
+    },
+    {
+      "id": "b5777fba95606479fee77c769592772a8db040ee5f6d85282c956119c1cbfbbc",
+      "path": "data/phase5a_contact_form_drafts.csv",
+      "relation": "csv",
+      "fingerprint": "b3c468a6376f4df1abec9d3983fa42dc9aa645d46925eb048194991ff0904760",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.919028+00:00"
+    },
+    {
+      "id": "b3ac329368bd3e6190e9765632862c004278a4d1a29878774a6a4192ea6ad9de",
+      "path": "data/phase5a_delivery_simulation.csv",
+      "relation": "csv",
+      "fingerprint": "0e8e2afa4a174c33b13658bec13be5aab6681924266e8d5b15c60cf2d6ae0ac4",
+      "expected": 11,
+      "processed": 11,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.920897+00:00"
+    },
+    {
+      "id": "61e79442137efb2ff00182e3dab55f49402a49fad711154c5d4845365992a146",
+      "path": "data/phase5a_email_drafts.csv",
+      "relation": "csv",
+      "fingerprint": "a0cb3a9ac137736ebb98cff09e1418e18fd6ba2eb7e6371ba0d5119b8326d063",
+      "expected": 9,
+      "processed": 9,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.922464+00:00"
+    },
+    {
+      "id": "f5d71494168c297471719b26303982b3f902142ad26d6ffb14eba045eefc0492",
+      "path": "data/phase5a_outreach_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "3fd0399a58dc9456352976a5e7599876f9ea6ae2c37e2d48c72f1055157bf959",
+      "expected": 11,
+      "processed": 11,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.924591+00:00"
+    },
+    {
+      "id": "f5a33acaf2e9ae13fbb351640bf5074c61d252be04ea632b90c5dab81d46c5a4",
+      "path": "data/phase5d_demo_campaign_summary.csv",
+      "relation": "csv",
+      "fingerprint": "5852d6ab36d8dc1e81b7d35ad62c1b93376ef754e9f92d25b2060b5e826f6b4d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.925633+00:00"
+    },
+    {
+      "id": "eef59bc3858a8d59fcff71d6e434ace64f7e8e1233ac2e3003d532af939276a0",
+      "path": "data/phase5d_demo_outreach_status.csv",
+      "relation": "csv",
+      "fingerprint": "970aae1938ac0b34355c2fe41f31ea70e57eae3a0014aac93ff0c2112117b91d",
+      "expected": 20,
+      "processed": 20,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.946870+00:00"
+    },
+    {
+      "id": "42e9c751f6ac7db2329107d12beabd041dd68403ff3908bb10578036865eaaac",
+      "path": "data/phase6a_company_quality_summary.csv",
+      "relation": "csv",
+      "fingerprint": "cea71fde496191b2995876d5dcfa94a1f36cc7a13c6e1842a0031471abd49d87",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.948398+00:00"
+    },
+    {
+      "id": "60da9ff15e913a30bd59ad2ebfc1dfdb0e2265d869c85cffb7e8ddc6eeb53442",
+      "path": "data/phase6a_expansion_progress.csv",
+      "relation": "csv",
+      "fingerprint": "cfe19aea6a7aad1016183f9abb421a2baefec4edced17e472b4910af3f08d012",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.949379+00:00"
+    },
+    {
+      "id": "36b5065ba42c1ffd20052b5defc90913f512a83d4fcbde91b86f12652d70e3c8",
+      "path": "data/phase6a_source_inventory.csv",
+      "relation": "csv",
+      "fingerprint": "84f78f36ea9e411c8b9b7a91de8be8c8cb36aa00e6e8ce000ee7bab47bf2fc6f",
+      "expected": 6,
+      "processed": 6,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.951466+00:00"
+    },
+    {
+      "id": "ff78de9ad2158093bc162e9a1bc747f6dd7141c943afd4499ac1e5ec651483fb",
+      "path": "data/phase6a_source_yields.csv",
+      "relation": "csv",
+      "fingerprint": "a7ef134fe15b3ada0d2f2771892c72a6bc96260d23b3e93d90dd79ab40599c84",
+      "expected": 18,
+      "processed": 18,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.953076+00:00"
+    },
+    {
+      "id": "ab47b12e7c1ecc7fa74ecf119d122bb589df59a8b09c64dda74db3c855f35751",
+      "path": "data/phase6d_checkpoint_report.csv",
+      "relation": "csv",
+      "fingerprint": "a51015e5ebad8cc2e2277b9f3228224f8ef8dc9a3004d8683ac1eeeb1bd8df95",
+      "expected": 4,
+      "processed": 4,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:45.954418+00:00"
+    },
+    {
+      "id": "96a8ac7c492e7ecdd6f88bc7a539540c9bbc44b48d901e89b7f6a71688e352eb",
+      "path": "data/phase6d_checkpoints/candidates_1000.csv",
+      "relation": "csv",
+      "fingerprint": "29aa74267b11825b112e145114fb5fa3b18c3b983737025266bd51bc17462d6c",
+      "expected": 1000,
+      "processed": 1000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.001878+00:00"
+    },
+    {
+      "id": "63b102e1bc5bae25f30064c6b3523d2f655b95d7502d53eb87003628b7599943",
+      "path": "data/phase6d_checkpoints/candidates_2500.csv",
+      "relation": "csv",
+      "fingerprint": "df53303cbc96b451a3b3ee2f9cfb87eead2efab0b46accb29798a2f8d7af95fa",
+      "expected": 2500,
+      "processed": 2500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.120684+00:00"
+    },
+    {
+      "id": "d89b2303e84d3b744a5bc6203435b7d5ac5e8b6313a1a4775076d0675cd45cd5",
+      "path": "data/phase6d_checkpoints/candidates_4000.csv",
+      "relation": "csv",
+      "fingerprint": "d7a69534d4adaba18c64405eb0d58f86d5af7eed5fa9bd0030509d978e885aca",
+      "expected": 4000,
+      "processed": 4000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.309172+00:00"
+    },
+    {
+      "id": "cc39062abddf4d28922e164fe90d055da4f9d4c311ea94e49a36c8c51562b294",
+      "path": "data/phase6d_checkpoints/candidates_5000.csv",
+      "relation": "csv",
+      "fingerprint": "9cfecc99ba7567c42fd85227d68b8013f9c16d56e02a8485e8b820d4dffe2ff5",
+      "expected": 5000,
+      "processed": 5000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.542988+00:00"
+    },
+    {
+      "id": "1a3e541a57c8c17e9bda812b10b5ab55a4a5d132da8b049aefba9627ca8a51b9",
+      "path": "data/phase6d_source_acquisition.csv",
+      "relation": "csv",
+      "fingerprint": "31d2418801626b50c938f110487e24d9818a9e6602db34512463c1ffc990873d",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.544670+00:00"
+    },
+    {
+      "id": "badec7138badec5dc709d7d328f101647dcd21d9bf6e69b7e5694de31be9d032",
+      "path": "data/phase6d_source_registry.csv",
+      "relation": "csv",
+      "fingerprint": "b6b0359eca350a4ab5f92a992b189dc28d4fbb59d96fb762314fe185cb1c5aa0",
+      "expected": 5,
+      "processed": 5,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.545883+00:00"
+    },
+    {
+      "id": "2ab69f0318278a666668d7358ed0dc2744037e6270504687a62ebe65c70f0fbc",
+      "path": "data/phase6d_validation_summary.csv",
+      "relation": "csv",
+      "fingerprint": "755a43e5f5d1e1d06b54bad3a6a85441509a20c0ae154e43d090f558fad21292",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.547378+00:00"
+    },
+    {
+      "id": "76f3d72cd7dacb681c44e39d8142569f6e552381fc50810c8d1d1e2bab1e6235",
+      "path": "data/phase6d_verification_runs.csv",
+      "relation": "csv",
+      "fingerprint": "9e13bf79fb2dbb32ec2b630cd889456f809b6504bf209541016558123abc09a7",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.548426+00:00"
+    },
+    {
+      "id": "e3b4f4f5eb55ff6c157bc5d6f3bf0b256e8be4a657d570644398c2222f39b68b",
+      "path": "data/phase6e_calibration_sample.csv",
+      "relation": "csv",
+      "fingerprint": "67d60adb6d6d655db9b70cba83be657e6d4abf5e7b9d9a1987683b02ebad3e5b",
+      "expected": 140,
+      "processed": 140,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.582508+00:00"
+    },
+    {
+      "id": "74eb0a25b917e498b9d21762aa2b5396d96230b607822c1cd78cfc0733372e51",
+      "path": "data/phase6e_contact_discovery_priority.csv",
+      "relation": "csv",
+      "fingerprint": "d7cbf682c160d36aeb6fc353f93821b659c711ad9b38ffd5f5bbcc551f879f77",
+      "expected": 241,
+      "processed": 241,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:46.626218+00:00"
+    },
+    {
+      "id": "9e89078e85095c0dbf7daf96ba7130478e00110e6ddc1fa0a5c74acce55127b1",
+      "path": "data/phase6e_exclusion_uncertainty_report.csv",
+      "relation": "csv",
+      "fingerprint": "71ec8f69846e01037fc82f9ef2057d014b4de411036112adc53b34ba76f0bc1d",
+      "expected": 11752,
+      "processed": 11752,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.099290+00:00"
+    },
+    {
+      "id": "3ec72d37c1698f72c2fafac3ac295de6c828e1507a13bc9d5a56d1f2cf81c9b2",
+      "path": "data/phase6e_geo_eligible_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "c04ab970e95be2d7bd71292f24b365b4be07938a4bfcc87026a116d309d3fee4",
+      "expected": 406,
+      "processed": 406,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.124599+00:00"
+    },
+    {
+      "id": "ba8f90ae777939a9f1a2c5d8948cd0fc949cdc1471aaead8b7da82f6b7d2ca8d",
+      "path": "data/phase6e_geography_distribution.csv",
+      "relation": "csv",
+      "fingerprint": "71ea19e562bd08b87909da5b2813546554477085fc045f1bfb1724f4840c7893",
+      "expected": 100,
+      "processed": 100,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.129390+00:00"
+    },
+    {
+      "id": "6fb079188ec2f719c0bb9b64272a561138517064d60c5a1a9d0b4701285946c4",
+      "path": "data/phase6e_source_category_distribution.csv",
+      "relation": "csv",
+      "fingerprint": "81794b450d9debf1f764c88b11f71e9200bacb42832dc990f3d2e4e0bf0d2b72",
+      "expected": 691,
+      "processed": 691,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.193371+00:00"
+    },
+    {
+      "id": "f42f61e4713c58286db3e9909c8cacdc9ce0a147b982a5e0735e565ec074be81",
+      "path": "data/phase6e_top_5000_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "3bd482071d686d54dacdd4af509a0b8fdb65eb7651a5f37c95ac12d67dd0ba29",
+      "expected": 5000,
+      "processed": 5000,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.948465+00:00"
+    },
+    {
+      "id": "c0c657c0cd52281d5736cf38ac98383632f3aeeaf0310fd7240043c333492d49",
+      "path": "data/phase6e_verification_runs.csv",
+      "relation": "csv",
+      "fingerprint": "2408d56ee64503b10a1d15e723efdf9ebeb23d84463b25a448d0fe19fc67885a",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.950131+00:00"
+    },
+    {
+      "id": "895d4c73599e3da190946aaead383ccfe22a0b066f77a30e2ccea2bc02c62b16",
+      "path": "data/phase6e_verified_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "db9adad05e5939fa57e419c46b3baa04b4b84371d951ed382f702e010b0d22b0",
+      "expected": 460,
+      "processed": 460,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:49.977904+00:00"
+    },
+    {
+      "id": "dabdfbfbeb623961530fa97468eb6afcb19b0826f1e9dc243eab043be6ef6a75",
+      "path": "data/phase6e_website_verification.csv",
+      "relation": "csv",
+      "fingerprint": "447add787ef5a732d29f4f5c77e3dfe0cdce42680144b3895e69e11964caa83e",
+      "expected": 582,
+      "processed": 582,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.040925+00:00"
+    },
+    {
+      "id": "2e990f238ee0350e02866437c45f1bad0c13d6d6de0fb926f4a2ef2e870e636a",
+      "path": "data/phase6f_contact_candidates.csv",
+      "relation": "csv",
+      "fingerprint": "abd04a70b352f084328bf1f94b6a6ffa17b0ad20f7de32e45efa10bb0830e2cf",
+      "expected": 260,
+      "processed": 260,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.064740+00:00"
+    },
+    {
+      "id": "f36c0b1cf86959a2ea4958f02060b2845ee869f8d40884e9e5b3a37c54381da9",
+      "path": "data/phase6f_geo_eligible_companies.csv",
+      "relation": "csv",
+      "fingerprint": "f9be670de55fc1322aced897e37416bce3f0724d789c355398782d0be8254886",
+      "expected": 204,
+      "processed": 204,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.122304+00:00"
+    },
+    {
+      "id": "ef7b2a0a752b8968826df7ff2b3865c5af855773a5fa1310c0096445872c6782",
+      "path": "data/phase6f_selected_500.csv",
+      "relation": "csv",
+      "fingerprint": "a31c01cab59c87b36f02a0ceeea28d3a1d0d448b47ff4ed57a70bcdd84b77cdb",
+      "expected": 500,
+      "processed": 500,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.194574+00:00"
+    },
+    {
+      "id": "c1ce1e5deb18908b9ea764001a61fb11d9ea6154659d4112b945a5a4aaa0481d",
+      "path": "data/phase6f_validation_failures.csv",
+      "relation": "csv",
+      "fingerprint": "c2eb50cd645d3fb752a77b32fcd73b28620fe52155d75084c379ef22f3c2d1d1",
+      "expected": 270,
+      "processed": 270,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.230372+00:00"
+    },
+    {
+      "id": "3a7ba8588c7c77e067f9693d3540dc2dd48a5f32f18f4b96492f4ea57729c709",
+      "path": "data/phase6f_verified_companies.csv",
+      "relation": "csv",
+      "fingerprint": "61caab5ca5f2c817a2afac319df741adac0f92b177420a255106966b90897dca",
+      "expected": 230,
+      "processed": 230,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.263730+00:00"
+    },
+    {
+      "id": "ae5bf652e85adf539eddcab8c903c5b6fda7d26061cf04d4aca8d82ba5617b6d",
+      "path": "data/phase6g_contact_quality_audit.csv",
+      "relation": "csv",
+      "fingerprint": "22e96a58f5f269d5c2eb3c095a2d0c3a38427ee229316eaef32438096c6e401d",
+      "expected": 226,
+      "processed": 226,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.331087+00:00"
+    },
+    {
+      "id": "3e47aff3c1c37043a52b228b705d3bad9310ab3433b757d296c7482c1202b27f",
+      "path": "data/phase6g_contact_review_queue.csv",
+      "relation": "csv",
+      "fingerprint": "deddae68d98a73fa93bbf1aaf339a6c1499a31ee152caafcd7a832941113c15f",
+      "expected": 226,
+      "processed": 226,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.357991+00:00"
+    },
+    {
+      "id": "057ef8fa74c07f2b5d417b427784af9117e6d64512d1a13e4686f4926220047f",
+      "path": "data/phase6g_verification_failure_analysis.csv",
+      "relation": "csv",
+      "fingerprint": "851edd6c5dfbbf612b1cf37acc0ff4b85eeca25bfb13e8396be50d6603f5d557",
+      "expected": 270,
+      "processed": 270,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.383039+00:00"
+    },
+    {
+      "id": "f6470b29184d42d04bbd001555098482cac6562ca1a4d276a4d9f87a7ab7a78f",
+      "path": "data/phase6h_business_email_contacts.csv",
+      "relation": "csv",
+      "fingerprint": "f8b343d3879a2fd8f4038900ed4abb308c1ba2e13cab3a6cbb667c0ef0737753",
+      "expected": 127,
+      "processed": 127,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.402441+00:00"
+    },
+    {
+      "id": "7345208ef6081f6ef70ca8295dada4876c050de02b4361e401eab0a2a9affca0",
+      "path": "data/phase6h_contact_review_queue.csv",
+      "relation": "csv",
+      "fingerprint": "b239bf0f2f7d0d6b3e60cc05b41ea5a288866e06552851a874b93d39e42914c3",
+      "expected": 514,
+      "processed": 514,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.499188+00:00"
+    },
+    {
+      "id": "bf47204d4f69e52f03b9459911c879af34457843118f83cd059b581cc2d60d97",
+      "path": "data/phase6h_execution_metrics.csv",
+      "relation": "csv",
+      "fingerprint": "4f566377d4ca3d567ba377a6a5d24fc656db6aa0264b8f7faaeac79778ceba8d",
+      "expected": 8,
+      "processed": 8,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.501062+00:00"
+    },
+    {
+      "id": "fb6aa134b43b21842a9db83a40b544470f60fd2f5d9c387a37554f23a9bfe325",
+      "path": "data/phase6h_geo_eligible_companies.csv",
+      "relation": "csv",
+      "fingerprint": "95b53af0b3784add6c1765c77251909a18c31acb2d0dd8f4915ddba591688429",
+      "expected": 855,
+      "processed": 855,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.737492+00:00"
+    },
+    {
+      "id": "2fb5e4f8f45bdae0603071cf9a7c76b0ed11b1fa920732663387bd4af3f687ca",
+      "path": "data/phase6h_official_contact_forms.csv",
+      "relation": "csv",
+      "fingerprint": "1f99fec0d704b7d1b9fff3ed9756d9c2d0e0c28af3e3498bd98cd66f31c50e5e",
+      "expected": 116,
+      "processed": 116,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.753919+00:00"
+    },
+    {
+      "id": "7fcf671a3f13a372ff36d36d00de24eca11d296c4b25ca1ddb789daccc54c163",
+      "path": "data/phase6h_verified_companies.csv",
+      "relation": "csv",
+      "fingerprint": "6d7db5c2c751ff91f55cb8ad09a95eba89b22ffe3d76e21a7c77426efb7be54d",
+      "expected": 907,
+      "processed": 907,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.903337+00:00"
+    },
+    {
+      "id": "6134ad9cb859519db0e857f977c7b005bf01f74d2c8a220cb012b9c407244856",
+      "path": "data/phase7_contact_channel_audit.csv",
+      "relation": "csv",
+      "fingerprint": "effe8a5a0c9b8e1e7f00b5f2d40c74794c3cfcee40e6831825f612dd1ded0a62",
+      "expected": 901,
+      "processed": 901,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:50.964643+00:00"
+    },
+    {
+      "id": "06bf2e160f422d313b8707a283db70c7d0a4e5c72e17db1102f7671fe21a87a3",
+      "path": "data/phase7_contactable_companies.csv",
+      "relation": "csv",
+      "fingerprint": "fb50711c028bb6e670b8e54cad4b95f4c37d47b93712bafd7a036fbcab06e3bb",
+      "expected": 769,
+      "processed": 769,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:51.004965+00:00"
+    },
+    {
+      "id": "b9a3b5c2a58b0d0afed644a14f02c4e9d8919cfaf7d16e80a54fbe83b2c370e2",
+      "path": "data/phase7_exclusion_queue.csv",
+      "relation": "csv",
+      "fingerprint": "0199176cb23f8d788c9e839abe8498bf52b8d51cd9e652419702652b333b4ad2",
+      "expected": 56895,
+      "processed": 56895,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:00:59.910392+00:00"
+    },
+    {
+      "id": "14e2ecba7a1be24d21012cfc3b2d9b2887d04498986aba5245cb3be5842312a1",
+      "path": "data/phase7_validation_failures.csv",
+      "relation": "csv",
+      "fingerprint": "b55e264d33672f48955acf8e4e1d05f1591b4ed67dc886fa8c77453e613669c5",
+      "expected": 1455,
+      "processed": 1455,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:00.206370+00:00"
+    },
+    {
+      "id": "bdaad77b9baa403de9e1dc24405e1aa86bffa4628f24e1ebe97292d10b4b6e13",
+      "path": "data/phase7_yield_metrics.csv",
+      "relation": "csv",
+      "fingerprint": "d7806337cffa648934b30470a21c7076b65fa34fa504a0d09a432b848736aa92",
+      "expected": 112,
+      "processed": 112,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:00.212425+00:00"
+    },
+    {
+      "id": "7fc1a949bf440ad2f68a352ca83ae94369d98235b0eeff5be42d0eca2970cbc9",
+      "path": "data/research_partner_review.csv",
+      "relation": "csv",
+      "fingerprint": "1ed62cd5c77dcd926887f0d26951eca43f46ecaa6f880c2fddcbeb145e920c06",
+      "expected": 77,
+      "processed": 77,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:00.225310+00:00"
+    },
+    {
+      "id": "1cbfc021c501d050f9c2c7bdbfb5ef92480e33b08c69ef43db2ab100165b4003",
+      "path": "data/verified_companies.csv",
+      "relation": "csv",
+      "fingerprint": "a333a28fdbe3b83be81677967d316f9c8614e9a81c2c6aeba2af33d9d15dd324",
+      "expected": 453,
+      "processed": 453,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:00.304656+00:00"
+    },
+    {
+      "id": "1f840d8a4bad3f71e66deaf26ee935057753583893df031704735c6841348ab6",
+      "path": "data/phase7_cohort_domain_overlap.csv",
+      "relation": "csv",
+      "fingerprint": "5fa463bdf7efcbf59aeb23afddcbce98b9f4bf78e5392ee21016ec8d9ded2e17",
+      "expected": 7447,
+      "processed": 7447,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:33.366762+00:00"
+    },
+    {
+      "id": "afab21f418155260d8421abb1e10f11a4b333fb0de58744123949dd8c36006be",
+      "path": "data/phase7_hotel_cohort_membership.csv",
+      "relation": "csv",
+      "fingerprint": "274f8dd16af3ca0dc2ae79a4dcf0665f3db891fd8818599f24e078cc53813d74",
+      "expected": 15262,
+      "processed": 15262,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:35.890959+00:00"
+    },
+    {
+      "id": "5d80aac5476356d927458d56eb65c1fbdd7523f3a1ad772f6c6d9eec53909d6f",
+      "path": "data/phase7_smb_contactable_companies.csv",
+      "relation": "csv",
+      "fingerprint": "497ea511bbab71776c0661156028ae31299fd922182b17f6ae700ea5529fd4c7",
+      "expected": 7172,
+      "processed": 7172,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:37.759416+00:00"
+    },
+    {
+      "id": "af21cc25e53457c29ed46a2e07f5cd9668a40945947fd3f9d2bb1fa720ba9e54",
+      "path": "data/phase7_smb_reconciliation.csv",
+      "relation": "csv",
+      "fingerprint": "d53fce55e98c53ef1a2a4e9bc6f8634ec0abd9fe81be0a03a43568f8f63dd06c",
+      "expected": 57664,
+      "processed": 57664,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:46.566802+00:00"
+    },
+    {
+      "id": "08a396411ac63fc773f1f07110edf70a1052f9bb050a113f9a413e0c12344d74",
+      "path": "data/phase7_smb_size_review_queue.csv",
+      "relation": "csv",
+      "fingerprint": "e64c194854100a1e93bb9288d2deac5b80b39077cdcfb7d792fbebb6b723ba31",
+      "expected": 6823,
+      "processed": 6823,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:47.255731+00:00"
+    },
+    {
+      "id": "5555e3da4b8bf28a5421cb0b2c7352914ae0bf9b1504656f0e3d369649246ee5",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "research_records",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.609169+00:00"
+    },
+    {
+      "id": "e6e45b10e9d1e5863512ac51c74d4a488834827d12f2b53c2c46be988a888a3a",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "consent_reviews",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.610073+00:00"
+    },
+    {
+      "id": "b860a27f37bc9c345e2c25c11e63eafadc15e695a91b73174f0348ef6fa929ea",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "dispatch_attempts",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.610840+00:00"
+    },
+    {
+      "id": "ca523386a1a7a88b40817e2351af8226202c8e00998af4aa020e2aad7ee6aa91",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "email_drafts",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.613395+00:00"
+    },
+    {
+      "id": "a612c92b049212527e62334bdbb01e7d9c1dc8a2e4056ca0a61fb5197ffb86a3",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "email_events",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.614023+00:00"
+    },
+    {
+      "id": "92ef92e0ce058d7a833796fe0c9da2c20e1a3161c6c70b2c30cfd5ae9f34ab85",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "geo_handoff_attempts",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.614550+00:00"
+    },
+    {
+      "id": "a65d31d2daffe4e7ba711e3973ddd3be2918ae622b2c7a483ee66a047980c9d4",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "geo_handoffs",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.615141+00:00"
+    },
+    {
+      "id": "354b187143df95adc573deef4ba1da94b0bfb2b4ce4c61c68c77b45d4a4af54c",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "mail_merge_reconciliations",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.616622+00:00"
+    },
+    {
+      "id": "879c87f62c2de0f040eca7bd29944462cb19da6a59eef83006bde457c0665da6",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "questionnaire_conflicts",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.617103+00:00"
+    },
+    {
+      "id": "01d92cc618f123d1b5dcffc536126aba8017adf107daf81c53528aabe4153822",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "questionnaire_invitations",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 2,
+      "processed": 2,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.619475+00:00"
+    },
+    {
+      "id": "6bb1862db0f0bbf1a9dd64f921308ab3d5129f6e302c61e3f971a68b4ab8b9f5",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "questionnaire_submissions",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 1,
+      "processed": 1,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.620972+00:00"
+    },
+    {
+      "id": "762391332e238d1849ea4fe351f6d73d365955d5ab157927c24bc3946f3e1996",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "replies",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.621469+00:00"
+    },
+    {
+      "id": "f62faf5815c9018a063d4c836a2304b4df8a16e281195241044568937093635c",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "screening_analysis_results",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.622014+00:00"
+    },
+    {
+      "id": "f05d8f907f054486425d7f5208c2e8ebdcb065ac67bb0d6050eceecf4fbc1442",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "screenings",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.622583+00:00"
+    },
+    {
+      "id": "60ee194682297bea54f509724cd9dcb7c57cac4f17cc30afaa85741155b8c4e9",
+      "path": "demo_runs/20261022_232247_two_recipient_geo_demo/artifacts/geoairesume-two-recipient-preparation.db",
+      "relation": "suppressed_recipients",
+      "fingerprint": "5b8ddfcef9461451a8f1369abb4f4f8e896857f87211454c6135690a31b10549",
+      "expected": 0,
+      "processed": 0,
+      "status": "COMPLETE",
+      "updated_at": "2026-10-28T03:01:58.623081+00:00"
+    }
+  ],
+  "unmapped_preserved_rows": 47898,
+  "counts_reconcile": true,
+  "source_inventory": {
+    "sqlite_files": 25,
+    "csv_files": 113,
+    "files_reconciled": true,
+    "relations_reconciled": 355
+  },
+  "destination": {
+    "type": "isolated local SQLite reconciliation snapshot",
+    "path": "/tmp/outreach-v2-migration-consistent.db",
+    "neon_migrated": false,
+    "render_deployed": false
+  }
+}

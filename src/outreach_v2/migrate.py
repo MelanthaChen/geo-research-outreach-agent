@@ -17,6 +17,7 @@ WORKFLOW = {'questionnaire_invitations','questionnaire_submissions','email_draft
  'confirmation_emails','research_reports','invitation_batches','owner_test_recipient_bindings',
  'campaigns','campaign_items','demo_interest_submissions','campaign_audit','demo_control','outreach','responses',
  'mail_merge_reconciliations','admin_sessions','admin_auth_events','admin_users'}
+WORKFLOW_EXPORTS={'phase5a_delivery_simulation.csv','phase5a_email_drafts.csv','phase5a_contact_form_drafts.csv','phase5d_demo_campaign_summary.csv','phase5d_demo_outreach_status.csv'}
 FIXTURE_IDS={'geoairesume-owner-test-v1','whisker-haven-owner-demo-20261023-v1'}
 
 def dump(x): return json.dumps(x,sort_keys=True,ensure_ascii=False,separators=(',',':'),default=str)
@@ -125,7 +126,7 @@ class Migrator:
                 archived=[];membership=[]
                 for key,row in batch:
                     ident=None;reason='';disposition='PRESERVED'
-                    if relation in WORKFLOW or str(path).startswith('demo_runs/'):
+                    if relation in WORKFLOW or str(path).startswith('demo_runs/') or Path(path).name in WORKFLOW_EXPORTS:
                         disposition='ISOLATED';reason='Historical workflow; never replayed into the new lifecycle'
                     elif fixture(row):disposition='ISOLATED';reason='Explicit owner-controlled or synthetic fixture identity'
                     else:

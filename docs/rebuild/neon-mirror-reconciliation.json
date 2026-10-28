@@ -1,0 +1,65 @@
+[
+  {
+    "source": "phase7_candidates.db:candidates",
+    "neon_mirror": "candidate_companies",
+    "source_count": 57664,
+    "neon_count": 57664,
+    "local_fingerprint": "407146bb77c2f7dc3a0e047a3941e111",
+    "remote_fingerprint": "407146bb77c2f7dc3a0e047a3941e111",
+    "identical": true
+  },
+  {
+    "source": "hotel_candidates.db:candidates",
+    "neon_mirror": "candidate_hotels",
+    "source_count": 15262,
+    "neon_count": 15262,
+    "local_fingerprint": "746586d2865ab5b723b8735b8248d14a",
+    "remote_fingerprint": "746586d2865ab5b723b8735b8248d14a",
+    "identical": true
+  },
+  {
+    "source": "phase7_candidates.db:candidate_provenance",
+    "neon_mirror": "candidate_company_provenance",
+    "source_count": 110407,
+    "neon_count": 110407,
+    "local_fingerprint": "97806e5662006caae620c8187131846e",
+    "remote_fingerprint": "97806e5662006caae620c8187131846e",
+    "identical": true
+  },
+  {
+    "source": "phase7_candidates.db:phase6f_contact_channels",
+    "neon_mirror": "candidate_company_contacts",
+    "source_count": 24859,
+    "neon_count": 24859,
+    "local_fingerprint": "427c90e4eac1c67b133b61aea2048eb0",
+    "remote_fingerprint": "427c90e4eac1c67b133b61aea2048eb0",
+    "identical": true
+  },
+  {
+    "source": "hotel_candidates.db:hotel_contact_channels",
+    "neon_mirror": "candidate_hotel_contacts",
+    "source_count": 850,
+    "neon_count": 850,
+    "local_fingerprint": "a2e03d5c866d6c57b18d31a7da12a7c5",
+    "remote_fingerprint": "a2e03d5c866d6c57b18d31a7da12a7c5",
+    "identical": true
+  },
+  {
+    "source": "hotel_candidates.db:hotel_provenance",
+    "neon_mirror": "candidate_hotel_provenance",
+    "source_count": 9787,
+    "neon_count": 9787,
+    "local_fingerprint": "12aef4eaa2ad70a815292a47d11632fe",
+    "remote_fingerprint": "12aef4eaa2ad70a815292a47d11632fe",
+    "identical": true
+  },
+  {
+    "source": "phase7_candidates.db:phase6e_screening",
+    "neon_mirror": "candidate_company_screening",
+    "source_count": 57664,
+    "neon_count": 57664,
+    "local_fingerprint": "8b29eb0f2ddaff568e5f3b4615620b03",
+    "remote_fingerprint": "8b29eb0f2ddaff568e5f3b4615620b03",
+    "identical": true
+  }
+]

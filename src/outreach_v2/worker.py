@@ -53,9 +53,11 @@ def research_step(db,job,engine_factory):
         payload={'profile_id':inv['candidate_id'],'profile_version':inv['id'],
             'profile_type':'owner_controlled_test' if candidate['fixture'] else ('hotel_property' if candidate['kind']=='hotel' else 'business_company'),
             'identity':{'name':inv['company_name'],'website':inv['website'],'industry':candidate['industry'],'location':candidate['location']},
-            'consent':{'status':'VERIFIED','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES'},
+            'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES'},
             'controlled_fixture':False}
         result=engine.start(job['idempotency_key'],payload)
+    if result.get('status') in {'QUEUED','RUNNING','RETRY_PENDING','BLOCKED_CONFIGURATION'}:
+        result=engine.advance(job['idempotency_key'])
     status=result.get('status')
     if status not in {'QUEUED','RUNNING','COMPLETED','FAILED','BLOCKED_CONFIGURATION','RETRY_PENDING'}:raise ValueError('Unknown Engine job status')
     values={'status':status,'engine_job_id':str(result.get('job_id') or ''),'property_id':str(result.get('property_id') or '') or None,

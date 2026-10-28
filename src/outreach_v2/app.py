@@ -78,6 +78,15 @@ def create_app(database=None):
     def candidates(request:Request):
         params=dict(request.query_params);page=int(params.pop('page',1));size=int(params.pop('page_size',50))
         return service.list_candidates(db,params,page,size)
+    @app.get('/api/demo/lagoon')
+    def lagoon_demo():
+        from .demo import lagoon_case
+        return lagoon_case()
+    @app.get('/api/demo/lagoon/package')
+    def lagoon_demo_package():
+        from .demo import build_preview_package
+        return Response(build_preview_package(),media_type='application/zip',
+            headers={'Content-Disposition':'attachment; filename="lagoon-review-preview-not-sent.zip"'})
     @app.get('/api/candidates/{ident:path}')
     def candidate(ident:str):return service.detail(db,ident)
     @app.post('/api/batches')

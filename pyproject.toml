@@ -44,7 +44,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 outreach_agent = ["dashboard/*.html", "dashboard/*.css", "dashboard/*.js"]
-outreach_v2 = ["static/*.html", "static/*.css", "static/*.js", "templates/*"]
+outreach_v2 = ["static/*.html", "static/*.css", "static/*.js", "templates/*", "demo_data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

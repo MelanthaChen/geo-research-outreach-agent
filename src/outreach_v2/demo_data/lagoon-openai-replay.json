@@ -1,0 +1,568 @@
+{
+  "artifact_version": "lagoon-openai-offline-replay-v1",
+  "replayed_saved_response": true,
+  "new_model_request_made": false,
+  "request_id": "resp_0db4c56e8cc63a3c016ae27b61120c87d28fdc373c94579af3",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "source_excerpt_checks": [
+    {
+      "evidence_id": "p1_s0",
+      "source_url": "https://www.lagoonny.com/about",
+      "exact_excerpt_matches_source": true
+    },
+    {
+      "evidence_id": "p3_s0",
+      "source_url": "https://www.lagoonny.com/services",
+      "exact_excerpt_matches_source": true
+    },
+    {
+      "evidence_id": "p3_s3",
+      "source_url": "https://www.lagoonny.com/services",
+      "exact_excerpt_matches_source": true
+    },
+    {
+      "evidence_id": "p3_s6",
+      "source_url": "https://www.lagoonny.com/services",
+      "exact_excerpt_matches_source": true
+    },
+    {
+      "evidence_id": "p1_s1",
+      "source_url": "https://www.lagoonny.com/about",
+      "exact_excerpt_matches_source": true
+    }
+  ],
+  "accepted_claim_ids": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "rejected_claims": [
+    {
+      "id": "c4",
+      "text": "The events page likely provides additional customer-facing context, but it was truncated in the supplied evidence.",
+      "evidence_ids": [
+        "p2_jsonld_0"
+      ],
+      "unknown_evidence_ids": [
+        "p2_jsonld_0"
+      ],
+      "status": "REJECTED_UNKNOWN_EVIDENCE_ID"
+    }
+  ],
+  "deterministic_response_validation": "PASS_AFTER_CLAIM_REJECTION",
+  "semantic_entailment": "NOT_CLAIMED; uncertain model prose is excluded from recipient copy",
+  "generated_contract": {
+    "version": "structured-company-analysis-v1",
+    "entity_identity": {
+      "name": "Lagoon New York",
+      "website": "https://www.lagoonny.com/",
+      "identity_status": "identified",
+      "evidence_ids": [
+        "p1_s0",
+        "p1_s1"
+      ]
+    },
+    "products_services": [
+      {
+        "summary": "Custom design service for clients to choose a silhouette and tailor size, fabric, and colors.",
+        "evidence_ids": [
+          "p3_s0"
+        ],
+        "attribution": "COMPANY_STATED"
+      },
+      {
+        "summary": "Wearable art sold alongside curated art, body, jewelry, and housewares.",
+        "evidence_ids": [
+          "p1_s1"
+        ],
+        "attribution": "COMPANY_STATED"
+      },
+      {
+        "summary": "Styling-related look pulls and project support for events, performances, films, and shoots.",
+        "evidence_ids": [
+          "p3_s3",
+          "p3_s6"
+        ],
+        "attribution": "COMPANY_STATED"
+      }
+    ],
+    "target_audiences": [
+      {
+        "summary": "People planning events, performances, film projects, or releases who may need costuming or styled looks.",
+        "evidence_ids": [
+          "p3_s3"
+        ],
+        "attribution": "COMPANY_STATED"
+      },
+      {
+        "summary": "Stylists looking to pull looks from Lagoon.",
+        "evidence_ids": [
+          "p3_s6"
+        ],
+        "attribution": "COMPANY_STATED"
+      }
+    ],
+    "capabilities_characteristics": [
+      {
+        "summary": "Concept store, gallery, and creation space based in Brooklyn, NY.",
+        "evidence_ids": [
+          "p1_s0"
+        ],
+        "attribution": "COMPANY_STATED"
+      },
+      {
+        "summary": "Positions its space around sustainability, connection to nature, and community engagement.",
+        "evidence_ids": [
+          "p1_s1"
+        ],
+        "attribution": "COMPANY_STATED"
+      },
+      {
+        "summary": "Offers made-to-order customization across silhouette, size, fabric, and color.",
+        "evidence_ids": [
+          "p3_s0"
+        ],
+        "attribution": "COMPANY_STATED"
+      }
+    ],
+    "source_facts": [
+      {
+        "id": "p1_s0",
+        "text": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.",
+        "exact_excerpt": "Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY.",
+        "source_url": "https://www.lagoonny.com/about",
+        "source_content": "LAGOON - About — LAGOON Skip to Content 0 0 0 0 Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY. In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement. * Come visit the shop! 293 Nostrand Ave Brooklyn, NY * Hours: Wed - Mon, 11-7 Closed Tuesday AMALYA MEIRA In dreamlike crochet and sunprinted silks, Amalya creates wearable and non wearable works examining time, materiality and intention. Often employing inherently ephemeral and sight specific techniques to realize familiar shapes, these out of time relics guide one to consider the intrinsic potential of well loved silhouettes, and how they may be reanimated. Celebrating the maker, Amalya’s hand is consciously ever present. Utilizing a vocabulary of transparent construction and zero waste patterning throughout, Amalya’s eponymous clothing line Amalya Meira favors the highly textured & is composed solely of repurposed or deadstock materials. Amalya Meira is currently showing her weaving collection Etrusia in Tempest Gallery’s DAISIES show & Moss Bikini/Hat sets in 334 Broome Gallery’s HOSONO ISLAND show. Recently she debuted collaborative film Moss World, presented Tidepool , a new collection in Reworked Runway interactive showcase, and created custom crochet works for the A24 film Materialists . Amalya has shown works as Fabscrap New York Featured Designer, at NYFW, Paris Fashion Week, Miami Art Basel and has works currently stocked in stores throughout New York, Guadalajara and Mexico City. Amalya holds degrees from Central St. Martins, Parsons and Eugene Lang. WEBSITE INSTAGRAM LOGAN BLAGG No thread unaccounted for, Logan Blagg sees the value in all materials. With a paramount interest in sustainable production and playful envisioning, Logan’s mission is to dress forms in this harmony without contributing to the waste of the fashion industry. Logan began tinkering with fabric scraps while studying at Stephen’s College. Working in the production room of the Brooklyn Fashion + Design Accelerator further developed her process of collaging scraps to create larger moments. Recently, Logan’s trove of textiles was met with a screen of gems when her mother’s generational jewelry shop closed its doors. Forged by this new mingling of collected remnants and jewels, Logan Blagg’s clothing and accessories shine with the past, fusing retro futurism and fantasy into one of a kind pieces. WEBSITE INSTAGRAM LAGOON  Lagoon",
+        "source_title": "LAGOON  - About — LAGOON",
+        "section": "LAGOON  - About — LAGOON",
+        "attribution": "COMPANY_STATED",
+        "observed_at": ""
+      },
+      {
+        "id": "p3_s0",
+        "text": "Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.",
+        "exact_excerpt": "At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you!",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "observed_at": ""
+      },
+      {
+        "id": "p3_s3",
+        "text": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+        "exact_excerpt": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "observed_at": ""
+      },
+      {
+        "id": "p3_s6",
+        "text": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+        "exact_excerpt": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "observed_at": ""
+      },
+      {
+        "id": "p1_s1",
+        "text": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+        "exact_excerpt": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+        "source_url": "https://www.lagoonny.com/about",
+        "source_content": "LAGOON - About — LAGOON Skip to Content 0 0 0 0 Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY. In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement. * Come visit the shop! 293 Nostrand Ave Brooklyn, NY * Hours: Wed - Mon, 11-7 Closed Tuesday AMALYA MEIRA In dreamlike crochet and sunprinted silks, Amalya creates wearable and non wearable works examining time, materiality and intention. Often employing inherently ephemeral and sight specific techniques to realize familiar shapes, these out of time relics guide one to consider the intrinsic potential of well loved silhouettes, and how they may be reanimated. Celebrating the maker, Amalya’s hand is consciously ever present. Utilizing a vocabulary of transparent construction and zero waste patterning throughout, Amalya’s eponymous clothing line Amalya Meira favors the highly textured & is composed solely of repurposed or deadstock materials. Amalya Meira is currently showing her weaving collection Etrusia in Tempest Gallery’s DAISIES show & Moss Bikini/Hat sets in 334 Broome Gallery’s HOSONO ISLAND show. Recently she debuted collaborative film Moss World, presented Tidepool , a new collection in Reworked Runway interactive showcase, and created custom crochet works for the A24 film Materialists . Amalya has shown works as Fabscrap New York Featured Designer, at NYFW, Paris Fashion Week, Miami Art Basel and has works currently stocked in stores throughout New York, Guadalajara and Mexico City. Amalya holds degrees from Central St. Martins, Parsons and Eugene Lang. WEBSITE INSTAGRAM LOGAN BLAGG No thread unaccounted for, Logan Blagg sees the value in all materials. With a paramount interest in sustainable production and playful envisioning, Logan’s mission is to dress forms in this harmony without contributing to the waste of the fashion industry. Logan began tinkering with fabric scraps while studying at Stephen’s College. Working in the production room of the Brooklyn Fashion + Design Accelerator further developed her process of collaging scraps to create larger moments. Recently, Logan’s trove of textiles was met with a screen of gems when her mother’s generational jewelry shop closed its doors. Forged by this new mingling of collected remnants and jewels, Logan Blagg’s clothing and accessories shine with the past, fusing retro futurism and fantasy into one of a kind pieces. WEBSITE INSTAGRAM LAGOON  Lagoon",
+        "source_title": "LAGOON  - About — LAGOON",
+        "section": "LAGOON  - About — LAGOON",
+        "attribution": "COMPANY_STATED",
+        "observed_at": ""
+      }
+    ],
+    "proposed_claims": [
+      {
+        "id": "c1",
+        "text": "Lagoon New York is a Brooklyn-based concept store that combines retail, gallery, and creation-space functions.",
+        "evidence_ids": [
+          "p1_s0",
+          "p1_s1"
+        ],
+        "attribution": "COMPANY_STATED",
+        "role": "BUSINESS_DESCRIPTION"
+      },
+      {
+        "id": "c2",
+        "text": "The site presents the business as centered on wearable art and adjacent curated goods, not just a single-product shop.",
+        "evidence_ids": [
+          "p1_s1"
+        ],
+        "attribution": "COMPANY_STATED",
+        "role": "COMPANY_CHARACTERISTIC"
+      },
+      {
+        "id": "c3",
+        "text": "The services page is relevant for understanding how the business frames customer use cases, including custom design and stylist look pulls.",
+        "evidence_ids": [
+          "p3_s0",
+          "p3_s6"
+        ],
+        "attribution": "ANALYTICAL_INTERPRETATION",
+        "role": "RESEARCH_RELEVANCE"
+      }
+    ],
+    "claim_to_evidence": {
+      "c1": [
+        "p1_s0",
+        "p1_s1"
+      ],
+      "c2": [
+        "p1_s1"
+      ],
+      "c3": [
+        "p3_s0",
+        "p3_s6"
+      ]
+    },
+    "claim_reviews": [
+      {
+        "claim_id": "c1",
+        "status": "NOT_VERIFIABLE_FROM_SAMPLE",
+        "rationale": "Structural provenance passed, but semantic entailment is not established automatically; model wording is excluded from recipient copy unless separately grounded by application composition.",
+        "evidence_ids": [
+          "p1_s0",
+          "p1_s1"
+        ],
+        "reviewer": "AUTOMATED_FILTERING_ONLY"
+      },
+      {
+        "claim_id": "c2",
+        "status": "NOT_VERIFIABLE_FROM_SAMPLE",
+        "rationale": "Structural provenance passed, but semantic entailment is not established automatically; model wording is excluded from recipient copy unless separately grounded by application composition.",
+        "evidence_ids": [
+          "p1_s1"
+        ],
+        "reviewer": "AUTOMATED_FILTERING_ONLY"
+      },
+      {
+        "claim_id": "c3",
+        "status": "NOT_VERIFIABLE_FROM_SAMPLE",
+        "rationale": "Structural provenance passed, but semantic entailment is not established automatically; model wording is excluded from recipient copy unless separately grounded by application composition.",
+        "evidence_ids": [
+          "p3_s0",
+          "p3_s6"
+        ],
+        "reviewer": "AUTOMATED_FILTERING_ONLY"
+      }
+    ],
+    "evidence_limitations": [
+      "One or more pages were truncated at the configured byte limit.",
+      "Most event-page material was classified as EVENT_OR_PARTICIPANT and excluded from business claims.",
+      "Only the supplied first-party website evidence was analyzed."
+    ],
+    "observed_relationships": [
+      {
+        "id": "r1",
+        "description": "About page defines the business as a concept store, gallery, and creation space in Brooklyn.",
+        "evidence_ids": [
+          "p1_s0"
+        ],
+        "kind": "IDENTITY"
+      },
+      {
+        "id": "r2",
+        "description": "About page links the brand to sustainable design, wearable art, and curated complementary categories.",
+        "evidence_ids": [
+          "p1_s1"
+        ],
+        "kind": "OFFERING_SCOPE"
+      },
+      {
+        "id": "r3",
+        "description": "Services page connects customization with stylist and production-oriented use cases.",
+        "evidence_ids": [
+          "p3_s0",
+          "p3_s3",
+          "p3_s6"
+        ],
+        "kind": "SERVICE_TO_USE_CASE"
+      }
+    ],
+    "potential_geo_implications": [],
+    "unsupported_or_unresolved_claims": [
+      "Exact product catalog, pricing, and purchase terms are not established by the supplied evidence.",
+      "The events page content is not fully visible, so its business relevance cannot be fully described.",
+      "No claim is made about rankings, visibility, or performance in AI systems."
+    ],
+    "final_personalization_claim_ids": [],
+    "recommendation_decision": "ABSTAIN"
+  },
+  "contract_validation_errors": [],
+  "claim_copy_audit": [
+    {
+      "id": "c1",
+      "role": "BUSINESS_DESCRIPTION",
+      "original_text": "Lagoon New York is a Brooklyn-based concept store that combines retail, gallery, and creation-space functions.",
+      "evidence_ids": [
+        "p1_s0",
+        "p1_s1"
+      ],
+      "status": "REPLACED_WITH_DIRECT_SOURCE_DESCRIPTION",
+      "reason": "The final description uses the model-cited source statement to avoid adding paraphrase detail.",
+      "deterministic_transformation": {
+        "evidence_id": "p1_s0",
+        "text": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY."
+      }
+    },
+    {
+      "id": "c2",
+      "role": "COMPANY_CHARACTERISTIC",
+      "original_text": "The site presents the business as centered on wearable art and adjacent curated goods, not just a single-product shop.",
+      "evidence_ids": [
+        "p1_s1"
+      ],
+      "status": "EXCLUDED_UNSUPPORTED_COMPARISON",
+      "reason": "The cited first-party excerpts do not establish the comparative baseline or superlative.",
+      "deterministic_transformation": null
+    },
+    {
+      "id": "c3",
+      "role": "RESEARCH_RELEVANCE",
+      "original_text": "The services page is relevant for understanding how the business frames customer use cases, including custom design and stylist look pulls.",
+      "evidence_ids": [
+        "p3_s0",
+        "p3_s6"
+      ],
+      "status": "RECOMPOSED_FROM_CITED_SOURCE_FACTS",
+      "reason": "Recipient relevance is composed from the cited page relationship, not copied from analyst prose.",
+      "deterministic_transformation": {
+        "evidence_ids": [
+          "p1_s0",
+          "p3_s0"
+        ],
+        "text": "That combination makes Lagoon New York relevant to our study: we are examining whether AI-powered search connects a business's broader identity with specific services described on its website."
+      }
+    }
+  ],
+  "final_personalization": {
+    "analysis_version": "structured-evidence-v2",
+    "data_classification": "OBSERVED",
+    "business_description": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.",
+    "company_strength": "Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.",
+    "introduction": "We are conducting a university study about how AI-powered search represents businesses and their offerings.",
+    "recipient_copy": {
+      "business_summary": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.",
+      "distinctive_detail": "Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.",
+      "research_relevance": "That combination makes Lagoon New York relevant to our study: we are examining whether AI-powered search connects a business's broader identity with specific services described on its website.",
+      "supported_observation": "",
+      "support": {
+        "business_summary": [
+          "p1_s0"
+        ],
+        "distinctive_detail": [
+          "p3_s0"
+        ],
+        "research_relevance": [
+          "p1_s0",
+          "p3_s0"
+        ]
+      }
+    },
+    "source_urls": [
+      "https://www.lagoonny.com/",
+      "https://www.lagoonny.com/about",
+      "https://www.lagoonny.com/events",
+      "https://www.lagoonny.com/services"
+    ],
+    "retrieved_at": "2026-10-28T22:46:54.720475+00:00",
+    "recommendations": [],
+    "assessment": {
+      "personalization_evidence": "AUTOMATIC_SOURCE_GROUNDED_COMPOSITION",
+      "geo_observation": "NOT_ESTABLISHED",
+      "invitation": "PREVIEW_ONLY",
+      "claim_by_claim_approval_required": false,
+      "final_invitation_review_required_before_sending": true,
+      "limitations": [
+        "One or more pages were truncated at the configured byte limit."
+      ],
+      "excluded_model_claims": [
+        {
+          "id": "c2",
+          "status": "EXCLUDED_UNSUPPORTED_COMPARISON",
+          "reason": "The cited first-party excerpts do not establish the comparative baseline or superlative."
+        },
+        {
+          "id": "c4",
+          "status": "REJECTED_UNKNOWN_EVIDENCE_ID",
+          "reason": "The model citation named evidence that was not supplied to the request."
+        }
+      ],
+      "interpretation": "Uncertain model prose is excluded; recipient claims use source-derived statements."
+    },
+    "claim_support": {
+      "business_description": [
+        "p1_s0"
+      ],
+      "company_strength": [
+        "p3_s0"
+      ]
+    },
+    "evidence_profile": {
+      "pages": [
+        {
+          "url": "https://www.lagoonny.com/",
+          "type": "home_or_other",
+          "title": "LAGOON",
+          "heading_count": 0,
+          "link_count": 5,
+          "truncated": false
+        },
+        {
+          "url": "https://www.lagoonny.com/about",
+          "type": "about",
+          "title": "LAGOON  - About — LAGOON",
+          "heading_count": 2,
+          "link_count": 13,
+          "truncated": false
+        },
+        {
+          "url": "https://www.lagoonny.com/events",
+          "type": "events",
+          "title": "LAGOON - events — LAGOON",
+          "heading_count": 31,
+          "link_count": 100,
+          "truncated": true
+        },
+        {
+          "url": "https://www.lagoonny.com/services",
+          "type": "services",
+          "title": "Services — LAGOON",
+          "heading_count": 1,
+          "link_count": 6,
+          "truncated": false
+        }
+      ],
+      "facts": [
+        {
+          "id": "p1_s0",
+          "statement": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.",
+          "evidence_excerpt": "Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY.",
+          "source_content": "LAGOON - About — LAGOON Skip to Content 0 0 0 0 Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY. In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement. * Come visit the shop! 293 Nostrand Ave Brooklyn, NY * Hours: Wed - Mon, 11-7 Closed Tuesday AMALYA MEIRA In dreamlike crochet and sunprinted silks, Amalya creates wearable and non wearable works examining time, materiality and intention. Often employing inherently ephemeral and sight specific techniques to realize familiar shapes, these out of time relics guide one to consider the intrinsic potential of well loved silhouettes, and how they may be reanimated. Celebrating the maker, Amalya’s hand is consciously ever present. Utilizing a vocabulary of transparent construction and zero waste patterning throughout, Amalya’s eponymous clothing line Amalya Meira favors the highly textured & is composed solely of repurposed or deadstock materials. Amalya Meira is currently showing her weaving collection Etrusia in Tempest Gallery’s DAISIES show & Moss Bikini/Hat sets in 334 Broome Gallery’s HOSONO ISLAND show. Recently she debuted collaborative film Moss World, presented Tidepool , a new collection in Reworked Runway interactive showcase, and created custom crochet works for the A24 film Materialists . Amalya has shown works as Fabscrap New York Featured Designer, at NYFW, Paris Fashion Week, Miami Art Basel and has works currently stocked in stores throughout New York, Guadalajara and Mexico City. Amalya holds degrees from Central St. Martins, Parsons and Eugene Lang. WEBSITE INSTAGRAM LOGAN BLAGG No thread unaccounted for, Logan Blagg sees the value in all materials. With a paramount interest in sustainable production and playful envisioning, Logan’s mission is to dress forms in this harmony without contributing to the waste of the fashion industry. Logan began tinkering with fabric scraps while studying at Stephen’s College. Working in the production room of the Brooklyn Fashion + Design Accelerator further developed her process of collaging scraps to create larger moments. Recently, Logan’s trove of textiles was met with a screen of gems when her mother’s generational jewelry shop closed its doors. Forged by this new mingling of collected remnants and jewels, Logan Blagg’s clothing and accessories shine with the past, fusing retro futurism and fantasy into one of a kind pieces. WEBSITE INSTAGRAM LAGOON  Lagoon",
+          "source_urls": [
+            "https://www.lagoonny.com/about"
+          ],
+          "source_title": "LAGOON  - About — LAGOON",
+          "section_heading": "LAGOON  - About — LAGOON",
+          "assertion_type": "ATTRIBUTED_COMPANY_DESCRIPTION",
+          "attribution": "COMPANY_STATED",
+          "classification": "TARGET_BUSINESS"
+        },
+        {
+          "id": "p3_s0",
+          "statement": "Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.",
+          "evidence_excerpt": "At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you!",
+          "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+          "source_urls": [
+            "https://www.lagoonny.com/services"
+          ],
+          "source_title": "Services — LAGOON",
+          "section_heading": "Learn about our services",
+          "assertion_type": "ATTRIBUTED_COMPANY_STRENGTH",
+          "attribution": "COMPANY_STATED",
+          "classification": "PRODUCT_OR_SERVICE"
+        },
+        {
+          "id": "p3_s3",
+          "statement": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+          "evidence_excerpt": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+          "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+          "source_urls": [
+            "https://www.lagoonny.com/services"
+          ],
+          "source_title": "Services — LAGOON",
+          "section_heading": "Learn about our services",
+          "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+          "attribution": "COMPANY_STATED",
+          "classification": "PRODUCT_OR_SERVICE"
+        },
+        {
+          "id": "p3_s6",
+          "statement": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+          "evidence_excerpt": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+          "source_content": "Services — LAGOON Skip to Content 0 0 0 0 Learn about our services Custom Design At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you! Start Your Custom Piece Here! (*Custom Orders are non-refundable) Classes Personal classes available ~ Please inquire with what you’re interested in and we’d love to discuss! Email us and tell us more! Styling by Lagoon Big event coming up? Costuming a performance/movie? Shooting your newest release? Or if nothing above met your criteria, and are still interested in a touch of Lagoon or collaboration, We offer in-house styling, costuming, and personal shopping in Lagoon ~ please email us to inquire :) Stylist Pulls If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here! Updated Pull Policy: $25 / item *unless otherwise noted *Additionally, $20 Dry Cleaning Fee on any item that comes back damaged (or otherwise specified, depending on fabric content or status on return) $50/hr In-Store Preliminary Fitting Fee (You are welcome to bring your team to the space to try pieces on, however due to size & the multifacted nature of the space, we find it most effective to arrange these ahead of time.) We also ask to receive any media (photos, video, etc) taken of the pulled pieces - as this benefits all of us & showcases all of our art! Shop Now LAGOON  Lagoon",
+          "source_urls": [
+            "https://www.lagoonny.com/services"
+          ],
+          "source_title": "Services — LAGOON",
+          "section_heading": "Learn about our services",
+          "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+          "attribution": "COMPANY_STATED",
+          "classification": "PRODUCT_OR_SERVICE"
+        },
+        {
+          "id": "p1_s1",
+          "statement": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+          "evidence_excerpt": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+          "source_content": "LAGOON - About — LAGOON Skip to Content 0 0 0 0 Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY. In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement. * Come visit the shop! 293 Nostrand Ave Brooklyn, NY * Hours: Wed - Mon, 11-7 Closed Tuesday AMALYA MEIRA In dreamlike crochet and sunprinted silks, Amalya creates wearable and non wearable works examining time, materiality and intention. Often employing inherently ephemeral and sight specific techniques to realize familiar shapes, these out of time relics guide one to consider the intrinsic potential of well loved silhouettes, and how they may be reanimated. Celebrating the maker, Amalya’s hand is consciously ever present. Utilizing a vocabulary of transparent construction and zero waste patterning throughout, Amalya’s eponymous clothing line Amalya Meira favors the highly textured & is composed solely of repurposed or deadstock materials. Amalya Meira is currently showing her weaving collection Etrusia in Tempest Gallery’s DAISIES show & Moss Bikini/Hat sets in 334 Broome Gallery’s HOSONO ISLAND show. Recently she debuted collaborative film Moss World, presented Tidepool , a new collection in Reworked Runway interactive showcase, and created custom crochet works for the A24 film Materialists . Amalya has shown works as Fabscrap New York Featured Designer, at NYFW, Paris Fashion Week, Miami Art Basel and has works currently stocked in stores throughout New York, Guadalajara and Mexico City. Amalya holds degrees from Central St. Martins, Parsons and Eugene Lang. WEBSITE INSTAGRAM LOGAN BLAGG No thread unaccounted for, Logan Blagg sees the value in all materials. With a paramount interest in sustainable production and playful envisioning, Logan’s mission is to dress forms in this harmony without contributing to the waste of the fashion industry. Logan began tinkering with fabric scraps while studying at Stephen’s College. Working in the production room of the Brooklyn Fashion + Design Accelerator further developed her process of collaging scraps to create larger moments. Recently, Logan’s trove of textiles was met with a screen of gems when her mother’s generational jewelry shop closed its doors. Forged by this new mingling of collected remnants and jewels, Logan Blagg’s clothing and accessories shine with the past, fusing retro futurism and fantasy into one of a kind pieces. WEBSITE INSTAGRAM LAGOON  Lagoon",
+          "source_urls": [
+            "https://www.lagoonny.com/about"
+          ],
+          "source_title": "LAGOON  - About — LAGOON",
+          "section_heading": "LAGOON  - About — LAGOON",
+          "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+          "attribution": "COMPANY_STATED",
+          "classification": "TARGET_BUSINESS"
+        }
+      ],
+      "relationships": []
+    },
+    "evidence": {
+      "sampled_urls": [
+        "https://www.lagoonny.com/",
+        "https://www.lagoonny.com/about",
+        "https://www.lagoonny.com/events",
+        "https://www.lagoonny.com/services"
+      ],
+      "limitations": [
+        "One or more pages were truncated at the configured byte limit."
+      ]
+    }
+  },
+  "quality_decisions": {
+    "EVIDENCE_VALID": {
+      "passed": true,
+      "reasons": [],
+      "meaning": "Deterministic provenance and quality checks passed; this is not a semantic entailment proof."
+    },
+    "CLAIM_GROUNDING": {
+      "status": "AUTOMATED_FILTERING",
+      "meaning": "Only source-derived supported statements are included; unresolved model claims are excluded and retained in the audit.",
+      "excluded_uncertain_claims": [
+        {
+          "id": "c2",
+          "status": "EXCLUDED_UNSUPPORTED_COMPARISON",
+          "reason": "The cited first-party excerpts do not establish the comparative baseline or superlative."
+        },
+        {
+          "id": "c4",
+          "status": "REJECTED_UNKNOWN_EVIDENCE_ID",
+          "reason": "The model citation named evidence that was not supplied to the request."
+        }
+      ]
+    },
+    "OUTREACH_REVIEW_READY": {
+      "passed": true,
+      "reasons": [],
+      "preview_only": true
+    }
+  },
+  "invitation_preview": {
+    "status": "PREVIEW_ONLY_NOT_SENDABLE",
+    "reference": "PREVIEW-NOT-SENDABLE",
+    "questionnaire_url": "https://docs.google.com/forms/d/e/1FAIpQLSe_a-Dg-qahIGMNfnjH8x3kYfn_R_e9lFaO4_fQPBIPIfLq-w/viewform?usp=pp_url&entry.1773870597=PREVIEW-NOT-SENDABLE",
+    "subject": "GEO research participation invitation - Lagoon New York",
+    "body": "Hello,\n\nWe are inviting Lagoon New York to participate in a university study about how AI-powered search represents businesses and their offerings.\n\nLagoon New York is a concept store, gallery, and creation space in Brooklyn, NY. Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.\n\nThat combination makes Lagoon New York relevant to our study: we are examining whether AI-powered search connects a business's broader identity with specific services described on its website.\n\nThe study considers publicly available website information. It does not change or monitor your website, and we have not measured search performance or outcomes.\n\nQuestionnaire: https://docs.google.com/forms/d/e/1FAIpQLSe_a-Dg-qahIGMNfnjH8x3kYfn_R_e9lFaO4_fQPBIPIfLq-w/viewform?usp=pp_url&entry.1773870597=PREVIEW-NOT-SENDABLE\nInvitation reference: PREVIEW-NOT-SENDABLE\n\nPlease answer the research interest and research authorization questions separately. We will begin only after reviewing your responses and confirming that the study applies to your website.\n\nBest regards\nYuxuan Chen\nNortheastern University\nReply to: chen.yuxuan9@northeastern.edu"
+  }
+}

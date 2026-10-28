@@ -1,0 +1,1268 @@
+{
+  "artifact_version": "lagoon-openai-semantic-run-v1",
+  "company": {
+    "name": "Lagoon New York",
+    "website": "https://www.lagoonny.com/"
+  },
+  "fetched_at": "2026-10-28T22:46:54.720475+00:00",
+  "pages_fetched": [
+    {
+      "url": "https://www.lagoonny.com/",
+      "type": "home_or_other",
+      "title": "LAGOON",
+      "heading_count": 0,
+      "link_count": 5,
+      "truncated": false
+    },
+    {
+      "url": "https://www.lagoonny.com/about",
+      "type": "about",
+      "title": "LAGOON  - About — LAGOON",
+      "heading_count": 2,
+      "link_count": 13,
+      "truncated": false
+    },
+    {
+      "url": "https://www.lagoonny.com/events",
+      "type": "events",
+      "title": "LAGOON - events — LAGOON",
+      "heading_count": 31,
+      "link_count": 100,
+      "truncated": true
+    },
+    {
+      "url": "https://www.lagoonny.com/services",
+      "type": "services",
+      "title": "Services — LAGOON",
+      "heading_count": 1,
+      "link_count": 6,
+      "truncated": false
+    }
+  ],
+  "extracted_candidate_fact_count": 139,
+  "selected_evidence": {
+    "target_company": "Lagoon New York",
+    "website": "https://www.lagoonny.com/",
+    "pages": [
+      {
+        "url": "https://www.lagoonny.com/",
+        "type": "home_or_other",
+        "title": "LAGOON",
+        "heading_count": 0,
+        "link_count": 5,
+        "truncated": false
+      },
+      {
+        "url": "https://www.lagoonny.com/about",
+        "type": "about",
+        "title": "LAGOON  - About — LAGOON",
+        "heading_count": 2,
+        "link_count": 13,
+        "truncated": false
+      },
+      {
+        "url": "https://www.lagoonny.com/events",
+        "type": "events",
+        "title": "LAGOON - events — LAGOON",
+        "heading_count": 31,
+        "link_count": 100,
+        "truncated": true
+      },
+      {
+        "url": "https://www.lagoonny.com/services",
+        "type": "services",
+        "title": "Services — LAGOON",
+        "heading_count": 1,
+        "link_count": 6,
+        "truncated": false
+      }
+    ],
+    "facts": [
+      {
+        "id": "p1_s0",
+        "text": "Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.",
+        "exact_excerpt": "Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY.",
+        "source_url": "https://www.lagoonny.com/about",
+        "source_title": "LAGOON  - About — LAGOON",
+        "section": "LAGOON  - About — LAGOON",
+        "attribution": "COMPANY_STATED",
+        "classification": "TARGET_BUSINESS",
+        "assertion_type": "ATTRIBUTED_COMPANY_DESCRIPTION",
+        "field": ""
+      },
+      {
+        "id": "p3_s0",
+        "text": "Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.",
+        "exact_excerpt": "At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you!",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "classification": "PRODUCT_OR_SERVICE",
+        "assertion_type": "ATTRIBUTED_COMPANY_STRENGTH",
+        "field": ""
+      },
+      {
+        "id": "p3_s3",
+        "text": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+        "exact_excerpt": "Big event coming up? Costuming a performance/movie? Shooting your newest release?",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "classification": "PRODUCT_OR_SERVICE",
+        "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+        "field": ""
+      },
+      {
+        "id": "p3_s6",
+        "text": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+        "exact_excerpt": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!",
+        "source_url": "https://www.lagoonny.com/services",
+        "source_title": "Services — LAGOON",
+        "section": "Learn about our services",
+        "attribution": "COMPANY_STATED",
+        "classification": "PRODUCT_OR_SERVICE",
+        "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+        "field": ""
+      },
+      {
+        "id": "p1_s1",
+        "text": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+        "exact_excerpt": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.",
+        "source_url": "https://www.lagoonny.com/about",
+        "source_title": "LAGOON  - About — LAGOON",
+        "section": "LAGOON  - About — LAGOON",
+        "attribution": "COMPANY_STATED",
+        "classification": "TARGET_BUSINESS",
+        "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+        "field": ""
+      }
+    ],
+    "evidence_classifications": {
+      "p0_jsonld_0": "TARGET_BUSINESS",
+      "p0_jsonld_1": "TARGET_BUSINESS",
+      "p0_jsonld_2": "TARGET_BUSINESS",
+      "p0_jsonld_3": "TARGET_BUSINESS",
+      "p0_jsonld_4": "TARGET_BUSINESS",
+      "p0_jsonld_5": "TARGET_BUSINESS",
+      "p1_s0": "TARGET_BUSINESS",
+      "p1_s1": "TARGET_BUSINESS",
+      "p1_s2": "AMBIGUOUS",
+      "p1_s3": "AMBIGUOUS",
+      "p1_s4": "AMBIGUOUS",
+      "p1_jsonld_0": "TARGET_BUSINESS",
+      "p1_jsonld_1": "TARGET_BUSINESS",
+      "p1_jsonld_2": "TARGET_BUSINESS",
+      "p1_jsonld_3": "TARGET_BUSINESS",
+      "p1_jsonld_4": "TARGET_BUSINESS",
+      "p1_jsonld_5": "TARGET_BUSINESS",
+      "p2_s0": "EVENT_OR_PARTICIPANT",
+      "p2_s1": "EVENT_OR_PARTICIPANT",
+      "p2_s2": "EVENT_OR_PARTICIPANT",
+      "p2_s3": "EVENT_OR_PARTICIPANT",
+      "p2_s4": "EVENT_OR_PARTICIPANT",
+      "p2_s5": "EVENT_OR_PARTICIPANT",
+      "p2_s6": "EVENT_OR_PARTICIPANT",
+      "p2_s7": "EVENT_OR_PARTICIPANT",
+      "p2_s8": "EVENT_OR_PARTICIPANT",
+      "p2_s9": "EVENT_OR_PARTICIPANT",
+      "p2_s10": "EVENT_OR_PARTICIPANT",
+      "p2_s11": "EVENT_OR_PARTICIPANT",
+      "p2_s12": "EVENT_OR_PARTICIPANT",
+      "p2_s13": "EVENT_OR_PARTICIPANT",
+      "p2_s14": "EVENT_OR_PARTICIPANT",
+      "p2_s15": "EVENT_OR_PARTICIPANT",
+      "p2_s16": "EVENT_OR_PARTICIPANT",
+      "p2_s17": "EVENT_OR_PARTICIPANT",
+      "p2_s18": "EVENT_OR_PARTICIPANT",
+      "p2_s19": "EVENT_OR_PARTICIPANT",
+      "p2_s20": "EVENT_OR_PARTICIPANT",
+      "p2_s21": "EVENT_OR_PARTICIPANT",
+      "p2_s22": "EVENT_OR_PARTICIPANT",
+      "p2_s23": "EVENT_OR_PARTICIPANT",
+      "p2_s24": "EVENT_OR_PARTICIPANT",
+      "p2_s25": "EVENT_OR_PARTICIPANT",
+      "p2_s26": "EVENT_OR_PARTICIPANT",
+      "p2_s27": "EVENT_OR_PARTICIPANT",
+      "p2_s28": "EVENT_OR_PARTICIPANT",
+      "p2_s29": "EVENT_OR_PARTICIPANT",
+      "p2_s30": "EVENT_OR_PARTICIPANT",
+      "p2_s31": "EVENT_OR_PARTICIPANT",
+      "p2_s32": "EVENT_OR_PARTICIPANT",
+      "p2_s33": "EVENT_OR_PARTICIPANT",
+      "p2_s34": "EVENT_OR_PARTICIPANT",
+      "p2_s35": "EVENT_OR_PARTICIPANT",
+      "p2_s36": "EVENT_OR_PARTICIPANT",
+      "p2_s37": "EVENT_OR_PARTICIPANT",
+      "p2_s38": "EVENT_OR_PARTICIPANT",
+      "p2_s39": "EVENT_OR_PARTICIPANT",
+      "p2_s40": "EVENT_OR_PARTICIPANT",
+      "p2_s41": "EVENT_OR_PARTICIPANT",
+      "p2_s42": "EVENT_OR_PARTICIPANT",
+      "p2_s43": "EVENT_OR_PARTICIPANT",
+      "p2_s44": "EVENT_OR_PARTICIPANT",
+      "p2_s45": "EVENT_OR_PARTICIPANT",
+      "p2_s46": "EVENT_OR_PARTICIPANT",
+      "p2_s47": "EVENT_OR_PARTICIPANT",
+      "p2_s48": "EVENT_OR_PARTICIPANT",
+      "p2_s49": "EVENT_OR_PARTICIPANT",
+      "p2_s50": "EVENT_OR_PARTICIPANT",
+      "p2_s51": "EVENT_OR_PARTICIPANT",
+      "p2_s52": "EVENT_OR_PARTICIPANT",
+      "p2_s53": "EVENT_OR_PARTICIPANT",
+      "p2_s54": "EVENT_OR_PARTICIPANT",
+      "p2_s55": "EVENT_OR_PARTICIPANT",
+      "p2_s56": "EVENT_OR_PARTICIPANT",
+      "p2_s57": "EVENT_OR_PARTICIPANT",
+      "p2_s58": "EVENT_OR_PARTICIPANT",
+      "p2_s59": "EVENT_OR_PARTICIPANT",
+      "p2_s60": "EVENT_OR_PARTICIPANT",
+      "p2_s61": "EVENT_OR_PARTICIPANT",
+      "p2_s62": "EVENT_OR_PARTICIPANT",
+      "p2_s63": "EVENT_OR_PARTICIPANT",
+      "p2_s64": "EVENT_OR_PARTICIPANT",
+      "p2_s65": "EVENT_OR_PARTICIPANT",
+      "p2_s66": "EVENT_OR_PARTICIPANT",
+      "p2_s67": "EVENT_OR_PARTICIPANT",
+      "p2_s68": "EVENT_OR_PARTICIPANT",
+      "p2_s69": "EVENT_OR_PARTICIPANT",
+      "p2_s70": "EVENT_OR_PARTICIPANT",
+      "p2_s71": "EVENT_OR_PARTICIPANT",
+      "p2_s72": "EVENT_OR_PARTICIPANT",
+      "p2_s73": "EVENT_OR_PARTICIPANT",
+      "p2_s74": "EVENT_OR_PARTICIPANT",
+      "p2_s75": "EVENT_OR_PARTICIPANT",
+      "p2_s76": "EVENT_OR_PARTICIPANT",
+      "p2_s77": "EVENT_OR_PARTICIPANT",
+      "p2_s78": "EVENT_OR_PARTICIPANT",
+      "p2_s79": "EVENT_OR_PARTICIPANT",
+      "p2_s80": "EVENT_OR_PARTICIPANT",
+      "p2_s81": "EVENT_OR_PARTICIPANT",
+      "p2_s82": "EVENT_OR_PARTICIPANT",
+      "p2_s83": "EVENT_OR_PARTICIPANT",
+      "p2_s84": "EVENT_OR_PARTICIPANT",
+      "p2_s85": "EVENT_OR_PARTICIPANT",
+      "p2_s86": "EVENT_OR_PARTICIPANT",
+      "p2_s87": "EVENT_OR_PARTICIPANT",
+      "p2_s88": "EVENT_OR_PARTICIPANT",
+      "p2_s89": "EVENT_OR_PARTICIPANT",
+      "p2_s90": "EVENT_OR_PARTICIPANT",
+      "p2_s91": "EVENT_OR_PARTICIPANT",
+      "p2_s92": "EVENT_OR_PARTICIPANT",
+      "p2_s93": "EVENT_OR_PARTICIPANT",
+      "p2_s94": "EVENT_OR_PARTICIPANT",
+      "p2_s95": "EVENT_OR_PARTICIPANT",
+      "p2_s96": "EVENT_OR_PARTICIPANT",
+      "p2_s97": "EVENT_OR_PARTICIPANT",
+      "p2_s98": "EVENT_OR_PARTICIPANT",
+      "p2_s99": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_0": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_1": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_2": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_3": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_4": "EVENT_OR_PARTICIPANT",
+      "p2_jsonld_5": "EVENT_OR_PARTICIPANT",
+      "p3_s0": "PRODUCT_OR_SERVICE",
+      "p3_s1": "PRODUCT_OR_SERVICE",
+      "p3_s2": "PRODUCT_OR_SERVICE",
+      "p3_s3": "PRODUCT_OR_SERVICE",
+      "p3_s4": "PRODUCT_OR_SERVICE",
+      "p3_s5": "PRODUCT_OR_SERVICE",
+      "p3_s6": "PRODUCT_OR_SERVICE",
+      "p3_s7": "PRODUCT_OR_SERVICE",
+      "p3_s8": "PRODUCT_OR_SERVICE",
+      "p3_s9": "PRODUCT_OR_SERVICE",
+      "p3_jsonld_0": "TARGET_BUSINESS",
+      "p3_jsonld_1": "TARGET_BUSINESS",
+      "p3_jsonld_2": "TARGET_BUSINESS",
+      "p3_jsonld_3": "TARGET_BUSINESS",
+      "p3_jsonld_4": "TARGET_BUSINESS",
+      "p3_jsonld_5": "TARGET_BUSINESS"
+    },
+    "excluded_reasons": {
+      "p0_jsonld_0": "LOW_INFORMATION_STRUCTURED_FIELD",
+      "p0_jsonld_1": "LOW_INFORMATION_STRUCTURED_FIELD",
+      "p0_jsonld_2": "LOW_INFORMATION_STRUCTURED_FIELD",
+      "p0_jsonld_3": "DUPLICATE_EXCERPT",
+      "p0_jsonld_4": "DUPLICATE_EXCERPT",
+      "p0_jsonld_5": "LOW_INFORMATION_STRUCTURED_FIELD",
+      "p1_s2": "NON_TARGET_ATTRIBUTION:AMBIGUOUS",
+      "p1_s3": "NON_TARGET_ATTRIBUTION:AMBIGUOUS",
+      "p1_s4": "NON_TARGET_ATTRIBUTION:AMBIGUOUS",
+      "p1_jsonld_0": "DUPLICATE_EXCERPT",
+      "p1_jsonld_1": "DUPLICATE_EXCERPT",
+      "p1_jsonld_2": "DUPLICATE_EXCERPT",
+      "p1_jsonld_3": "DUPLICATE_EXCERPT",
+      "p1_jsonld_4": "DUPLICATE_EXCERPT",
+      "p1_jsonld_5": "DUPLICATE_EXCERPT",
+      "p2_s0": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s1": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s2": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s3": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s4": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s5": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s6": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s7": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s8": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s9": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s10": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s11": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s12": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s13": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s14": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s15": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s16": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s17": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s18": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s19": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s20": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s21": "DUPLICATE_EXCERPT",
+      "p2_s22": "DUPLICATE_EXCERPT",
+      "p2_s23": "DUPLICATE_EXCERPT",
+      "p2_s24": "DUPLICATE_EXCERPT",
+      "p2_s25": "DUPLICATE_EXCERPT",
+      "p2_s26": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s27": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s28": "DUPLICATE_EXCERPT",
+      "p2_s29": "DUPLICATE_EXCERPT",
+      "p2_s30": "DUPLICATE_EXCERPT",
+      "p2_s31": "DUPLICATE_EXCERPT",
+      "p2_s32": "DUPLICATE_EXCERPT",
+      "p2_s33": "DUPLICATE_EXCERPT",
+      "p2_s34": "DUPLICATE_EXCERPT",
+      "p2_s35": "DUPLICATE_EXCERPT",
+      "p2_s36": "DUPLICATE_EXCERPT",
+      "p2_s37": "DUPLICATE_EXCERPT",
+      "p2_s38": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s39": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s40": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s41": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s42": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s43": "DUPLICATE_EXCERPT",
+      "p2_s44": "DUPLICATE_EXCERPT",
+      "p2_s45": "DUPLICATE_EXCERPT",
+      "p2_s46": "DUPLICATE_EXCERPT",
+      "p2_s47": "DUPLICATE_EXCERPT",
+      "p2_s48": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s49": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s50": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s51": "DUPLICATE_EXCERPT",
+      "p2_s52": "DUPLICATE_EXCERPT",
+      "p2_s53": "DUPLICATE_EXCERPT",
+      "p2_s54": "DUPLICATE_EXCERPT",
+      "p2_s55": "DUPLICATE_EXCERPT",
+      "p2_s56": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s57": "DUPLICATE_EXCERPT",
+      "p2_s58": "DUPLICATE_EXCERPT",
+      "p2_s59": "DUPLICATE_EXCERPT",
+      "p2_s60": "DUPLICATE_EXCERPT",
+      "p2_s61": "DUPLICATE_EXCERPT",
+      "p2_s62": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s63": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s64": "DUPLICATE_EXCERPT",
+      "p2_s65": "DUPLICATE_EXCERPT",
+      "p2_s66": "DUPLICATE_EXCERPT",
+      "p2_s67": "DUPLICATE_EXCERPT",
+      "p2_s68": "DUPLICATE_EXCERPT",
+      "p2_s69": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s70": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s71": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s72": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s73": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s74": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s75": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s76": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s77": "DUPLICATE_EXCERPT",
+      "p2_s78": "DUPLICATE_EXCERPT",
+      "p2_s79": "DUPLICATE_EXCERPT",
+      "p2_s80": "DUPLICATE_EXCERPT",
+      "p2_s81": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s82": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s83": "DUPLICATE_EXCERPT",
+      "p2_s84": "DUPLICATE_EXCERPT",
+      "p2_s85": "DUPLICATE_EXCERPT",
+      "p2_s86": "DUPLICATE_EXCERPT",
+      "p2_s87": "DUPLICATE_EXCERPT",
+      "p2_s88": "DUPLICATE_EXCERPT",
+      "p2_s89": "DUPLICATE_EXCERPT",
+      "p2_s90": "DUPLICATE_EXCERPT",
+      "p2_s91": "DUPLICATE_EXCERPT",
+      "p2_s92": "DUPLICATE_EXCERPT",
+      "p2_s93": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s94": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s95": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s96": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s97": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s98": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_s99": "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT",
+      "p2_jsonld_0": "DUPLICATE_EXCERPT",
+      "p2_jsonld_1": "DUPLICATE_EXCERPT",
+      "p2_jsonld_2": "DUPLICATE_EXCERPT",
+      "p2_jsonld_3": "DUPLICATE_EXCERPT",
+      "p2_jsonld_4": "DUPLICATE_EXCERPT",
+      "p2_jsonld_5": "DUPLICATE_EXCERPT",
+      "p3_s1": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s2": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s4": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s5": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s7": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s8": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_s9": "OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY",
+      "p3_jsonld_0": "DUPLICATE_EXCERPT",
+      "p3_jsonld_1": "DUPLICATE_EXCERPT",
+      "p3_jsonld_2": "DUPLICATE_EXCERPT",
+      "p3_jsonld_3": "DUPLICATE_EXCERPT",
+      "p3_jsonld_4": "DUPLICATE_EXCERPT",
+      "p3_jsonld_5": "DUPLICATE_EXCERPT"
+    },
+    "excluded_counts": {
+      "TARGET_BUSINESS": 20,
+      "PRODUCT_OR_SERVICE": 10,
+      "EVENT_OR_PARTICIPANT": 106,
+      "THIRD_PARTY_OR_PARTNER": 0,
+      "CUSTOMER_OR_TESTIMONIAL": 0,
+      "AMBIGUOUS": 3
+    },
+    "limitations": [
+      "One or more pages were truncated at the configured byte limit."
+    ]
+  },
+  "provider": "openai",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "request_status": "FAILED_NO_RETRY",
+  "raw_structured_model_response": {
+    "id": "resp_0db4c56e8cc63a3c016ae27b61120c87d28fdc373c94579af3",
+    "object": "response",
+    "created_at": 1793227617,
+    "status": "completed",
+    "access_programs": null,
+    "background": false,
+    "billing": {
+      "payer": "developer"
+    },
+    "completed_at": 1793227621,
+    "error": null,
+    "frequency_penalty": 0.0,
+    "incomplete_details": null,
+    "instructions": "Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification.",
+    "max_output_tokens": 6000,
+    "max_tool_calls": null,
+    "model": "gpt-5.4-mini-2026-03-17",
+    "moderation": null,
+    "output": [
+      {
+        "id": "msg_0db4c56e8cc63a3c016ae27b62095c87d2abbe983affee3669",
+        "type": "message",
+        "status": "completed",
+        "content": [
+          {
+            "type": "output_text",
+            "annotations": [],
+            "logprobs": [],
+            "text": "{\"version\":\"structured-company-analysis-v1\",\"entity_identity\":{\"name\":\"Lagoon New York\",\"website\":\"https://www.lagoonny.com/\",\"identity_status\":\"identified\",\"evidence_ids\":[\"p1_s0\",\"p1_s1\"]},\"products_services\":[{\"summary\":\"Custom design service for clients to choose a silhouette and tailor size, fabric, and colors.\",\"evidence_ids\":[\"p3_s0\"],\"attribution\":\"COMPANY_STATED\"},{\"summary\":\"Wearable art sold alongside curated art, body, jewelry, and housewares.\",\"evidence_ids\":[\"p1_s1\"],\"attribution\":\"COMPANY_STATED\"},{\"summary\":\"Styling-related look pulls and project support for events, performances, films, and shoots.\",\"evidence_ids\":[\"p3_s3\",\"p3_s6\"],\"attribution\":\"COMPANY_STATED\"}],\"target_audiences\":[{\"summary\":\"People planning events, performances, film projects, or releases who may need costuming or styled looks.\",\"evidence_ids\":[\"p3_s3\"],\"attribution\":\"COMPANY_STATED\"},{\"summary\":\"Stylists looking to pull looks from Lagoon.\",\"evidence_ids\":[\"p3_s6\"],\"attribution\":\"COMPANY_STATED\"}],\"capabilities_characteristics\":[{\"summary\":\"Concept store, gallery, and creation space based in Brooklyn, NY.\",\"evidence_ids\":[\"p1_s0\"],\"attribution\":\"COMPANY_STATED\"},{\"summary\":\"Positions its space around sustainability, connection to nature, and community engagement.\",\"evidence_ids\":[\"p1_s1\"],\"attribution\":\"COMPANY_STATED\"},{\"summary\":\"Offers made-to-order customization across silhouette, size, fabric, and color.\",\"evidence_ids\":[\"p3_s0\"],\"attribution\":\"COMPANY_STATED\"}],\"proposed_claims\":[{\"id\":\"c1\",\"text\":\"Lagoon New York is a Brooklyn-based concept store that combines retail, gallery, and creation-space functions.\",\"evidence_ids\":[\"p1_s0\",\"p1_s1\"],\"attribution\":\"COMPANY_STATED\",\"role\":\"BUSINESS_DESCRIPTION\"},{\"id\":\"c2\",\"text\":\"The site presents the business as centered on wearable art and adjacent curated goods, not just a single-product shop.\",\"evidence_ids\":[\"p1_s1\"],\"attribution\":\"COMPANY_STATED\",\"role\":\"COMPANY_CHARACTERISTIC\"},{\"id\":\"c3\",\"text\":\"The services page is relevant for understanding how the business frames customer use cases, including custom design and stylist look pulls.\",\"evidence_ids\":[\"p3_s0\",\"p3_s6\"],\"attribution\":\"ANALYTICAL_INTERPRETATION\",\"role\":\"RESEARCH_RELEVANCE\"},{\"id\":\"c4\",\"text\":\"The events page likely provides additional customer-facing context, but it was truncated in the supplied evidence.\",\"evidence_ids\":[\"p2_jsonld_0\"],\"attribution\":\"GEO_HYPOTHESIS\",\"role\":\"GEO_OBSERVATION\"}],\"evidence_limitations\":[\"One or more pages were truncated at the configured byte limit.\",\"Most event-page material was classified as EVENT_OR_PARTICIPANT and excluded from business claims.\",\"Only the supplied first-party website evidence was analyzed.\"],\"observed_relationships\":[{\"id\":\"r1\",\"description\":\"About page defines the business as a concept store, gallery, and creation space in Brooklyn.\",\"evidence_ids\":[\"p1_s0\"],\"kind\":\"IDENTITY\"},{\"id\":\"r2\",\"description\":\"About page links the brand to sustainable design, wearable art, and curated complementary categories.\",\"evidence_ids\":[\"p1_s1\"],\"kind\":\"OFFERING_SCOPE\"},{\"id\":\"r3\",\"description\":\"Services page connects customization with stylist and production-oriented use cases.\",\"evidence_ids\":[\"p3_s0\",\"p3_s3\",\"p3_s6\"],\"kind\":\"SERVICE_TO_USE_CASE\"}],\"potential_geo_implications\":[],\"unsupported_or_unresolved_claims\":[\"Exact product catalog, pricing, and purchase terms are not established by the supplied evidence.\",\"The events page content is not fully visible, so its business relevance cannot be fully described.\",\"No claim is made about rankings, visibility, or performance in AI systems.\"],\"recommendation_decision\":\"ABSTAIN\"}"
+          }
+        ],
+        "phase": "final_answer",
+        "role": "assistant"
+      }
+    ],
+    "parallel_tool_calls": true,
+    "presence_penalty": 0.0,
+    "previous_response_id": null,
+    "prompt_cache_key": null,
+    "prompt_cache_retention": "24h",
+    "reasoning": {
+      "context": "current_turn",
+      "effort": "none",
+      "mode": "standard",
+      "summary": null
+    },
+    "safety_identifier": null,
+    "service_tier": "default",
+    "store": false,
+    "temperature": 1.0,
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "description": null,
+        "name": "outreach_company_analysis",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "enum": [
+                "structured-company-analysis-v1"
+              ]
+            },
+            "entity_identity": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "website": {
+                  "type": "string"
+                },
+                "identity_status": {
+                  "type": "string"
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "website",
+                "identity_status",
+                "evidence_ids"
+              ],
+              "additionalProperties": false
+            },
+            "products_services": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "target_audiences": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "capabilities_characteristics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "proposed_claims": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "ANALYTICAL_INTERPRETATION",
+                      "GEO_HYPOTHESIS"
+                    ]
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "BUSINESS_DESCRIPTION",
+                      "COMPANY_CHARACTERISTIC",
+                      "RESEARCH_RELEVANCE",
+                      "GEO_OBSERVATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "text",
+                  "evidence_ids",
+                  "attribution",
+                  "role"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "evidence_limitations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "observed_relationships": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "description",
+                  "evidence_ids",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "potential_geo_implications": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "observation": {
+                    "type": "string"
+                  },
+                  "hypothesis": {
+                    "type": "string"
+                  },
+                  "recommendation": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "relationship_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "HYPOTHESIS_REQUIRES_REVIEW"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "observation",
+                  "hypothesis",
+                  "recommendation",
+                  "evidence_ids",
+                  "relationship_ids",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "unsupported_or_unresolved_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "recommendation_decision": {
+              "type": "string",
+              "enum": [
+                "RECOMMEND",
+                "ABSTAIN"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "entity_identity",
+            "products_services",
+            "target_audiences",
+            "capabilities_characteristics",
+            "proposed_claims",
+            "evidence_limitations",
+            "observed_relationships",
+            "potential_geo_implications",
+            "unsupported_or_unresolved_claims",
+            "recommendation_decision"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      "verbosity": "medium"
+    },
+    "tool_choice": "auto",
+    "tool_usage": {
+      "image_gen": {
+        "input_tokens": 0,
+        "input_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "output_tokens": 0,
+        "output_tokens_details": {
+          "image_tokens": 0,
+          "text_tokens": 0
+        },
+        "total_tokens": 0
+      },
+      "web_search": {
+        "num_requests": 0
+      }
+    },
+    "tools": [],
+    "top_logprobs": 0,
+    "top_p": 0.98,
+    "truncation": "disabled",
+    "usage": {
+      "input_tokens": 5438,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 862,
+      "output_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "total_tokens": 6300
+    },
+    "user": null,
+    "metadata": {}
+  },
+  "claim_evidence_validation": null,
+  "human_review_items": [],
+  "final_personalization": null,
+  "invitation_preview": {
+    "status": "BLOCKED_ANALYSIS_VALIDATION_AND_QUALITY_GATE",
+    "reason": "No invitation rendered: unsupported evidence citation, evidence-contract excerpt mismatch, and quality gate failures."
+  },
+  "limitations": [
+    "One or more pages were truncated at the configured byte limit."
+  ],
+  "preflight": {
+    "model": "gpt-5.4-mini-2026-03-17",
+    "input_tokens_estimate": 5996,
+    "max_output_tokens": 6000,
+    "worst_case_cost_usd": 0.031497,
+    "price_input_per_million": 0.75,
+    "price_output_per_million": 4.5,
+    "pricing_source": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+    "tokenizer": "o200k_base; tiktoken 0.14.0",
+    "prompt_sha256": "7d6b7c60868fde7237a8fc7b500d438a2973d9eaeba3759574aa4599e939a9bf",
+    "passed": true
+  },
+  "request_payload_without_credentials": {
+    "model": "gpt-5.4-mini-2026-03-17",
+    "instructions": "Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification.",
+    "input": [
+      {
+        "role": "user",
+        "content": "{\"evidence_classifications\":{\"p0_jsonld_0\":\"TARGET_BUSINESS\",\"p0_jsonld_1\":\"TARGET_BUSINESS\",\"p0_jsonld_2\":\"TARGET_BUSINESS\",\"p0_jsonld_3\":\"TARGET_BUSINESS\",\"p0_jsonld_4\":\"TARGET_BUSINESS\",\"p0_jsonld_5\":\"TARGET_BUSINESS\",\"p1_jsonld_0\":\"TARGET_BUSINESS\",\"p1_jsonld_1\":\"TARGET_BUSINESS\",\"p1_jsonld_2\":\"TARGET_BUSINESS\",\"p1_jsonld_3\":\"TARGET_BUSINESS\",\"p1_jsonld_4\":\"TARGET_BUSINESS\",\"p1_jsonld_5\":\"TARGET_BUSINESS\",\"p1_s0\":\"TARGET_BUSINESS\",\"p1_s1\":\"TARGET_BUSINESS\",\"p1_s2\":\"AMBIGUOUS\",\"p1_s3\":\"AMBIGUOUS\",\"p1_s4\":\"AMBIGUOUS\",\"p2_jsonld_0\":\"EVENT_OR_PARTICIPANT\",\"p2_jsonld_1\":\"EVENT_OR_PARTICIPANT\",\"p2_jsonld_2\":\"EVENT_OR_PARTICIPANT\",\"p2_jsonld_3\":\"EVENT_OR_PARTICIPANT\",\"p2_jsonld_4\":\"EVENT_OR_PARTICIPANT\",\"p2_jsonld_5\":\"EVENT_OR_PARTICIPANT\",\"p2_s0\":\"EVENT_OR_PARTICIPANT\",\"p2_s1\":\"EVENT_OR_PARTICIPANT\",\"p2_s10\":\"EVENT_OR_PARTICIPANT\",\"p2_s11\":\"EVENT_OR_PARTICIPANT\",\"p2_s12\":\"EVENT_OR_PARTICIPANT\",\"p2_s13\":\"EVENT_OR_PARTICIPANT\",\"p2_s14\":\"EVENT_OR_PARTICIPANT\",\"p2_s15\":\"EVENT_OR_PARTICIPANT\",\"p2_s16\":\"EVENT_OR_PARTICIPANT\",\"p2_s17\":\"EVENT_OR_PARTICIPANT\",\"p2_s18\":\"EVENT_OR_PARTICIPANT\",\"p2_s19\":\"EVENT_OR_PARTICIPANT\",\"p2_s2\":\"EVENT_OR_PARTICIPANT\",\"p2_s20\":\"EVENT_OR_PARTICIPANT\",\"p2_s21\":\"EVENT_OR_PARTICIPANT\",\"p2_s22\":\"EVENT_OR_PARTICIPANT\",\"p2_s23\":\"EVENT_OR_PARTICIPANT\",\"p2_s24\":\"EVENT_OR_PARTICIPANT\",\"p2_s25\":\"EVENT_OR_PARTICIPANT\",\"p2_s26\":\"EVENT_OR_PARTICIPANT\",\"p2_s27\":\"EVENT_OR_PARTICIPANT\",\"p2_s28\":\"EVENT_OR_PARTICIPANT\",\"p2_s29\":\"EVENT_OR_PARTICIPANT\",\"p2_s3\":\"EVENT_OR_PARTICIPANT\",\"p2_s30\":\"EVENT_OR_PARTICIPANT\",\"p2_s31\":\"EVENT_OR_PARTICIPANT\",\"p2_s32\":\"EVENT_OR_PARTICIPANT\",\"p2_s33\":\"EVENT_OR_PARTICIPANT\",\"p2_s34\":\"EVENT_OR_PARTICIPANT\",\"p2_s35\":\"EVENT_OR_PARTICIPANT\",\"p2_s36\":\"EVENT_OR_PARTICIPANT\",\"p2_s37\":\"EVENT_OR_PARTICIPANT\",\"p2_s38\":\"EVENT_OR_PARTICIPANT\",\"p2_s39\":\"EVENT_OR_PARTICIPANT\",\"p2_s4\":\"EVENT_OR_PARTICIPANT\",\"p2_s40\":\"EVENT_OR_PARTICIPANT\",\"p2_s41\":\"EVENT_OR_PARTICIPANT\",\"p2_s42\":\"EVENT_OR_PARTICIPANT\",\"p2_s43\":\"EVENT_OR_PARTICIPANT\",\"p2_s44\":\"EVENT_OR_PARTICIPANT\",\"p2_s45\":\"EVENT_OR_PARTICIPANT\",\"p2_s46\":\"EVENT_OR_PARTICIPANT\",\"p2_s47\":\"EVENT_OR_PARTICIPANT\",\"p2_s48\":\"EVENT_OR_PARTICIPANT\",\"p2_s49\":\"EVENT_OR_PARTICIPANT\",\"p2_s5\":\"EVENT_OR_PARTICIPANT\",\"p2_s50\":\"EVENT_OR_PARTICIPANT\",\"p2_s51\":\"EVENT_OR_PARTICIPANT\",\"p2_s52\":\"EVENT_OR_PARTICIPANT\",\"p2_s53\":\"EVENT_OR_PARTICIPANT\",\"p2_s54\":\"EVENT_OR_PARTICIPANT\",\"p2_s55\":\"EVENT_OR_PARTICIPANT\",\"p2_s56\":\"EVENT_OR_PARTICIPANT\",\"p2_s57\":\"EVENT_OR_PARTICIPANT\",\"p2_s58\":\"EVENT_OR_PARTICIPANT\",\"p2_s59\":\"EVENT_OR_PARTICIPANT\",\"p2_s6\":\"EVENT_OR_PARTICIPANT\",\"p2_s60\":\"EVENT_OR_PARTICIPANT\",\"p2_s61\":\"EVENT_OR_PARTICIPANT\",\"p2_s62\":\"EVENT_OR_PARTICIPANT\",\"p2_s63\":\"EVENT_OR_PARTICIPANT\",\"p2_s64\":\"EVENT_OR_PARTICIPANT\",\"p2_s65\":\"EVENT_OR_PARTICIPANT\",\"p2_s66\":\"EVENT_OR_PARTICIPANT\",\"p2_s67\":\"EVENT_OR_PARTICIPANT\",\"p2_s68\":\"EVENT_OR_PARTICIPANT\",\"p2_s69\":\"EVENT_OR_PARTICIPANT\",\"p2_s7\":\"EVENT_OR_PARTICIPANT\",\"p2_s70\":\"EVENT_OR_PARTICIPANT\",\"p2_s71\":\"EVENT_OR_PARTICIPANT\",\"p2_s72\":\"EVENT_OR_PARTICIPANT\",\"p2_s73\":\"EVENT_OR_PARTICIPANT\",\"p2_s74\":\"EVENT_OR_PARTICIPANT\",\"p2_s75\":\"EVENT_OR_PARTICIPANT\",\"p2_s76\":\"EVENT_OR_PARTICIPANT\",\"p2_s77\":\"EVENT_OR_PARTICIPANT\",\"p2_s78\":\"EVENT_OR_PARTICIPANT\",\"p2_s79\":\"EVENT_OR_PARTICIPANT\",\"p2_s8\":\"EVENT_OR_PARTICIPANT\",\"p2_s80\":\"EVENT_OR_PARTICIPANT\",\"p2_s81\":\"EVENT_OR_PARTICIPANT\",\"p2_s82\":\"EVENT_OR_PARTICIPANT\",\"p2_s83\":\"EVENT_OR_PARTICIPANT\",\"p2_s84\":\"EVENT_OR_PARTICIPANT\",\"p2_s85\":\"EVENT_OR_PARTICIPANT\",\"p2_s86\":\"EVENT_OR_PARTICIPANT\",\"p2_s87\":\"EVENT_OR_PARTICIPANT\",\"p2_s88\":\"EVENT_OR_PARTICIPANT\",\"p2_s89\":\"EVENT_OR_PARTICIPANT\",\"p2_s9\":\"EVENT_OR_PARTICIPANT\",\"p2_s90\":\"EVENT_OR_PARTICIPANT\",\"p2_s91\":\"EVENT_OR_PARTICIPANT\",\"p2_s92\":\"EVENT_OR_PARTICIPANT\",\"p2_s93\":\"EVENT_OR_PARTICIPANT\",\"p2_s94\":\"EVENT_OR_PARTICIPANT\",\"p2_s95\":\"EVENT_OR_PARTICIPANT\",\"p2_s96\":\"EVENT_OR_PARTICIPANT\",\"p2_s97\":\"EVENT_OR_PARTICIPANT\",\"p2_s98\":\"EVENT_OR_PARTICIPANT\",\"p2_s99\":\"EVENT_OR_PARTICIPANT\",\"p3_jsonld_0\":\"TARGET_BUSINESS\",\"p3_jsonld_1\":\"TARGET_BUSINESS\",\"p3_jsonld_2\":\"TARGET_BUSINESS\",\"p3_jsonld_3\":\"TARGET_BUSINESS\",\"p3_jsonld_4\":\"TARGET_BUSINESS\",\"p3_jsonld_5\":\"TARGET_BUSINESS\",\"p3_s0\":\"PRODUCT_OR_SERVICE\",\"p3_s1\":\"PRODUCT_OR_SERVICE\",\"p3_s2\":\"PRODUCT_OR_SERVICE\",\"p3_s3\":\"PRODUCT_OR_SERVICE\",\"p3_s4\":\"PRODUCT_OR_SERVICE\",\"p3_s5\":\"PRODUCT_OR_SERVICE\",\"p3_s6\":\"PRODUCT_OR_SERVICE\",\"p3_s7\":\"PRODUCT_OR_SERVICE\",\"p3_s8\":\"PRODUCT_OR_SERVICE\",\"p3_s9\":\"PRODUCT_OR_SERVICE\"},\"excluded_counts\":{\"AMBIGUOUS\":3,\"CUSTOMER_OR_TESTIMONIAL\":0,\"EVENT_OR_PARTICIPANT\":106,\"PRODUCT_OR_SERVICE\":10,\"TARGET_BUSINESS\":20,\"THIRD_PARTY_OR_PARTNER\":0},\"excluded_reasons\":{\"p0_jsonld_0\":\"LOW_INFORMATION_STRUCTURED_FIELD\",\"p0_jsonld_1\":\"LOW_INFORMATION_STRUCTURED_FIELD\",\"p0_jsonld_2\":\"LOW_INFORMATION_STRUCTURED_FIELD\",\"p0_jsonld_3\":\"DUPLICATE_EXCERPT\",\"p0_jsonld_4\":\"DUPLICATE_EXCERPT\",\"p0_jsonld_5\":\"LOW_INFORMATION_STRUCTURED_FIELD\",\"p1_jsonld_0\":\"DUPLICATE_EXCERPT\",\"p1_jsonld_1\":\"DUPLICATE_EXCERPT\",\"p1_jsonld_2\":\"DUPLICATE_EXCERPT\",\"p1_jsonld_3\":\"DUPLICATE_EXCERPT\",\"p1_jsonld_4\":\"DUPLICATE_EXCERPT\",\"p1_jsonld_5\":\"DUPLICATE_EXCERPT\",\"p1_s2\":\"NON_TARGET_ATTRIBUTION:AMBIGUOUS\",\"p1_s3\":\"NON_TARGET_ATTRIBUTION:AMBIGUOUS\",\"p1_s4\":\"NON_TARGET_ATTRIBUTION:AMBIGUOUS\",\"p2_jsonld_0\":\"DUPLICATE_EXCERPT\",\"p2_jsonld_1\":\"DUPLICATE_EXCERPT\",\"p2_jsonld_2\":\"DUPLICATE_EXCERPT\",\"p2_jsonld_3\":\"DUPLICATE_EXCERPT\",\"p2_jsonld_4\":\"DUPLICATE_EXCERPT\",\"p2_jsonld_5\":\"DUPLICATE_EXCERPT\",\"p2_s0\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s1\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s10\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s11\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s12\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s13\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s14\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s15\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s16\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s17\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s18\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s19\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s2\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s20\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s21\":\"DUPLICATE_EXCERPT\",\"p2_s22\":\"DUPLICATE_EXCERPT\",\"p2_s23\":\"DUPLICATE_EXCERPT\",\"p2_s24\":\"DUPLICATE_EXCERPT\",\"p2_s25\":\"DUPLICATE_EXCERPT\",\"p2_s26\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s27\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s28\":\"DUPLICATE_EXCERPT\",\"p2_s29\":\"DUPLICATE_EXCERPT\",\"p2_s3\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s30\":\"DUPLICATE_EXCERPT\",\"p2_s31\":\"DUPLICATE_EXCERPT\",\"p2_s32\":\"DUPLICATE_EXCERPT\",\"p2_s33\":\"DUPLICATE_EXCERPT\",\"p2_s34\":\"DUPLICATE_EXCERPT\",\"p2_s35\":\"DUPLICATE_EXCERPT\",\"p2_s36\":\"DUPLICATE_EXCERPT\",\"p2_s37\":\"DUPLICATE_EXCERPT\",\"p2_s38\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s39\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s4\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s40\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s41\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s42\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s43\":\"DUPLICATE_EXCERPT\",\"p2_s44\":\"DUPLICATE_EXCERPT\",\"p2_s45\":\"DUPLICATE_EXCERPT\",\"p2_s46\":\"DUPLICATE_EXCERPT\",\"p2_s47\":\"DUPLICATE_EXCERPT\",\"p2_s48\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s49\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s5\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s50\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s51\":\"DUPLICATE_EXCERPT\",\"p2_s52\":\"DUPLICATE_EXCERPT\",\"p2_s53\":\"DUPLICATE_EXCERPT\",\"p2_s54\":\"DUPLICATE_EXCERPT\",\"p2_s55\":\"DUPLICATE_EXCERPT\",\"p2_s56\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s57\":\"DUPLICATE_EXCERPT\",\"p2_s58\":\"DUPLICATE_EXCERPT\",\"p2_s59\":\"DUPLICATE_EXCERPT\",\"p2_s6\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s60\":\"DUPLICATE_EXCERPT\",\"p2_s61\":\"DUPLICATE_EXCERPT\",\"p2_s62\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s63\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s64\":\"DUPLICATE_EXCERPT\",\"p2_s65\":\"DUPLICATE_EXCERPT\",\"p2_s66\":\"DUPLICATE_EXCERPT\",\"p2_s67\":\"DUPLICATE_EXCERPT\",\"p2_s68\":\"DUPLICATE_EXCERPT\",\"p2_s69\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s7\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s70\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s71\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s72\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s73\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s74\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s75\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s76\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s77\":\"DUPLICATE_EXCERPT\",\"p2_s78\":\"DUPLICATE_EXCERPT\",\"p2_s79\":\"DUPLICATE_EXCERPT\",\"p2_s8\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s80\":\"DUPLICATE_EXCERPT\",\"p2_s81\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s82\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s83\":\"DUPLICATE_EXCERPT\",\"p2_s84\":\"DUPLICATE_EXCERPT\",\"p2_s85\":\"DUPLICATE_EXCERPT\",\"p2_s86\":\"DUPLICATE_EXCERPT\",\"p2_s87\":\"DUPLICATE_EXCERPT\",\"p2_s88\":\"DUPLICATE_EXCERPT\",\"p2_s89\":\"DUPLICATE_EXCERPT\",\"p2_s9\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s90\":\"DUPLICATE_EXCERPT\",\"p2_s91\":\"DUPLICATE_EXCERPT\",\"p2_s92\":\"DUPLICATE_EXCERPT\",\"p2_s93\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s94\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s95\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s96\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s97\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s98\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p2_s99\":\"NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT\",\"p3_jsonld_0\":\"DUPLICATE_EXCERPT\",\"p3_jsonld_1\":\"DUPLICATE_EXCERPT\",\"p3_jsonld_2\":\"DUPLICATE_EXCERPT\",\"p3_jsonld_3\":\"DUPLICATE_EXCERPT\",\"p3_jsonld_4\":\"DUPLICATE_EXCERPT\",\"p3_jsonld_5\":\"DUPLICATE_EXCERPT\",\"p3_s1\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s2\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s4\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s5\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s7\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s8\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\",\"p3_s9\":\"OPERATIONAL_TERMS_OR_GENERIC_CONTACT_COPY\"},\"facts\":[{\"assertion_type\":\"ATTRIBUTED_COMPANY_DESCRIPTION\",\"attribution\":\"COMPANY_STATED\",\"classification\":\"TARGET_BUSINESS\",\"exact_excerpt\":\"Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY.\",\"field\":\"\",\"id\":\"p1_s0\",\"section\":\"LAGOON  - About — LAGOON\",\"source_title\":\"LAGOON  - About — LAGOON\",\"source_url\":\"https://www.lagoonny.com/about\",\"text\":\"Lagoon New York is a concept store, gallery, and creation space in Brooklyn, NY.\"},{\"assertion_type\":\"ATTRIBUTED_COMPANY_STRENGTH\",\"attribution\":\"COMPANY_STATED\",\"classification\":\"PRODUCT_OR_SERVICE\",\"exact_excerpt\":\"At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you!\",\"field\":\"\",\"id\":\"p3_s0\",\"section\":\"Learn about our services\",\"source_title\":\"Services — LAGOON\",\"source_url\":\"https://www.lagoonny.com/services\",\"text\":\"Its custom-design service lets clients choose a silhouette and tailor the size, fabric, and colors.\"},{\"assertion_type\":\"FIRST_PARTY_PAGE_CLAIM\",\"attribution\":\"COMPANY_STATED\",\"classification\":\"PRODUCT_OR_SERVICE\",\"exact_excerpt\":\"Big event coming up? Costuming a performance/movie? Shooting your newest release?\",\"field\":\"\",\"id\":\"p3_s3\",\"section\":\"Learn about our services\",\"source_title\":\"Services — LAGOON\",\"source_url\":\"https://www.lagoonny.com/services\",\"text\":\"Big event coming up? Costuming a performance/movie? Shooting your newest release?\"},{\"assertion_type\":\"FIRST_PARTY_PAGE_CLAIM\",\"attribution\":\"COMPANY_STATED\",\"classification\":\"PRODUCT_OR_SERVICE\",\"exact_excerpt\":\"If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!\",\"field\":\"\",\"id\":\"p3_s6\",\"section\":\"Learn about our services\",\"source_title\":\"Services — LAGOON\",\"source_url\":\"https://www.lagoonny.com/services\",\"text\":\"If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!\"},{\"assertion_type\":\"FIRST_PARTY_PAGE_CLAIM\",\"attribution\":\"COMPANY_STATED\",\"classification\":\"TARGET_BUSINESS\",\"exact_excerpt\":\"In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.\",\"field\":\"\",\"id\":\"p1_s1\",\"section\":\"LAGOON  - About — LAGOON\",\"source_title\":\"LAGOON  - About — LAGOON\",\"source_url\":\"https://www.lagoonny.com/about\",\"text\":\"In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement.\"}],\"limitations\":[\"One or more pages were truncated at the configured byte limit.\"],\"pages\":[{\"heading_count\":0,\"link_count\":5,\"title\":\"LAGOON\",\"truncated\":false,\"type\":\"home_or_other\",\"url\":\"https://www.lagoonny.com/\"},{\"heading_count\":2,\"link_count\":13,\"title\":\"LAGOON  - About — LAGOON\",\"truncated\":false,\"type\":\"about\",\"url\":\"https://www.lagoonny.com/about\"},{\"heading_count\":31,\"link_count\":100,\"title\":\"LAGOON - events — LAGOON\",\"truncated\":true,\"type\":\"events\",\"url\":\"https://www.lagoonny.com/events\"},{\"heading_count\":1,\"link_count\":6,\"title\":\"Services — LAGOON\",\"truncated\":false,\"type\":\"services\",\"url\":\"https://www.lagoonny.com/services\"}],\"target_company\":\"Lagoon New York\",\"website\":\"https://www.lagoonny.com/\"}"
+      }
+    ],
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "outreach_company_analysis",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "enum": [
+                "structured-company-analysis-v1"
+              ]
+            },
+            "entity_identity": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "website": {
+                  "type": "string"
+                },
+                "identity_status": {
+                  "type": "string"
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "website",
+                "identity_status",
+                "evidence_ids"
+              ],
+              "additionalProperties": false
+            },
+            "products_services": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "target_audiences": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "capabilities_characteristics": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "PUBLISHED_STRUCTURED_DATA",
+                      "ANALYTICAL_INTERPRETATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "summary",
+                  "evidence_ids",
+                  "attribution"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "proposed_claims": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "attribution": {
+                    "type": "string",
+                    "enum": [
+                      "COMPANY_STATED",
+                      "ANALYTICAL_INTERPRETATION",
+                      "GEO_HYPOTHESIS"
+                    ]
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "BUSINESS_DESCRIPTION",
+                      "COMPANY_CHARACTERISTIC",
+                      "RESEARCH_RELEVANCE",
+                      "GEO_OBSERVATION"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "text",
+                  "evidence_ids",
+                  "attribution",
+                  "role"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "evidence_limitations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "observed_relationships": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "kind": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "description",
+                  "evidence_ids",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "potential_geo_implications": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "observation": {
+                    "type": "string"
+                  },
+                  "hypothesis": {
+                    "type": "string"
+                  },
+                  "recommendation": {
+                    "type": "string"
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "relationship_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "HYPOTHESIS_REQUIRES_REVIEW"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "observation",
+                  "hypothesis",
+                  "recommendation",
+                  "evidence_ids",
+                  "relationship_ids",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "unsupported_or_unresolved_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "recommendation_decision": {
+              "type": "string",
+              "enum": [
+                "RECOMMEND",
+                "ABSTAIN"
+              ]
+            }
+          },
+          "required": [
+            "version",
+            "entity_identity",
+            "products_services",
+            "target_audiences",
+            "capabilities_characteristics",
+            "proposed_claims",
+            "evidence_limitations",
+            "observed_relationships",
+            "potential_geo_implications",
+            "unsupported_or_unresolved_claims",
+            "recommendation_decision"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "reasoning": {
+      "effort": "none"
+    },
+    "max_output_tokens": 6000,
+    "tools": [],
+    "store": false
+  },
+  "request_error": {
+    "http_status": 200,
+    "code": "STRUCTURED_VALIDATION_FAILED",
+    "message": "Claim c4 references unknown evidence p2_jsonld_0"
+  },
+  "request_id": "resp_0db4c56e8cc63a3c016ae27b61120c87d28fdc373c94579af3",
+  "model_result": {
+    "request_id": "resp_0db4c56e8cc63a3c016ae27b61120c87d28fdc373c94579af3",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "response_status": "completed",
+    "http_status": 200,
+    "input_tokens": 5438,
+    "output_tokens": 862,
+    "reasoning_tokens": 0,
+    "estimated_cost_usd": 0.0079575,
+    "preflight_input_tokens_estimate": 5996,
+    "preflight_worst_case_cost_usd": 0.031497
+  },
+  "post_response_audit": {
+    "raw_response_preserved": true,
+    "retained_claim_ids": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "rejected_claims": [
+      {
+        "id": "c4",
+        "text": "The events page likely provides additional customer-facing context, but it was truncated in the supplied evidence.",
+        "evidence_ids": [
+          "p2_jsonld_0"
+        ],
+        "reason": "UNKNOWN_EVIDENCE_ID"
+      }
+    ],
+    "retained_claims_structural_provenance": "PASS for retained claims; unsupported claim rejected",
+    "semantic_entailment": "NOT_AUTOMATED; HUMAN REVIEW REQUIRED",
+    "recommendation_decision": "ABSTAIN",
+    "geo_hypotheses": [],
+    "independent_human_review_items": [
+      {
+        "claim_id": "c1",
+        "claim": "Lagoon New York is a Brooklyn-based concept store that combines retail, gallery, and creation-space functions.",
+        "status": "HUMAN_REVIEW_REQUIRED",
+        "reason": "The model generated this claim; automated checks establish only schema and provenance, not semantic entailment.",
+        "flags": [
+          "SEMANTIC_ENTAILMENT_NOT_AUTOMATED",
+          "CONTRADICTION_REVIEW_REQUIRED"
+        ],
+        "evidence": [
+          {
+            "id": "p1_s0",
+            "url": "https://www.lagoonny.com/about",
+            "excerpt": "Imagined by sustainable designers Amalya Meira and Logan Blagg , Lagoon New York is a concept store, gallery, and creation space based in Brooklyn, NY."
+          },
+          {
+            "id": "p1_s1",
+            "url": "https://www.lagoonny.com/about",
+            "excerpt": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement."
+          }
+        ]
+      },
+      {
+        "claim_id": "c2",
+        "claim": "The site presents the business as centered on wearable art and adjacent curated goods, not just a single-product shop.",
+        "status": "HUMAN_REVIEW_REQUIRED",
+        "reason": "The model generated this claim; automated checks establish only schema and provenance, not semantic entailment.",
+        "flags": [
+          "SEMANTIC_ENTAILMENT_NOT_AUTOMATED",
+          "CONTRADICTION_REVIEW_REQUIRED"
+        ],
+        "evidence": [
+          {
+            "id": "p1_s1",
+            "url": "https://www.lagoonny.com/about",
+            "excerpt": "In the Lagoon, Amalya and Logan’s wearable art is created & available for sale alongside a complementary curation in the realms of art, body, jewelry and housewares. The intention behind the space is grounded in sustainability, connection to nature and community engagement."
+          }
+        ]
+      },
+      {
+        "claim_id": "c3",
+        "claim": "The services page is relevant for understanding how the business frames customer use cases, including custom design and stylist look pulls.",
+        "status": "HUMAN_REVIEW_REQUIRED",
+        "reason": "The model generated this claim; automated checks establish only schema and provenance, not semantic entailment.",
+        "flags": [
+          "SEMANTIC_ENTAILMENT_NOT_AUTOMATED",
+          "CONTRADICTION_REVIEW_REQUIRED"
+        ],
+        "evidence": [
+          {
+            "id": "p3_s0",
+            "url": "https://www.lagoonny.com/services",
+            "excerpt": "At Lagoon, both Amalya & Logan offer a custom design service within the styles they create. Select the silhouette of your choice and we can tailor the size and fabric/colors to you!"
+          },
+          {
+            "id": "p3_s6",
+            "url": "https://www.lagoonny.com/services",
+            "excerpt": "If YOU are a stylist or looking to Pull looks from Lagoon ~ email us here!"
+          }
+        ]
+      },
+      {
+        "claim_id": "c4",
+        "claim": "The events page likely provides additional customer-facing context, but it was truncated in the supplied evidence.",
+        "status": "HUMAN_REVIEW_REQUIRED",
+        "reason": "The model generated this claim; automated checks establish only schema and provenance, not semantic entailment.",
+        "flags": [
+          "SEMANTIC_ENTAILMENT_NOT_AUTOMATED",
+          "CONTRADICTION_REVIEW_REQUIRED"
+        ],
+        "evidence": []
+      }
+    ],
+    "contract_validation": "FAIL: EXCERPT_NOT_IN_SOURCE_FACT; extracted fact text is a normalized statement while exact_excerpt is separately preserved",
+    "quality_gate": "FAIL: EVIDENCE_VALID=INSUFFICIENT_EVIDENCE; OUTREACH_REVIEW_READY=UNSUPPORTED_RECIPIENT_SUMMARY",
+    "invitation_preview": "BLOCKED; no preview was rendered because validation and quality gate failed; researcher identity, reply-to, and form URL are also not configured in this process"
+  }
+}

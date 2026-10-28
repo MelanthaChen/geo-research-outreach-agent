@@ -161,7 +161,17 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
                     transition(c,job['id'],status=status,error=error,next_attempt_at=later(min(3600,60*2**min(job['attempts'],6))))
         finally:
             with db.transaction() as c:c.execute(jobs.update().where(jobs.c.id==job['id'],jobs.c.lease_token==job['lease_token']).values(lease_until=None,lease_token=None))
-    result={'worker_run_id':run_id,'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors}
+    personalization_backfill=None
+    try:
+        # Existing scheduled worker doubles as a bounded, pre-consent V1
+        # personalization checkpoint. This path never contacts the GEO Engine.
+        from .personalization import backfill
+        personalization_backfill=backfill(db,limit=1)
+        processed+=personalization_backfill['completed']+personalization_backfill['incomplete']
+    except Exception:
+        errors.append('Personalization backfill: bounded candidate checkpoint failed; it remains recoverable')
+    result={'worker_run_id':run_id,'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors,
+            'personalization_backfill':personalization_backfill}
     with db.transaction() as c:c.execute(worker_runs.update().where(worker_runs.c.id==run_id).values(finished_at=now(),status=result['status'],detail=dump(result)))
     return result
 

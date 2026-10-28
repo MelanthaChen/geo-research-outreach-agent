@@ -421,7 +421,7 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     from outreach_v2.personalization import backfill
     candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
         personalization=False,fixture=False)
-    page='<h1>Example services</h1><p>Example provides software services to small businesses and explains its core product offering.</p>'
+    page='<html><head><title>Example services</title><meta name="description" content="Example provides software services to small businesses."></head><body><h1>Example services</h1><p>Example provides software services to small businesses and explains its core product offering.</p></body></html>'
     fetch=lambda url:('https://example.com/',page)
     with pytest.raises(ValueError,match='between 1 and 100'):backfill(db,limit=101,fetcher=fetch)
     result=backfill(db,limit=1,fetcher=fetch)
@@ -429,6 +429,8 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
         row=c.execute(select(candidates).where(candidates.c.id=='real-backfill')).mappings().one()
     assert result=={'completed':1,'incomplete':0}
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
+    assert json.loads(row['personalization'])['recommendations'][0]['title']=='Answer common customer questions'
+    assert not any(x['title'] in {'Page title','Page description'} for x in json.loads(row['personalization'])['recommendations'])
     assert backfill(db,limit=1,fetcher=fetch)=={'completed':0,'incomplete':0}
 
 def test_postgres_text_keeps_embedded_nul_visible():

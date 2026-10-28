@@ -35,7 +35,7 @@ from outreach_agent.gmail_integration import (
 )
 from outreach_agent.mail_merge import (
     DEFAULT_EXPORT_DIR, ExportLedger, assess_company_mail_merge, make_test_mail_merge, safe_file_component, save_export,
-    research_mail_merge_rows, save_research_mail_merge_xlsx, save_word_mail_merge_template, save_merged_invitation_preview,
+    research_mail_merge_rows, save_research_mail_merge_csv, save_research_mail_merge_xlsx, save_word_mail_merge_template, save_merged_invitation_preview,
 )
 from outreach_agent.candidate_pool import export_candidate_csv
 from outreach_agent.phase6e_screening import PHASE6E_DB, list_phase6e_candidates, phase6e_summary
@@ -758,7 +758,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                             REGISTRY_DB,
                             profile_ids=profile_ids or None,
                             allowed_recipients=allowed_recipients,
-                            draft_ids=batch_draft_ids, include_pending=batch_draft_ids is not None,
+                            draft_ids=batch_draft_ids, include_pending=False,
                         )
                         if not rows:
                             self._json({"error": "No generated invitation drafts matched the selected batch"}, 409)
@@ -766,11 +766,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         xlsx_path, xlsx_digest = save_research_mail_merge_xlsx(export_dir, "research_queue.xlsx", rows)
                         docx_path, docx_digest = save_word_mail_merge_template(export_dir)
                         preview_path = save_merged_invitation_preview(export_dir, rows)
-                        csv_path = export_dir / "research_queue.csv"
-                        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-                            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), extrasaction="ignore")
-                            writer.writeheader()
-                            writer.writerows(rows)
+                        csv_path, _csv_digest = save_research_mail_merge_csv(export_dir, "research_queue.csv", rows)
                         archive = io.BytesIO()
                         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
                             bundle.write(xlsx_path, arcname=xlsx_path.name)

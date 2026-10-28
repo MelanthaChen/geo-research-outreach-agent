@@ -378,11 +378,15 @@ def research_mail_merge_rows(registry_db: Path, *, profile_ids: list[str] | None
     statuses = ("'APPROVED','PENDING'" if include_pending else "'APPROVED'")
     rows: list[dict[str, Any]] = []
     with _connect(registry_db) as db:
-        query = f"""SELECT r.name,d.draft_id,d.profile_id,d.recipient,d.subject,d.body,
+        query = f"""SELECT r.name,r.profile_type,d.draft_id,d.profile_id,d.recipient,d.subject,d.body,
                     d.approval_status,i.invitation_id,i.invitation_reference,i.status AS invitation_status
                     FROM email_drafts d JOIN research_records r ON r.profile_id=d.profile_id
                     LEFT JOIN questionnaire_invitations i ON i.invitation_id=d.invitation_id
+                    LEFT JOIN owner_test_recipient_bindings b ON b.profile_id=r.profile_id AND b.active=1
                     WHERE d.approval_status IN ({statuses}) {where}
+                      AND i.status='DRAFTED'
+                      AND (r.profile_type<>'owner_controlled_test'
+                           OR (b.recipient IS NOT NULL AND lower(d.recipient)=lower(b.recipient)))
                     ORDER BY lower(r.name),d.draft_id"""
         for row in db.execute(query, params):
             recipient = str(row["recipient"]).casefold()
@@ -433,6 +437,11 @@ def save_research_mail_merge_xlsx(directory: Path, filename: str, rows: list[dic
     digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
     os.replace(temporary, path)
     return path, digest
+
+
+def save_research_mail_merge_csv(directory: Path, filename: str, rows: list[dict[str, Any]]) -> tuple[Path, str]:
+    """Write a CSV data source with the same fixed columns as the Word template."""
+    return save_export(directory, filename, _csv_text(RESEARCH_MAIL_MERGE_COLUMNS, rows))
 
 
 def save_word_mail_merge_template(directory: Path, filename: str = "geo-research-invitation-mail-merge.docx") -> tuple[Path, str]:

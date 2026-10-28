@@ -34,6 +34,7 @@ class HttpGeoEngineBridge:
     token: str
     timeout_seconds: float = 20.0
     profile_import_timeout_seconds: float = 90.0
+    research_timeout_seconds: float = 180.0
 
     def import_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
         import httpx
@@ -71,17 +72,17 @@ class HttpGeoEngineBridge:
         return response.json()
 
     def run_controlled_research(self, profile: dict[str, Any]) -> dict[str, Any]:
-        """Run only the GEO Engine's explicit owner-fixture route."""
+        """Run the consent-checked live GEO research route for owner fixtures."""
         import httpx
 
         response = httpx.post(
             self.api_url.rstrip("/") + "/api/v1/integration/research-run",
             json=profile,
             headers=_handoff_headers(self.token),
-            timeout=self.timeout_seconds,
+            timeout=self.research_timeout_seconds,
         )
         if response.status_code >= 400:
-            raise RuntimeError(f"GEO Engine controlled research failed ({response.status_code})")
+            raise RuntimeError(f"GEO Engine owner research failed ({response.status_code})")
         return response.json()
 
 
@@ -176,6 +177,11 @@ OWNER_TEST_AUTOMATION_PROFILES = frozenset({
     "whisker-haven-owner-demo-20261023-v1",
 })
 
+OWNER_RESEARCH_TARGETS = {
+    "geoairesume-owner-test-v1": {"property_id": 2, "audit_id": 7, "opportunity_id": 3},
+    "whisker-haven-owner-demo-20261023-v1": {"property_id": 3, "audit_id": 6, "opportunity_id": 1},
+}
+
 OWNER_FIXTURES = {
     "geoairesume-owner-test-v1": ("geo-ai-resume.vercel.app", "yuxuan.chen.1031@outlook.com"),
     "whisker-haven-owner-demo-20261023-v1": ("whisker-haven-demo.vercel.app", "yuxaun.chen.1031@outlook.com"),
@@ -214,6 +220,9 @@ def start_controlled_research(submission_id: str, *, path: Path, bridge: Propert
         handoff = db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? AND profile_version=?", (record["profile_id"], record["profile_version"])).fetchone()
         if not handoff or handoff["status"] != "HANDED_OFF" or not handoff["property_id"]:
             raise PermissionError("controlled research requires a completed GEO handoff")
+        research_target = OWNER_RESEARCH_TARGETS.get(record["profile_id"])
+        if not research_target or int(handoff["property_id"]) != research_target["property_id"]:
+            raise PermissionError("owner research requires the verified fixture Property mapping")
         if handoff["research_run_status"] == "INCOMPLETE":
             return {"status": "INCOMPLETE", "result_record_id": handoff["research_result_record_id"], "error": handoff["research_error"], "idempotent": True}
         if handoff["research_run_status"] == "COMPLETED":
@@ -227,7 +236,11 @@ def start_controlled_research(submission_id: str, *, path: Path, bridge: Propert
         db.execute("UPDATE research_records SET geo_research_status='RESEARCH_RUNNING',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
         db.commit()
         profile = _profile_for_handoff(record, submission)
-        profile.update({"property_id": handoff["property_id"], "controlled_fixture": True})
+        profile.update({
+            "property_id": handoff["property_id"],
+            "audit_id": research_target["audit_id"],
+            "opportunity_id": research_target["opportunity_id"],
+        })
     try:
         runner = getattr(bridge or default_bridge(), "run_controlled_research", None)
         if runner is None:
@@ -269,8 +282,15 @@ def process_geo_handoff(submission_id: str, *, path: Path, bridge: PropertyBridg
         record = db.execute("SELECT * FROM research_records WHERE profile_id=?", (invitation["profile_id"],)).fetchone() if invitation else None
         if not invitation or not record:
             raise ValueError("submission is not linked to a registered profile")
+        existing = db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? AND profile_version=?", (record["profile_id"], record["profile_version"])).fetchone()
         conflict = db.execute("SELECT 1 FROM questionnaire_conflicts WHERE invitation_id=? AND status='QUARANTINED'", (invitation["invitation_id"],)).fetchone()
-        if conflict:
+        existing_exact_handoff = bool(
+            existing
+            and existing["status"] == "HANDED_OFF"
+            and existing["property_id"]
+            and existing["consent_submission_id"] == submission_id
+        )
+        if conflict and not existing_exact_handoff:
             raise PermissionError("handoff is blocked by a quarantined conflicting response")
         if record["consent_status"] == "WITHDRAWN" or submission["consent_status"] == "WITHDRAWN":
             db.execute("UPDATE research_records SET geo_research_status='BLOCKED_WITHDRAWN',geo_integration_status='WITHDRAWN',updated_at=? WHERE profile_id=?", (now(), record["profile_id"]))
@@ -281,8 +301,9 @@ def process_geo_handoff(submission_id: str, *, path: Path, bridge: PropertyBridg
             raise PermissionError("unsupported consent wording version")
         if record["profile_type"] != "owner_controlled_test" and not is_us_eligible(record["geographic_classification"]):
             raise PermissionError("handoff requires VERIFIED_US geographic eligibility")
-        existing = db.execute("SELECT * FROM geo_handoffs WHERE profile_id=? AND profile_version=?", (record["profile_id"], record["profile_version"])).fetchone()
         if existing and existing["status"] == "HANDED_OFF" and existing["property_id"]:
+            if existing["consent_submission_id"] != submission_id:
+                raise PermissionError("an existing GEO handoff is linked to a different consent submission")
             return {"status": "HANDED_OFF", "handoff_id": existing["handoff_id"], "property_id": existing["property_id"], "idempotent": True}
         handoff_id = existing["handoff_id"] if existing else "handoff-" + secrets.token_urlsafe(10)
         if not existing:

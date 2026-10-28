@@ -102,6 +102,45 @@ def test_distinct_sheet_responses_are_quarantined(tmp_path):
         process_geo_handoff(submission_id, path=path, bridge=FakeBridge())
 
 
+def test_quarantined_duplicate_does_not_block_retry_of_exact_existing_handoff(tmp_path):
+    path, invitation_id, submission_id = setup_response(tmp_path)
+    bridge = FakeBridge()
+    result = review_questionnaire_submission(
+        submission_id,
+        reviewer="owner-reviewer",
+        company_identity_verified=True,
+        representative_authorized=True,
+        consent_version_verified=True,
+        website_scope_verified=True,
+        withdrawal_checked=True,
+        approve=True,
+        path=path,
+        bridge=bridge,
+    )
+    assert result["status"] == "HANDED_OFF"
+
+    reference = get_invitation_reference(invitation_id, path=path)
+    conflicting = {
+        "Timestamp": "2026-10-22T18:01:00Z",
+        "Invitation Reference": reference,
+        "Is your company interested in participating in this research?": "No",
+        "Does your company authorize our research team to conduct the research described above?": "No",
+        "Full Name of the Authorized Company Representative": "Different Test",
+        "Job Title of the Authorized Company Representative": "Owner",
+        "Business Email Address of the Authorized Company Representative": "owner@geoairesume.test",
+    }
+    assert ingest_google_form_response(conflicting, path=path) == "NEEDS_REVIEW"
+
+    retry = process_geo_handoff(submission_id, path=path, bridge=bridge)
+    assert retry == {
+        "status": "HANDED_OFF",
+        "handoff_id": result["handoff_id"],
+        "property_id": 77,
+        "idempotent": True,
+    }
+    assert len(bridge.calls) == 1
+
+
 def test_review_never_approves_without_all_checks(tmp_path):
     path, _, submission_id = setup_response(tmp_path)
     result = review_questionnaire_submission(submission_id, reviewer="reviewer", company_identity_verified=True, representative_authorized=False, consent_version_verified=True, website_scope_verified=True, withdrawal_checked=True, approve=True, path=path, bridge=FakeBridge())

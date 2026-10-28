@@ -120,7 +120,7 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
     title.add_run(_text(result.get("report_title"), "Independent GEO Analysis Report"))
     subtitle = doc.add_paragraph()
-    subtitle.add_run("Evidence-backed website audit and research hypotheses").italic = True
+    subtitle.add_run("Evidence-backed website audit and GEO research findings").italic = True
     doc.add_paragraph(
         "This report presents the GEO Engine evidence and findings for the website identified below. "
         "Recommendations are research hypotheses and do not promise a measured improvement. "
@@ -143,7 +143,7 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
         ["Profile ID", _text(result.get("source_profile_id"))],
         ["GEO Engine property", _text(result.get("property_id"))],
         ["Evidence captured", _text(result.get("retrieved_at"))],
-        ["Consent boundary", "Independent owner-controlled demo; Outreach remains NEEDS_REVIEW"],
+        ["Consent boundary", "Verified owner consent; public website analysis only"],
         ["Structured data", _text(result.get("structured_data_summary"))],
     ])
 
@@ -161,8 +161,8 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
 
     doc.add_heading("Proposed optimizations", level=1)
     doc.add_paragraph(
-        "The site has clear topical content for cat adoption scenarios, but it also explicitly identifies itself as fictional. "
-        "Recommendations therefore improve retrieval clarity without implying real adoption services or inventing organizational facts."
+        "Recommendations are grounded in the completed GEO Engine Audit and Opportunity listed below. "
+        "Generated revisions are research hypotheses and should be reviewed before any website change."
     )
     rec_rows = []
     for item in result.get("recommendations") or []:
@@ -184,8 +184,8 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
         ["Model", _text(baseline.get("model"), "Not established")],
         ["Model calls", _text(baseline.get("model_calls"), "0")],
         ["Response archive", _text(baseline.get("response_archive"), "Not available")],
-        ["Mention and citation results", _text(baseline.get("results"), "Not measured")],
-        ["Interpretation", _text(baseline.get("interpretation"), "Baseline incomplete; no visibility claim is made.")],
+        ["Persisted model response archive", _text(baseline.get("results"), "Not measured")],
+        ["Interpretation", _text(baseline.get("interpretation"), "No external AI-search visibility claim is established.")],
     ])
 
     doc.add_heading("Post-deployment measurements", level=1)
@@ -194,8 +194,8 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     doc.add_heading("Limitations and next steps", level=1)
     for limitation in result.get("limitations", []):
         doc.add_paragraph(_text(limitation), style="List Bullet")
-    doc.add_paragraph("Next step: obtain an approved, free or explicitly authorized provider for real visibility testing, then rerun the recorded question set. Before any Outreach handoff, complete the protected human consent review.")
-    doc.add_paragraph("Research integrity note. Recommendations are proposed content, not live changes. Rendered website evidence is timestamped above. No emails, paid calls, or production research were initiated.")
+    doc.add_paragraph("Next step: review the audit-backed recommendations and model-generated revisions before deciding whether to change the website. No website changes or external AI-search ranking measurements are included in this report.")
+    doc.add_paragraph("Research integrity note. The report distinguishes rendered website evidence, existing Audit recommendations, live retrieval sources, and persisted model-generated responses. GEO Engine model evaluations do not establish rankings in third-party AI search products.")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output))

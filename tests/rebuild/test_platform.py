@@ -10,7 +10,8 @@ from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick
-from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse
+from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse,_sheet_row
+from outreach_agent.google_forms_integration import parse_sheet_row
 
 @pytest.fixture
 def db(tmp_path):
@@ -140,14 +141,29 @@ def test_real_company_verified_identity_must_match_invited_recipient(db,email):
 def test_google_forms_verified_rows_require_verified_collection_and_match_sheet_contract():
     from outreach_v2.consent import REQUIRED_HEADERS
     form={'settings':{'emailCollectionType':'VERIFIED'},'items':[{'title':h,'questionItem':{'question':{'questionId':str(i)}}} for i,h in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))]}
-    row={'responseId':'r1','respondentEmail':'research@company.example','lastSubmittedTime':'2026-10-27T12:00:00Z',
+    row={'responseId':'r1','respondentEmail':'research@company.example','lastSubmittedTime':'2026-10-28T06:00:00Z',
          'answers':{str(i):{'textAnswers':{'answers':[{'value':'GEO-1'}]}} for i,_ in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))}}
-    result=verified_form_rows(form,[row],list(REQUIRED_HEADERS))
+    historical=row|{'responseId':'old','lastSubmittedTime':'2026-10-27T22:15:44Z'}
+    result=verified_form_rows(form,[historical,row],list(REQUIRED_HEADERS))
     assert len(result)==1 and isinstance(result[0],VerifiedFormResponse)
     assert result[0].identity['email']=='research@company.example'
     assert result[0].answers['Invitation Reference']=='GEO-1'
     form['settings']['emailCollectionType']='RESPONDER_INPUT'
     with pytest.raises(ConfigurationBlocked,match='VERIFIED'):verified_form_rows(form,[row],list(REQUIRED_HEADERS))
+
+def test_sheet_aliases_and_duplicate_headers_are_canonical_and_fail_closed():
+    row=_sheet_row(
+        ['Your Role / Position','Job Title of the Authorized Company Representative',
+         'Business Name','Business Name',
+         'Do you confirm that you are authorized to provide this permission on behalf of your business?',
+         'Do you confirm that you are authorized to provide this permission on behalf of your business?'],
+        ['Founder','','GeoAIResume','','Yes',''])
+    parsed=parse_sheet_row(row)
+    assert parsed.representative_role=='Founder'
+    assert row['Business Name']=='GeoAIResume'
+    assert row['Do you confirm that you are authorized to provide this permission on behalf of your business?']=='Yes'
+    conflict=_sheet_row(['Business Name','Business Name'],['GeoAIResume','Other Company'])
+    assert conflict['Business Name']==''
 
 def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     path=tmp_path/'prior.db'

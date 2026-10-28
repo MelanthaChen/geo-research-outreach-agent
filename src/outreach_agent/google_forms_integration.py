@@ -75,8 +75,12 @@ def parse_sheet_row(
     interest = value(interest_header).casefold()
     authorization = value(authorization_header).casefold()
     representative_name = value(name_header)
-    representative_role = value(role_header)
-    email = value(email_header)
+    # The existing response sheet predates the current form question title.
+    # Treat its equivalent field as the same canonical job-title value.
+    representative_role = value(role_header) or value("Your Role / Position")
+    # The current Form already has this exact question; retain the former
+    # short header as an export compatibility alias.
+    email = value(email_header) or value("Business Email Address")
     if not any(key in row for key in (interest_header, authorization_header, name_header, role_header, email_header)):
         legacy_consent = value(legacy_consent_header).casefold()
         interest = legacy_consent if legacy_consent in {"yes", "no"} else "needs_review"

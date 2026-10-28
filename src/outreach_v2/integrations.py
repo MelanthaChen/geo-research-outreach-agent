@@ -1,8 +1,11 @@
 """Real authenticated transports. Missing configuration is an explicit block."""
 from __future__ import annotations
 import os,json,base64
+from collections import Counter,defaultdict
 from dataclasses import dataclass
+from datetime import datetime,timezone
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 import httpx
 from .consent import REQUIRED_HEADERS
 from outreach_agent.google_forms_integration import FORM_ID,RESPONSE_SPREADSHEET_ID
@@ -13,6 +16,48 @@ class OutcomeUncertain(RuntimeError):pass
 SHEETS_SCOPE='https://www.googleapis.com/auth/spreadsheets.readonly'
 FORMS_BODY_SCOPE='https://www.googleapis.com/auth/forms.body.readonly'
 FORMS_RESPONSES_SCOPE='https://www.googleapis.com/auth/forms.responses.readonly'
+# The six responses present before the owner-controlled integration test.
+# Keep them as historical source data; they are not new operational consent.
+HISTORICAL_RESPONSE_CUTOFF=datetime.fromisoformat('2026-10-27T22:15:44.227143+00:00')
+HEADER_ALIASES={'Your Role / Position':'Job Title of the Authorized Company Representative'}
+
+def canonical_header(header):
+    value=str(header or '').strip()
+    return HEADER_ALIASES.get(value,value)
+
+def _utc_datetime(value):
+    if not value:return None
+    try:parsed=datetime.fromisoformat(str(value).replace('Z','+00:00'))
+    except ValueError:return None
+    if parsed.tzinfo is None:parsed=parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+def _sheet_timestamp_key(value,time_zone):
+    parsed=_utc_datetime(value)
+    if parsed is None:
+        for pattern in ('%m/%d/%Y %H:%M:%S','%m/%d/%Y %H:%M'):
+            try:
+                parsed=datetime.strptime(str(value).strip(),pattern).replace(tzinfo=ZoneInfo(time_zone)).astimezone(timezone.utc)
+                break
+            except ValueError:continue
+    return parsed.replace(microsecond=0) if parsed else None
+
+def _response_timestamp_key(response):
+    parsed=_utc_datetime(response.get('lastSubmittedTime') or response.get('createTime'))
+    return parsed.replace(microsecond=0) if parsed else None
+
+def _sheet_row(headers,values):
+    """Merge aliases and duplicate headers without allowing blanks to win.
+
+    Conflicting duplicate values blank the canonical field so consent and
+    scope checks fail closed for that row.
+    """
+    grouped=defaultdict(list)
+    for header,value in zip(headers,values):
+        canonical=canonical_header(header);text=str(value or '').strip()
+        if text:grouped[canonical].append(text)
+        else:grouped.setdefault(canonical,[])
+    return {header:(items[0] if len(set(items))==1 and items else '') for header,items in grouped.items()}
 
 @dataclass(frozen=True)
 class VerifiedFormResponse:
@@ -38,17 +83,25 @@ def verified_form_rows(form,responses,sheet_headers):
     for item in form.get('items') or []:
         question=((item.get('questionItem') or {}).get('question') or {})
         qid=question.get('questionId');title=str(item.get('title') or '').strip()
-        if qid and title:titles[qid]=title
+        if qid and title:titles[qid]=canonical_header(title)
     required_questions=REQUIRED_HEADERS-{'Timestamp'}
     if not required_questions.issubset(set(titles.values())):
         raise ConfigurationBlocked('Google Form questions do not match the live response-sheet consent contract')
-    if not REQUIRED_HEADERS.issubset(set(sheet_headers)):
+    if not REQUIRED_HEADERS.issubset({canonical_header(h) for h in sheet_headers}):
         raise ConfigurationBlocked('Live Sheet headers do not match the independent consent contract')
     output=[]
     for response in responses:
+        submitted=_utc_datetime(response.get('lastSubmittedTime') or response.get('createTime'))
+        if not submitted or submitted<=HISTORICAL_RESPONSE_CUTOFF:continue
         respondent=str(response.get('respondentEmail') or '').strip().lower()
         if not respondent:continue
-        row={title:_answer_value(answer) for qid,answer in (response.get('answers') or {}).items() if (title:=titles.get(qid))}
+        row={}
+        for qid,answer in (response.get('answers') or {}).items():
+            title=titles.get(qid)
+            if not title:continue
+            value=_answer_value(answer)
+            if title not in row or not row[title]:row[title]=value
+            elif value and row[title]!=value:row[title]=''
         row['Timestamp']=str(response.get('lastSubmittedTime') or response.get('createTime') or '')
         if not row.get('Invitation Reference'):continue
         output.append(VerifiedFormResponse(row,{'provider':'GOOGLE_FORMS_VERIFIED','email':respondent,
@@ -68,12 +121,17 @@ class Sheets:
             credentials=service_account.Credentials.from_service_account_file(path,scopes=scopes)
         else:raise ConfigurationBlocked('Authenticated Google Sheets service account is not configured')
         session=AuthorizedSession(credentials)
+        meta=session.get(f'https://sheets.googleapis.com/v4/spreadsheets/{RESPONSE_SPREADSHEET_ID}',params={'fields':'properties.timeZone'},timeout=30)
+        if meta.status_code!=200:raise ConfigurationBlocked(f'Google Sheets metadata returned HTTP {meta.status_code}')
+        sheet_timezone=str((meta.json().get('properties') or {}).get('timeZone') or 'UTC')
         range_name=os.environ.get('GEO_RESEARCH_SHEETS_RANGE','Form Responses 1!A:Z')
         response=session.get(f'https://sheets.googleapis.com/v4/spreadsheets/{RESPONSE_SPREADSHEET_ID}/values/{quote(range_name,safe="")}',timeout=30)
         if response.status_code!=200:raise ConfigurationBlocked(f'Google Sheets returned HTTP {response.status_code}')
         rows=response.json().get('values') or []
-        if not rows or not REQUIRED_HEADERS.issubset(rows[0]):raise ConfigurationBlocked('Live Sheet headers do not match the independent consent contract')
-        sheet_rows=[dict(zip(rows[0],row)) for row in rows[1:]]
+        if not rows:raise ConfigurationBlocked('Live response Sheet has no header row')
+        canonical_headers=[canonical_header(h) for h in rows[0]]
+        if not REQUIRED_HEADERS.issubset(set(canonical_headers)):raise ConfigurationBlocked('Live Sheet headers do not match the independent consent contract')
+        all_sheet_rows=[_sheet_row(rows[0],row) for row in rows[1:]]
         # The Sheet's business-email question is self-reported. Only Forms API
         # respondentEmail plus the VERIFIED collection setting can establish
         # independent control of the account that submitted a response.
@@ -81,23 +139,31 @@ class Sheets:
             form_response=session.get(f'https://forms.googleapis.com/v1/forms/{FORM_ID}',params={'fields':'formId,settings.emailCollectionType,items.title,items.questionItem.question.questionId'},timeout=30)
             if form_response.status_code!=200:raise ConfigurationBlocked(f'Google Forms API unavailable (HTTP {form_response.status_code})')
             form=form_response.json()
-            if (form.get('settings') or {}).get('emailCollectionType')!='VERIFIED':
-                raise ConfigurationBlocked('Google Form email collection is not configured as VERIFIED')
+            verified=(form.get('settings') or {}).get('emailCollectionType')=='VERIFIED'
             responses=[];page_token=None
             while True:
-                params={'pageSize':500}
+                fields='responses(responseId,createTime,lastSubmittedTime,respondentEmail,answers),nextPageToken' if verified else 'responses(responseId,createTime,lastSubmittedTime),nextPageToken'
+                params={'pageSize':500,'fields':fields}
                 if page_token:params['pageToken']=page_token
                 result=session.get(f'https://forms.googleapis.com/v1/forms/{FORM_ID}/responses',params=params,timeout=30)
                 if result.status_code!=200:raise ConfigurationBlocked(f'Google Forms response access unavailable (HTTP {result.status_code})')
                 payload=result.json();responses.extend(payload.get('responses') or [])
                 page_token=payload.get('nextPageToken')
                 if not page_token:break
-            return SheetRead(verified_form_rows(form,responses,rows[0]),'VERIFIED')
+            if verified:return SheetRead(verified_form_rows(form,responses,rows[0]),'VERIFIED')
+            api_counts=Counter(key for item in responses if (key:=_response_timestamp_key(item)) and key>HISTORICAL_RESPONSE_CUTOFF)
+            sheet_keys=[_sheet_timestamp_key(item.get('Timestamp'),sheet_timezone) for item in all_sheet_rows]
+            sheet_counts=Counter(key for key in sheet_keys if key)
+            fresh_rows=[item for item,key in zip(all_sheet_rows,sheet_keys)
+                        if key and key>HISTORICAL_RESPONSE_CUTOFF and api_counts[key]==1 and sheet_counts[key]==1]
+            return SheetRead(fresh_rows,'UNAVAILABLE','Google Form email collection is not VERIFIED')
         except ConfigurationBlocked as exc:
             # Continue processing already-authorized owner fixtures and record
             # ordinary responses as blocked identity, while surfacing the missing
             # verification capability in worker health.
-            return SheetRead(sheet_rows,'UNAVAILABLE',str(exc))
+            fresh_rows=[item for item in all_sheet_rows
+                        if (key:=_sheet_timestamp_key(item.get('Timestamp'),sheet_timezone)) and key>HISTORICAL_RESPONSE_CUTOFF]
+            return SheetRead(fresh_rows,'UNAVAILABLE',str(exc))
 
 class Engine:
     """Requires the durable job API; never falls back to historical fixture runs."""

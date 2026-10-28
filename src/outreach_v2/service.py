@@ -63,7 +63,14 @@ def list_candidates(db,filters=None,page=1,page_size=50):
                 row['invitation']=dict(row['invitation'])
                 row['research']=c.execute(select(jobs.c.status,jobs.c.error).where(jobs.c.invitation_id==row['invitation']['id'])).mappings().first()
                 row['research']=dict(row['research']) if row['research'] else None
-                row['delivery']=c.scalar(select(deliveries.c.status).join(reports).join(jobs).where(jobs.c.invitation_id==row['invitation']['id']))
+                # Spell out the delivery -> report -> job path; implicit joins are ambiguous here.
+                row['delivery']=c.scalar(
+                    select(deliveries.c.status)
+                    .select_from(deliveries)
+                    .join(reports, deliveries.c.report_id==reports.c.id)
+                    .join(jobs, reports.c.job_id==jobs.c.id)
+                    .where(jobs.c.invitation_id==row['invitation']['id'])
+                )
         return {'rows':rows,'total':total,'eligible_matching':eligible,'page':page,'page_size':page_size}
 
 def detail(db,ident):

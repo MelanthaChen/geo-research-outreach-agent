@@ -505,3 +505,43 @@ def test_engine_reconciliation_reports_sanitized_http_auth_stage():
     engine=Engine.__new__(Engine);engine.client=Client()
     with pytest.raises(ConfigurationBlocked,match=r'job reconciliation GET authorization denied: HTTP 401'):
         engine.reconcile('existing-stable-key')
+
+def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeypatch):
+    """Regression for the live fixture shape that previously broke candidate search."""
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+
+    geo_id='geoairesume-owner-test-v1'
+    candidate(db,ident=geo_id,name='GeoAIResume controlled test website')
+    candidate(db,ident='ordinary-company',email='contact@ordinary.example',
+              website='https://ordinary.example',name='Ordinary Company')
+    invite(db,[geo_id],key='geoairesume-existing-invitation-123')
+    assert process(db,response(db,id=geo_id))=='AUTHORIZED'
+
+    # Exercise the same service call and record relationships that exist in Neon.
+    found=list_candidates(db,{'q':'GeoAIResume'})
+    assert found['total']==1 and found['rows'][0]['id']==geo_id
+    assert found['rows'][0]['invitation']['consent_status']=='AUTHORIZED'
+    assert found['rows'][0]['research']['status']
+    assert found['rows'][0]['delivery'] is None
+    ordinary=list_candidates(db,{})
+    assert {row['id'] for row in ordinary['rows']}=={geo_id,'ordinary-company'}
+    assert list_candidates(db,{'q':'Ordinary Company'})['total']==1
+
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db))
+    login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    assert login.status_code==200
+    assert client.get('/api/candidates').status_code==200
+    search=client.get('/api/candidates',params={'q':'GeoAIResume'})
+    assert search.status_code==200 and search.json()['rows'][0]['id']==geo_id
+    detail_response=client.get('/api/candidates/'+geo_id)
+    assert detail_response.status_code==200 and detail_response.json()['id']==geo_id
+    overview=client.get('/api/dashboard')
+    assert overview.status_code==200 and overview.json()['companies']==2
+    research=client.get('/api/research')
+    assert research.status_code==200
+    assert any(row['invitation_id'] for row in research.json()['rows'])

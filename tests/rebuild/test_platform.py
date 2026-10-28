@@ -106,6 +106,40 @@ def test_owner_consent_is_automatic_and_duplicate_safe(db):
     assert process(db,row)=='DUPLICATE';row['Timestamp']='10/27/2026 22:31:00'
     assert process(db,row)=='DUPLICATE_CONSENT';assert count(db,jobs)==1
 
+def test_geoairesume_saved_blocked_scope_revalidates_once_and_ordinary_mismatch_stays_blocked(db):
+    from outreach_v2.db import events
+    candidate(db,ident='geoairesume-owner-test-v1',name='GeoAIResume',fixture=True)
+    invite(db,['geoairesume-owner-test-v1'],key='geoairesume-recovery-test-key')
+    ref='GEO-A67A912BDB53E20447BD1E323C935738'
+    row=response(db,id='geoairesume-owner-test-v1');row['Invitation Reference']=ref
+    row['Business Name']='GeoAIResume'
+    with db.transaction() as c:
+        inv=c.execute(select(invitations).where(invitations.c.candidate_id=='geoairesume-owner-test-v1')).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==inv['id']).values(reference=ref,company_name='GeoAIResume controlled test website',consent_status='BLOCKED_SCOPE'))
+        ident='submission-'+sha(dump({'answers':row,'verified_identity':{}}))
+        c.execute(submissions.insert().values(id=ident,invitation_id=inv['id'],reference=ref,interest='YES',authorization='YES',
+            representative_name='Yuxuan Chen',representative_role='Owner',representative_email=inv['recipient'],submitted_at=row['Timestamp'],
+            received_at=now(),identity_provider=None,identity_verified_email=None,identity_reference=None,status='BLOCKED_SCOPE',
+            reason='Declared business identity or website differs from the invitation',raw=dump({'answers':row,'verified_identity':{}})))
+    assert process(db,row)=='AUTHORIZED'
+    assert process(db,row)=='DUPLICATE'
+    with db.transaction() as c:
+        saved=c.execute(select(submissions).where(submissions.c.id==ident)).mappings().one()
+        invitation=c.execute(select(invitations).where(invitations.c.reference==ref)).mappings().one()
+        job=c.execute(select(jobs).where(jobs.c.invitation_id==invitation['id'])).mappings().one()
+        history=c.execute(select(events).where(events.c.entity_id==invitation['id'],events.c.event=='AUTHORIZED')).mappings().one()
+        assert saved['status']=='AUTHORIZED' and json.loads(saved['raw'])['answers']==row
+        assert invitation['consent_status']=='AUTHORIZED'
+        assert job['submission_id']==ident and count(db,jobs)==1
+        assert 'Declared business identity' in history['detail']
+
+    candidate(db,ident='ordinary-company',email='owner@ordinary.example',website='https://ordinary.example',name='Ordinary Company',fixture=False)
+    invite(db,['ordinary-company'],key='ordinary-mismatch-test-key')
+    ordinary=response(db,id='ordinary-company');ordinary['Business Name']='Ordinary Co'
+    assert process(db,ordinary)=='BLOCKED_SCOPE'
+    with db.transaction() as c:
+        assert c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitations.c.id).where(invitations.c.candidate_id=='ordinary-company')) is None
+
 def test_withdrawn_candidate_cannot_create_research_job(db):
     candidate(db);invite(db)
     with db.transaction() as c:c.execute(candidates.update().values(suppressed=True))

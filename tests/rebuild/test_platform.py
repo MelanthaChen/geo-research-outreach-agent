@@ -7,7 +7,7 @@ from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
-from outreach_v2.migrate import Migrator,dump,pack,sha
+from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse
 
@@ -246,3 +246,7 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     assert result=={'completed':1,'incomplete':0}
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
     assert backfill(db,limit=1,fetcher=fetch)=={'completed':0,'incomplete':0}
+
+def test_postgres_text_keeps_embedded_nul_visible():
+    assert postgres_text('before\x00after')=='before\ufffdafter'
+    assert postgres_text(None) is None

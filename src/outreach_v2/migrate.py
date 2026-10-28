@@ -22,6 +22,7 @@ FIXTURE_IDS={'geoairesume-owner-test-v1','whisker-haven-owner-demo-20261023-v1'}
 
 def dump(x): return json.dumps(x,sort_keys=True,ensure_ascii=False,separators=(',',':'),default=str)
 def sha(x): return hashlib.sha256(x.encode()).hexdigest()
+def postgres_text(value):return value.replace('\x00','\ufffd') if isinstance(value,str) else value
 def parse(x,default=None):
     if not x: return {} if default is None else default
     if isinstance(x,(dict,list)): return x
@@ -93,6 +94,15 @@ class Migrator:
             if existing_candidates>sum(counts.values()) or existing_contacts>contact_count:
                 raise ValueError('V2 operational namespace contains rows outside this snapshot')
 
+            nul_replacements=0
+            def storage_row(item):
+                nonlocal nul_replacements
+                if self.db.postgres:
+                    for key,value in item.items():
+                        if isinstance(value,str) and '\x00' in value:
+                            nul_replacements+=value.count('\x00');item[key]=postgres_text(value)
+                return item
+
             # Map canonical candidates to their immutable content-addressed row in the archive.
             candidate_refs={}
             ref_query='''SELECT c.id,
@@ -122,7 +132,8 @@ class Migrator:
 
             source_rows_data=[dict(r) for r in source.execute('SELECT * FROM sources ORDER BY id')]
             for offset in range(0,len(source_rows_data),batch_size):
-                with self.db.transaction() as c:self.db.upsert(c,sources,source_rows_data[offset:offset+batch_size],update=False)
+                batch=[storage_row(item) for item in source_rows_data[offset:offset+batch_size]]
+                with self.db.transaction() as c:self.db.upsert(c,sources,batch,update=False)
             total=0;batch=[]
             for raw in source.execute('SELECT * FROM candidates ORDER BY id'):
                 item=dict(raw);reference=candidate_refs.get(item['id'])
@@ -131,6 +142,7 @@ class Migrator:
                 else:
                     item['source_ref']='snapshot_candidate:'+item['id'];item['source_checksum']=sha(dump(item))
                 for key in ('suppressed','fixture'):item[key]=bool(item[key])
+                storage_row(item)
                 batch.append(item);total+=1
                 if len(batch)>=batch_size:
                     with self.db.transaction() as c:self.db.upsert(c,candidates,batch,update=False)
@@ -147,6 +159,7 @@ class Migrator:
                     item['source_ref']='snapshot_contact:'+item['id'];item['source_checksum']=snapshot_checksum
                 item['raw']=None
                 item['suppressed']=bool(item['suppressed'])
+                storage_row(item)
                 batch.append(item);total_contacts+=1
                 if len(batch)>=batch_size:
                     with self.db.transaction() as c:self.db.upsert(c,contacts,batch,update=False)
@@ -174,7 +187,7 @@ class Migrator:
             'candidate_source_row_refs':candidate_source_row_refs,'candidate_snapshot_row_refs':candidate_snapshot_refs,
             'contact_source_row_refs':contact_source_row_refs,'contact_snapshot_row_refs':contact_snapshot_refs,
             'v2_source_rows':v2_archive_rows,'v2_source_memberships':v2_memberships,'duplicated_contact_raw_payloads':raw_contacts,
-            'checksum':archived_sha,'archive_path':str(archive),'persisted':True}
+            'postgres_nul_replacements':nul_replacements,'checksum':archived_sha,'archive_path':str(archive),'persisted':True}
 
     def identity(self,row,kind,path):
         original=str(row.get('candidate_id') or row.get('source_candidate_id') or row.get('profile_id') or '')

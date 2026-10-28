@@ -9,7 +9,7 @@ from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
-from outreach_v2.worker import tick
+from outreach_v2.worker import tick,claim,research_step,report_step
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse,_sheet_row
 from outreach_agent.google_forms_integration import parse_sheet_row
 
@@ -281,9 +281,12 @@ def test_worker_consent_intake_automatically_creates_job_without_research_execut
     submitted=response(db)
     class ConsentSheets:
         def read(self):return [VerifiedFormResponse(submitted,{'provider':'OWNER_BINDING','email':'yuxuan.chen.1031@outlook.com'})]
-    def forbidden_engine():pytest.fail('Research provider must remain disabled in this test')
+    class ReadOnlyEngine:
+        def reconcile(self,key):return None
+        def start(self,*_):pytest.fail('Research must not start while execution is disabled')
+        def advance(self,*_):pytest.fail('Research must not advance while execution is disabled')
     monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
-    result=tick(db,sheets=ConsentSheets(),engine_factory=forbidden_engine)
+    result=tick(db,sheets=ConsentSheets(),engine_factory=ReadOnlyEngine)
     assert result['status']=='ATTENTION_REQUIRED'
     with db.transaction() as c:
         invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='a')).mappings().one()
@@ -294,6 +297,62 @@ def test_worker_consent_intake_automatically_creates_job_without_research_execut
         run=c.execute(select(worker_runs).where(worker_runs.c.id==result['worker_run_id'])).mappings().one()
         assert run['finished_at'] is not None
     assert count(db,reports)==0 and count(db,deliveries)==0
+
+def _authorized_leased_job(db):
+    candidate(db);invite(db);assert process(db,response(db))=='AUTHORIZED'
+    return claim(db)
+
+def _completed_engine_result(job):
+    return {'status':'COMPLETED','job_id':'engine-job-existing','property_id':'property-existing',
+        'audit_id':'audit-existing','opportunity_ids':['opportunity-existing'],
+        'result':{'record_id':'result-existing','contract_version':'geo-research-integration/v1',
+            'source_profile_id':'a','source_profile_version':job['invitation_id'],'property_id':'property-existing',
+            'site':'https://geo-ai-resume.vercel.app','retrieved_at':now(),
+            'observed_pages':[{'url':'https://geo-ai-resume.vercel.app/','title':'Resume tools',
+                'headings':['Build a resume'],'exact_quotes':['Create your resume online.']}],
+            'recommendations':[{'rank':1,'title':'Clarify resume builder value','page_url':'https://geo-ai-resume.vercel.app/',
+                'original_quote':'Create your resume online.','proposed_revision':'Build a polished resume online.',
+                'rationale':'The page should describe the core outcome.'}],
+            'questions':['What resume formats are supported?'],
+            'baseline':{'provider':'exa','model':'gpt-6-luna','model_calls':1,'response_archive':'archive-existing',
+                'results':[{'query':'resume builder'}],'interpretation':'Provider observations recorded.'},
+            'limitations':['One bounded test result.']}}
+
+def test_disabled_outreach_reconciles_completed_engine_result_and_creates_docx_without_delivery(db,monkeypatch):
+    leased=_authorized_leased_job(db)
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
+    engine_result=_completed_engine_result(leased)
+    class ExistingCompletedEngine:
+        def reconcile(self,key):
+            assert key==leased['idempotency_key'];return engine_result
+        def start(self,*_):pytest.fail('Disabled Outreach must not start research')
+        def advance(self,*_):pytest.fail('Disabled Outreach must not advance research')
+    research_step(db,leased,ExistingCompletedEngine)
+    with db.transaction() as c:stored=dict(c.execute(select(jobs).where(jobs.c.id==leased['id'])).mappings().one())
+    assert stored['stage']=='REPORT' and stored['status']=='COMPLETED'
+    stored|={'lease_token':leased['lease_token']}
+    report_step(db,stored)
+    with db.transaction() as c:
+        report=dict(c.execute(select(reports).where(reports.c.job_id==leased['id'])).mappings().one())
+        final=dict(c.execute(select(jobs).where(jobs.c.id==leased['id'])).mappings().one())
+    assert final['stage']=='DELIVERY' and final['status']=='COMPLETED'
+    assert report['result_id']=='result-existing' and report['document'].startswith(b'PK')
+    with zipfile.ZipFile(io.BytesIO(report['document'])) as docx:
+        assert 'word/document.xml' in docx.namelist()
+    assert count(db,deliveries)==0
+
+def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
+    leased=_authorized_leased_job(db)
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
+    class ExistingQueuedEngine:
+        def reconcile(self,key):return {'status':'QUEUED','job_id':'engine-job-existing','property_id':'property-existing'}
+        def start(self,*_):pytest.fail('Disabled Outreach must not start research')
+        def advance(self,*_):pytest.fail('Disabled Outreach must not advance research')
+    research_step(db,leased,ExistingQueuedEngine)
+    with db.transaction() as c:
+        stored=dict(c.execute(select(jobs).where(jobs.c.id==leased['id'])).mappings().one())
+    assert stored['stage']=='RESEARCH' and stored['status']=='QUEUED'
+    assert stored['engine_job_id']=='engine-job-existing' and stored['result'] is None
 
 def test_migration_preserves_hotels_and_resume(db,tmp_path):
     source=tmp_path/'hotel.db'

@@ -47,18 +47,21 @@ def validate_result(result,inv,job):
 
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
-    if os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()!='true':
-        raise ConfigurationBlocked('GEO research execution is disabled pending provider authorization and an approved budget')
+    research_enabled=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()=='true'
     engine=engine_factory()
+    # Reconciliation is a read-only GET. Always allow it so an Engine result
+    # completed under its own authorization can advance to report generation.
     result=engine.reconcile(job['idempotency_key'])
     if result is None:
+        if not research_enabled:
+            raise ConfigurationBlocked('GEO research execution is disabled; no existing Engine job is available to reconcile')
         payload={'profile_id':inv['candidate_id'],'profile_version':inv['id'],
             'profile_type':'owner_controlled_test' if candidate['fixture'] else ('hotel_property' if candidate['kind']=='hotel' else 'business_company'),
             'identity':{'name':inv['company_name'],'website':inv['website'],'industry':candidate['industry'],'location':candidate['location']},
             'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES'},
             'controlled_fixture':False}
         result=engine.start(job['idempotency_key'],payload)
-    if result.get('status') in {'QUEUED','RUNNING','RETRY_PENDING','BLOCKED_CONFIGURATION'}:
+    if research_enabled and result.get('status') in {'QUEUED','RUNNING','RETRY_PENDING','BLOCKED_CONFIGURATION'}:
         result=engine.advance(job['idempotency_key'])
     status=result.get('status')
     if status not in {'QUEUED','RUNNING','COMPLETED','FAILED','BLOCKED_CONFIGURATION','RETRY_PENDING'}:raise ValueError('Unknown Engine job status')

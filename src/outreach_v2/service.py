@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,secrets,uuid
 from sqlalchemy import select,func,and_,or_,exists
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,now
+from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from outreach_agent.google_forms_integration import prefilled_form_url
@@ -161,6 +161,7 @@ def generate(db,selection,key):
 
 def dashboard(db):
     with db.transaction() as c:
+        run=c.execute(select(worker_runs).order_by(worker_runs.c.started_at.desc()).limit(1)).mappings().first()
         return {'companies':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='company')),
                 'hotels':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='hotel')),
                 'eligible':c.scalar(select(func.count()).select_from(candidates).where(readiness())),
@@ -170,4 +171,6 @@ def dashboard(db):
                 'authorized_jobs':c.scalar(select(func.count()).select_from(jobs)),
                 'research_completed':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.completed_at.is_not(None))),
                 'reports_accepted':c.scalar(select(func.count()).select_from(deliveries).where(deliveries.c.status=='ACCEPTED')),
-                'failures':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.error.is_not(None)))}
+                'failures':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.error.is_not(None))),
+                'latest_worker_run':({'id':run['id'],'status':run['status'],'started_at':run['started_at'],
+                    'detail':parse(run['detail'])} if run else None)}

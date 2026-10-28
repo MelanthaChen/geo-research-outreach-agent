@@ -176,22 +176,28 @@ class Engine:
         if r.status_code==404:
             # Separate capability check prevents interpreting an absent route as an absent job.
             caps=self.client.get('/api/v1/integration/outreach-capabilities')
-            if caps.status_code!=200 or not caps.json().get('durable_jobs'):raise ConfigurationBlocked('Deployed GEO Engine does not provide durable outreach jobs')
+            if caps.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine capabilities GET authorization denied: HTTP {caps.status_code}')
+            if caps.status_code!=200:raise ConfigurationBlocked(f'GEO Engine capabilities GET failed: HTTP {caps.status_code}')
+            if not caps.json().get('durable_jobs'):raise ConfigurationBlocked('Deployed GEO Engine does not provide durable outreach jobs')
             return None
-        if r.status_code in {401,403}:raise ConfigurationBlocked('GEO Engine service authorization failed')
-        r.raise_for_status();return r.json()
+        if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine job reconciliation GET authorization denied: HTTP {r.status_code}')
+        if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine job reconciliation GET failed: HTTP {r.status_code}')
+        return r.json()
     def advance(self,key):
         try:r=self.client.post('/api/v1/integration/outreach-advance/'+quote(key,safe=''))
         except httpx.TransportError as e:raise OutcomeUncertain('Engine execution response uncertain; reconcile the durable job') from e
-        if r.status_code in {401,403,404}:raise ConfigurationBlocked(f'Engine advance unavailable: HTTP {r.status_code}')
-        r.raise_for_status();return r.json()
+        if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine advance POST authorization denied: HTTP {r.status_code}')
+        if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine advance POST failed: HTTP {r.status_code}')
+        return r.json()
     def start(self,key,payload):
         existing=self.reconcile(key)
         if existing:return existing
         try:r=self.client.post('/api/v1/integration/outreach-jobs',headers={'Idempotency-Key':key},json=payload)
         except httpx.TransportError as e:raise OutcomeUncertain('Engine start response uncertain; reconcile the stable job key before retrying') from e
-        if r.status_code in {401,403,404,422}:raise ConfigurationBlocked(f'GEO Engine rejected research configuration: HTTP {r.status_code}')
-        r.raise_for_status();return r.json()
+        if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine job start POST authorization denied: HTTP {r.status_code}')
+        if r.status_code in {404,422}:raise ConfigurationBlocked(f'GEO Engine job start POST rejected configuration: HTTP {r.status_code}')
+        if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine job start POST failed: HTTP {r.status_code}')
+        return r.json()
 
 GRAPH_PROPERTY='String {e58879bb-e8b5-4fa4-8fa4-bfaef406c054} Name OutreachDeliveryKey'
 class GraphReports:

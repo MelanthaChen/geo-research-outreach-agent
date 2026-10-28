@@ -1,123 +1,331 @@
-"""Bounded, free HTTP evidence backfill for the frozen invitation variables only."""
+"""Bounded, free HTTP evidence backfill for frozen invitation variables."""
 from __future__ import annotations
-import ipaddress,socket,uuid,re
-from datetime import datetime,timedelta,timezone
-from urllib.parse import urlparse,urljoin
+
+import concurrent.futures
+import ipaddress
+import re
+import socket
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin, urlparse
+
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select,or_,and_,func,exists
-from .db import candidates,contacts,invitations,events,now
-from .migrate import dump,parse
-from .template import validate,same_site
+from sqlalchemy import and_, exists, func, or_, select
+
+from .db import candidates, contacts, events, invitations, now
+from .migrate import dump
 from .service import email_contacts
+from .template import same_site, validate
+
+MAX_PAGE_BYTES = 512_000
+MAX_PAGES_PER_CANDIDATE = 3
+LEASE_SECONDS = 300
+
 
 def public_url(url):
-    p=urlparse(url)
-    if p.scheme not in {'https','http'} or not p.hostname or p.username or p.password:raise ValueError('Invalid public website URL')
-    addresses=socket.getaddrinfo(p.hostname,p.port or (443 if p.scheme=='https' else 80),type=socket.SOCK_STREAM)
-    if not addresses or any(not ipaddress.ip_address(r[4][0]).is_global for r in addresses):raise ValueError('Website resolves to a non-public address')
+    p = urlparse(url)
+    if p.scheme not in {'https', 'http'} or not p.hostname or p.username or p.password:
+        raise ValueError('Invalid public website URL')
+    addresses = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == 'https' else 80), type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(r[4][0]).is_global for r in addresses):
+        raise ValueError('Website resolves to a non-public address')
+
 
 def fetch_page(url):
     public_url(url)
-    with httpx.Client(timeout=8,follow_redirects=False,headers={'User-Agent':'GEOResearchOutreach/2.0 (bounded invitation evidence)'}) as client:
-        # Respect robots before fetching content; unavailable rules fail closed.
+    with httpx.Client(timeout=5, follow_redirects=False,
+                       headers={'User-Agent': 'GEOResearchOutreach/2.0 (bounded invitation evidence)'}) as client:
         from urllib.robotparser import RobotFileParser
-        parsed=urlparse(url);origin=f'{parsed.scheme}://{parsed.netloc}'
-        robots=client.get(origin+'/robots.txt')
-        if robots.status_code==200:
-            rules=RobotFileParser();rules.parse(robots.text.splitlines())
-            if not rules.can_fetch('GEOResearchOutreach',url):raise ValueError('Website robots rules disallow this page')
-        elif robots.status_code not in {404,410}:raise ValueError('Website robots policy could not be checked')
-        target=url
+        parsed = urlparse(url)
+        origin = f'{parsed.scheme}://{parsed.netloc}'
+        robots = client.get(origin + '/robots.txt')
+        if robots.status_code == 200:
+            rules = RobotFileParser()
+            rules.parse(robots.text.splitlines())
+            if not rules.can_fetch('GEOResearchOutreach', url):
+                raise ValueError('Website robots rules disallow this page')
+        elif robots.status_code not in {404, 410}:
+            raise ValueError('Website robots policy could not be checked')
+        target = url
         for _ in range(3):
             public_url(target)
-            with client.stream('GET',target) as response:
+            with client.stream('GET', target) as response:
                 if response.is_redirect:
-                    new=urljoin(target,response.headers.get('location',''))
-                    if not same_site(url,new):raise ValueError('Redirect leaves the verified website')
-                    target=new;continue
+                    new = urljoin(target, response.headers.get('location', ''))
+                    if not same_site(url, new):
+                        raise ValueError('Redirect leaves the verified website')
+                    target = new
+                    continue
                 response.raise_for_status()
-                if 'text/html' not in response.headers.get('content-type',''):raise ValueError('Website did not return HTML')
-                chunks=[];size=0;truncated=False
+                if 'text/html' not in response.headers.get('content-type', ''):
+                    raise ValueError('Website did not return HTML')
+                chunks, size, truncated = [], 0, False
                 for chunk in response.iter_bytes():
-                    remaining=512_000-size
-                    if remaining<=0:
-                        truncated=True
+                    remaining = MAX_PAGE_BYTES - size
+                    if remaining <= 0:
+                        truncated = True
                         break
-                    if len(chunk)>remaining:
-                        chunks.append(chunk[:remaining]);size+=remaining;truncated=True
+                    if len(chunk) > remaining:
+                        chunks.append(chunk[:remaining])
+                        size += remaining
+                        truncated = True
                         break
-                    chunks.append(chunk);size+=len(chunk)
-                return target,b''.join(chunks).decode(response.encoding or 'utf-8',errors='replace'),truncated
+                    chunks.append(chunk)
+                    size += len(chunk)
+                return target, b''.join(chunks).decode(response.encoding or 'utf-8', errors='replace'), truncated
         raise ValueError('Website redirect limit exceeded')
 
-def observe(url,html,stamp,name=None,truncated=False):
-    soup=BeautifulSoup(html,'html.parser')
-    for tag in soup(['script','style','nav','footer']):tag.decompose()
-    description=soup.find('meta',attrs={'name':'description'})
-    description=(description.get('content','').strip() if description else '')
-    body_text=soup.get_text(' ',strip=True)
-    if not description:
-        description=next((p.get_text(' ',strip=True) for p in soup.find_all('p') if 70<=len(p.get_text(' ',strip=True))<=700),'')
-    if not description and len(body_text)>=100:description=body_text[:600]
-    heading=soup.find('h1');heading=heading.get_text(' ',strip=True) if heading else ''
-    if not description:raise ValueError('A grounded business description cannot yet be established from the sampled page')
-    rec=[]
-    # Also inspect the observed page copy. These findings are scoped to the
-    # sampled page text, not claims about the entire website.
-    visible=body_text.casefold()
-    if not re.search(r'\b(faq|frequently asked questions|hours|pricing|price list|how to|what to)\b',visible):
-        rec.append({'title':'Answer common customer questions',
-            'problem':'No FAQ or direct answers about hours, pricing, or common customer questions appear in the sampled homepage text.',
-            'suggestion':'Add a concise factual section that answers the questions customers need before choosing the business.',
-            'evidence_excerpt':body_text[:500]})
-    service_words=r'\b(products?|services?|solutions?|menu|repairs?|classes|appointments?|rentals?|consulting|treatments?)\b'
-    if not re.search(service_words,visible):
-        rec.append({'title':'Describe the specific offering',
-            'problem':'The sampled homepage copy does not explicitly name a product, service, or offering.',
-            'suggestion':'State the main offering in plain language and connect it to the customer need it serves.',
-            'evidence_excerpt':body_text[:500]})
-    if not soup.find('title') or not soup.find('title').get_text(strip=True):
-        rec.append({'title':'Page title','problem':'The sampled homepage has no non-empty HTML title.','suggestion':'Provide a concise title that identifies the business and the page topic.'})
-    if not soup.find('meta',attrs={'name':'description'}):
-        rec.append({'title':'Page description','problem':'The sampled homepage has no meta description.','suggestion':'Add an accurate description of the business and the purpose of this page.'})
-    # Do not invent a problem when the bounded page gives no supported finding.
-    if not rec:raise ValueError('No V1 recommendation is supported by this minimal sample; preserve existing data and defer')
-    for r in rec:r.update(source_urls=[url],observed_at=stamp)
-    strength=(f'The sampled homepage explicitly presents this heading: “{heading}”.' if heading
-              else f'The sampled homepage includes factual descriptive text: “{description[:240]}”.')
-    return {'data_classification':'OBSERVED','business_description':description,
-       'company_strength':strength,
-       'source_urls':[url],'retrieved_at':stamp,'recommendations':rec[:2],
-       'evidence':{'description_quote':description,'heading_quote':heading,'visible_text_excerpt':body_text[:1200],
-                   'sampled_urls':[url],'content_sample_truncated':bool(truncated)}}
 
-def backfill(db,limit=25,fetcher=fetch_page):
-    if not 1<=limit<=100:raise ValueError('Backfill request budget must be between 1 and 100 websites')
-    cutoff=(datetime.now(timezone.utc)-timedelta(hours=6)).isoformat()
-    first_party_email_count=select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()
-    no_prior_invitation=~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
-    with db.transaction() as c:
-        rows=[dict(r) for r in c.execute(select(candidates).where(candidates.c.kind=='company',candidates.c.fixture.is_(False),
-             candidates.c.website_status=='VERIFIED',
-             candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidates.c.suppressed.is_(False),
-             candidates.c.personalization_status!='READY',
-             or_(candidates.c.personalization_at.is_(None),candidates.c.personalization_at<cutoff),
-             first_party_email_count==1,no_prior_invitation).order_by(candidates.c.personalization_at,candidates.c.id).limit(limit)).mappings()]
-    result={'completed':0,'incomplete':0}
-    for row in rows:
-        stamp=now()
+def _page_text(html):
+    soup = BeautifulSoup(html, 'html.parser')
+    for tag in soup(['script', 'style', 'nav', 'footer', 'noscript']):
+        tag.decompose()
+    return soup, soup.get_text(' ', strip=True)
+
+
+def _evidence_urls(home_url, html):
+    """Follow only explicit, relevant links from the verified homepage."""
+    soup = BeautifulSoup(html, 'html.parser')
+    priorities = ('about', 'service', 'product', 'solution', 'faq', 'question', 'pricing', 'menu')
+    found = []
+    for link in soup.find_all('a', href=True):
+        target = urljoin(home_url, link['href'].strip())
+        label = ' '.join((link.get_text(' ', strip=True), urlparse(target).path)).casefold()
+        if same_site(home_url, target) and any(word in label for word in priorities):
+            normalized = target.split('#', 1)[0]
+            if normalized not in found and normalized != home_url:
+                found.append(normalized)
+    found.sort(key=lambda item: (min((priorities.index(word) for word in priorities
+                                      if word in (urlparse(item).path + ' ' + item).casefold()), default=99), item))
+    return found[:MAX_PAGES_PER_CANDIDATE - 1]
+
+
+def observe(url, html, stamp, name=None, truncated=False, additional_pages=()):
+    pages = [(url, html, truncated), *additional_pages]
+    parsed = [_page_text(item[1]) for item in pages]
+    descriptions = []
+    rec = []
+    combined_text = []
+    question_pattern = re.compile(r'\b(faq|frequently asked questions|hours|pricing|price list|how to|what to)\b', re.I)
+    service_pattern = re.compile(r'\b(products?|services?|solutions?|menu|repairs?|classes|appointments?|rentals?|consulting|treatments?)\b', re.I)
+    for (page_url, _, was_truncated), (soup, body_text) in zip(pages, parsed):
+        description_tag = soup.find('meta', attrs={'name': 'description'})
+        description = description_tag.get('content', '').strip() if description_tag else ''
+        if not description:
+            description = next((p.get_text(' ', strip=True) for p in soup.find_all('p')
+                                if 70 <= len(p.get_text(' ', strip=True)) <= 700), '')
+        if not description and len(body_text) >= 100:
+            description = body_text[:600]
+        if description:
+            descriptions.append(description)
+        combined_text.append(body_text)
+        if not soup.find('title') or not soup.find('title').get_text(strip=True):
+            rec.append({'title': 'Page title', 'problem': f'The sampled page {urlparse(page_url).path or "/"} has no non-empty HTML title.',
+                         'suggestion': 'Provide a concise title that identifies the business and the page topic.',
+                         'evidence_excerpt': body_text[:400], 'source_urls': [page_url], 'observed_at': stamp})
+        if not description_tag:
+            rec.append({'title': 'Page description', 'problem': f'The sampled page {urlparse(page_url).path or "/"} has no meta description.',
+                         'suggestion': 'Add an accurate description of the business and the purpose of this page.',
+                         'evidence_excerpt': body_text[:400], 'source_urls': [page_url], 'observed_at': stamp})
+    if not descriptions:
+        raise ValueError('A grounded business description cannot yet be established from the sampled same-site pages')
+    visible = ' '.join(combined_text)
+    if not question_pattern.search(visible):
+        rec.append({'title': 'Answer common customer questions',
+                    'problem': 'No FAQ or direct answers about hours, pricing, or common customer questions appear in the sampled same-site pages.',
+                    'suggestion': 'Add a concise factual section that answers the questions customers need before choosing the business.',
+                    'evidence_excerpt': visible[:500], 'source_urls': [item[0] for item in pages], 'observed_at': stamp})
+    if not service_pattern.search(visible):
+        rec.append({'title': 'Describe the specific offering',
+                    'problem': 'The sampled same-site pages do not explicitly name a product, service, or offering.',
+                    'suggestion': 'State the main offering in plain language and connect it to the customer need it serves.',
+                    'evidence_excerpt': visible[:500], 'source_urls': [item[0] for item in pages], 'observed_at': stamp})
+    if not rec:
+        raise ValueError('No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer')
+    heading = parsed[0][0].find('h1')
+    heading = heading.get_text(' ', strip=True) if heading else ''
+    description = descriptions[0]
+    return {'data_classification': 'OBSERVED', 'business_description': description,
+            'company_strength': (f'The sampled homepage explicitly presents this heading: “{heading}”.' if heading
+                                 else f'The sampled homepage includes factual descriptive text: “{description[:240]}”.'),
+            'source_urls': [item[0] for item in pages], 'retrieved_at': stamp,
+            'recommendations': rec[:2],
+            'evidence': {'description_quote': description, 'heading_quote': heading,
+                         'visible_text_excerpt': visible[:1200], 'sampled_urls': [item[0] for item in pages],
+                         'content_sample_truncated': any(item[2] for item in pages)}}
+
+
+def _sample(fetcher, website, stamp):
+    first = fetcher(website)
+    home_url, home_html = first[:2]
+    if not same_site(website, home_url):
+        raise ValueError('Homepage redirect leaves the verified website')
+    pages = [(home_url, home_html, first[2] if len(first) > 2 else False)]
+    for target in _evidence_urls(home_url, home_html):
         try:
-            fetched=fetcher(row['website'])
-            url,html=fetched[:2]
-            truncated=fetched[2] if len(fetched)>2 else False
-            p=observe(url,html,stamp,row.get('name'),truncated);validate(p,row['website'])
-            values={'personalization':dump(p),'personalization_status':'READY','personalization_at':stamp,'personalization_error':None,'description':p['business_description']}
-            result['completed']+=1
-        except Exception as e:
-            values={'personalization_status':'INCOMPLETE','personalization_at':stamp,'personalization_error':str(e)[:300] if isinstance(e,ValueError) else type(e).__name__}
-            result['incomplete']+=1
-        with db.transaction() as c:
-            c.execute(candidates.update().where(candidates.c.id==row['id'],candidates.c.personalization_status!='READY').values(**values))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row['id'],event='PERSONALIZATION_'+values['personalization_status'],detail=dump({'error':values.get('personalization_error'),'website':row['website'],'source_ref':row.get('source_ref')}),created_at=stamp))
+            fetched = fetcher(target)
+            page_url, page_html = fetched[:2]
+            if same_site(website, page_url):
+                pages.append((page_url, page_html, fetched[2] if len(fetched) > 2 else False))
+        except Exception as exc:
+            # A failed secondary page does not erase usable homepage evidence.
+            if isinstance(exc, httpx.TransportError) or isinstance(exc, httpx.HTTPStatusError):
+                continue
+            if isinstance(exc, ValueError) and ('robots' in str(exc).lower() or 'HTML' in str(exc)):
+                continue
+            raise
+        if len(pages) >= MAX_PAGES_PER_CANDIDATE:
+            break
+    return observe(home_url, home_html, stamp, additional_pages=pages[1:])
+
+
+def _domain_key(value):
+    return (value or '').lower().removeprefix('www.').strip()
+
+
+def _failure_kind(exc):
+    if isinstance(exc, httpx.TimeoutException):
+        return 'TRANSIENT_HTTP'
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return 'TRANSIENT_HTTP' if code in {408, 425, 429} or code >= 500 else 'PERMANENT_EVIDENCE'
+    if isinstance(exc, (httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError, socket.gaierror)):
+        return 'TRANSIENT_HTTP'
+    if isinstance(exc, ValueError):
+        return 'PERMANENT_EVIDENCE'
+    return 'TRANSIENT_HTTP'
+
+
+def _retry_time(kind, attempts, stamp):
+    if kind == 'PERMANENT_EVIDENCE' or attempts >= 5:
+        delay = timedelta(days=30)
+    else:
+        delay = timedelta(minutes=min(1440, 15 * (2 ** max(0, attempts - 1))))
+    return (datetime.fromisoformat(stamp) + delay).isoformat()
+
+
+def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_seconds=150):
+    if not 1 <= limit <= 100:
+        raise ValueError('Backfill request budget must be between 1 and 100 websites')
+    if not 1 <= concurrency <= 8 or not 1 <= time_budget_seconds <= 300:
+        raise ValueError('Backfill concurrency or runtime budget is outside its safe range')
+    stamp = now()
+    lease_token = uuid.uuid4().hex
+    lease_until = (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).isoformat()
+    first_party_email_count = select(func.count(func.distinct(contacts.c.email))).where(
+        email_contacts()).correlate(candidates).scalar_subquery()
+    no_prior_invitation = ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id))
+    eligible = and_(candidates.c.kind == 'company', candidates.c.fixture.is_(False),
+        candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
+        candidates.c.suppressed.is_(False), candidates.c.personalization_status != 'READY',
+        or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp),
+        or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until < stamp),
+        first_party_email_count == 1, no_prior_invitation)
+    claimed = []
+    domains = set()
+    with db.transaction(serialized=True) as c:
+        query = select(candidates).where(eligible).order_by(
+            candidates.c.personalization_at.asc().nulls_first(), candidates.c.id).limit(min(1000, limit * 20))
+        if db.postgres:
+            query = query.with_for_update(skip_locked=True)
+        for item in c.execute(query).mappings():
+            row = dict(item)
+            domain = _domain_key(row.get('domain'))
+            if domain in domains:
+                continue
+            result = c.execute(candidates.update().where(candidates.c.id == row['id'], eligible).values(
+                personalization_lease_token=lease_token, personalization_lease_until=lease_until))
+            if result.rowcount == 1:
+                claimed.append(row)
+                domains.add(domain)
+            if len(claimed) == limit:
+                break
+
+    result = {'attempted': 0, 'completed': 0, 'incomplete': 0, 'permanent_insufficiency': 0,
+              'transient_failures': 0, 'failure_categories': {}, 'failure_reasons': {}, 'elapsed_seconds': 0}
+    if not claimed:
+        return result
+    started = time.monotonic()
+    deadline = started + time_budget_seconds
+
+    def process_candidate(row):
+        observed_at = now()
+        try:
+            personalization = _sample(fetcher, row['website'], observed_at)
+            validate(personalization, row['website'])
+            return row, {'personalization': dump(personalization), 'personalization_status': 'READY',
+                         'personalization_at': observed_at, 'personalization_error': None,
+                         'personalization_outcome': 'READY', 'personalization_retry_after': None,
+                         'description': personalization['business_description']}, None
+        except Exception as exc:
+            kind = _failure_kind(exc)
+            attempts = int(row.get('personalization_attempts') or 0) + 1
+            if isinstance(exc, ValueError):
+                reason = str(exc)[:300]
+            elif isinstance(exc, httpx.HTTPStatusError):
+                reason = f'HTTP {exc.response.status_code}'
+            else:
+                reason = type(exc).__name__
+            return row, {'personalization_status': 'INCOMPLETE', 'personalization_at': observed_at,
+                         'personalization_error': reason, 'personalization_outcome': kind,
+                         'personalization_attempts': attempts,
+                         'personalization_retry_after': _retry_time(kind, attempts, observed_at)}, kind
+
+    outcomes = []
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
+    futures = {executor.submit(process_candidate, row): row for row in claimed}
+    done, pending = concurrent.futures.wait(futures, timeout=max(0, deadline - time.monotonic()))
+    for future in done:
+        try:
+            outcomes.append(future.result())
+        except Exception as exc:  # Keep an unexpected worker exception categorized and recoverable.
+            row = futures[future]
+            kind = 'TRANSIENT_HTTP'
+            at = now()
+            attempts = int(row.get('personalization_attempts') or 0) + 1
+            outcomes.append((row, {'personalization_status': 'INCOMPLETE', 'personalization_at': at,
+                'personalization_error': type(exc).__name__, 'personalization_outcome': kind,
+                'personalization_attempts': attempts, 'personalization_retry_after': _retry_time(kind, attempts, at)}, kind))
+    for future in pending:
+        future.cancel()
+    executor.shutdown(wait=False, cancel_futures=True)
+
+    with db.transaction(serialized=True) as c:
+        for row, values, kind in outcomes:
+            updated = c.execute(candidates.update().where(candidates.c.id == row['id'],
+                candidates.c.personalization_lease_token == lease_token,
+                candidates.c.personalization_status != 'READY').values(**values,
+                personalization_lease_token=None, personalization_lease_until=None))
+            if updated.rowcount != 1:
+                continue
+            result['attempted'] += 1
+            if values['personalization_status'] == 'READY':
+                result['completed'] += 1
+            else:
+                result['incomplete'] += 1
+                result['failure_categories'][kind] = result['failure_categories'].get(kind, 0) + 1
+                reason = values.get('personalization_error') or 'Unspecified failure'
+                result['failure_reasons'][reason[:140]] = result['failure_reasons'].get(reason[:140], 0) + 1
+                if kind == 'PERMANENT_EVIDENCE':
+                    result['permanent_insufficiency'] += 1
+                else:
+                    result['transient_failures'] += 1
+            c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=row['id'],
+                event='PERSONALIZATION_' + values['personalization_status'],
+                detail=dump({'classification': values.get('personalization_outcome'),
+                    'error': values.get('personalization_error'), 'retry_after': values.get('personalization_retry_after'),
+                    'website': row['website'], 'source_ref': row.get('source_ref'),
+                    'sampled_urls': (values.get('personalization') and
+                        __import__('json').loads(values['personalization']).get('source_urls'))}), created_at=values['personalization_at']))
+        # Claims that never started are safe to release. In-flight work keeps its
+        # lease until expiry so another scheduler cannot duplicate the fetch.
+        for future in pending:
+            if future.cancelled():
+                row = futures[future]
+                c.execute(candidates.update().where(candidates.c.id == row['id'],
+                    candidates.c.personalization_lease_token == lease_token).values(
+                    personalization_lease_token=None, personalization_lease_until=None))
+    result['elapsed_seconds'] = round(time.monotonic() - started, 2)
     return result

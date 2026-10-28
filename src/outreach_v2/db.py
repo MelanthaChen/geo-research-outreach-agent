@@ -23,7 +23,10 @@ candidates = table('candidates', col('id', String, primary_key=True), col('kind'
     col('geography', String, default='UNKNOWN'), col('suppressed', Boolean, nullable=False, default=False),
     col('source', String), col('source_ref', String), col('source_checksum', String),
     col('personalization', default='{}'), col('personalization_status', String, default='INCOMPLETE'),
-    col('personalization_at'), col('personalization_error'), col('fixture', Boolean, default=False, nullable=False),
+    col('personalization_at'), col('personalization_error'), col('personalization_outcome'),
+    col('personalization_attempts', Integer, nullable=False, default=0, server_default='0'),
+    col('personalization_retry_after'), col('personalization_lease_token'), col('personalization_lease_until'),
+    col('fixture', Boolean, default=False, nullable=False),
     col('created_at', nullable=False), col('updated_at', nullable=False))
 contacts = table('contacts', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
@@ -88,6 +91,14 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
 }), (2, 'lean-operational-evidence-references', {
     'candidates': {'source_ref': 'TEXT', 'source_checksum': 'TEXT'},
     'contacts': {'source_ref': 'TEXT', 'source_checksum': 'TEXT'}
+}), (3, 'bounded-personalization-claims-and-outcomes', {
+    'candidates': {
+        'personalization_outcome': 'TEXT',
+        'personalization_attempts': 'INTEGER NOT NULL DEFAULT 0',
+        'personalization_retry_after': 'TEXT',
+        'personalization_lease_token': 'TEXT',
+        'personalization_lease_until': 'TEXT'
+    }
 })]
 
 class Database:

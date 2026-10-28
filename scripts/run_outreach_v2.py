@@ -27,6 +27,9 @@ def main():
 
         from outreach_v2.app import create_app
 
+        # Apply additive, transaction-safe schema migrations before serving
+        # authenticated worker requests.
+        db.initialize()
         uvicorn.run(create_app(db), host=args.host, port=args.port)
 
 

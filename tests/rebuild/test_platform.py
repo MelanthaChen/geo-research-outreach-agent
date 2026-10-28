@@ -10,7 +10,7 @@ from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick,claim,research_step,report_step
-from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse,_sheet_row
+from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,Engine,verified_form_rows,VerifiedFormResponse,_sheet_row
 from outreach_agent.google_forms_integration import parse_sheet_row
 
 @pytest.fixture
@@ -214,7 +214,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==2
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==3
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -427,14 +427,50 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     result=backfill(db,limit=1,fetcher=fetch)
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='real-backfill')).mappings().one()
-    assert result=={'completed':1,'incomplete':0}
+    assert result['attempted']==1 and result['completed']==1 and result['incomplete']==0
+    assert result['failure_categories']=={} and result['permanent_insufficiency']==0
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
     assert json.loads(row['personalization'])['recommendations'][0]['title']=='Answer common customer questions'
     assert not any(x['title'] in {'Page title','Page description'} for x in json.loads(row['personalization'])['recommendations'])
     partial=observe('https://example.com/',page,now(),truncated=True)
     assert partial['evidence']['content_sample_truncated'] is True
-    assert backfill(db,limit=1,fetcher=fetch)=={'completed':0,'incomplete':0}
+    assert backfill(db,limit=1,fetcher=fetch)['attempted']==0
+
+def test_personalization_backfill_claims_distinct_domains_and_persists_transient_backoff(db):
+    from outreach_v2.personalization import backfill
+    from outreach_v2.db import candidates
+    from sqlalchemy import select
+    import httpx
+    candidate(db,ident='batch-a',email='hello@batch-a.example',website='https://batch-a.example',name='Batch A',personalization=False,fixture=False)
+    candidate(db,ident='batch-b',email='hello@batch-b.example',website='https://batch-b.example',name='Batch B',personalization=False,fixture=False)
+    candidate(db,ident='batch-c',email='hello@batch-a.example',website='https://www.batch-a.example',name='Batch A duplicate domain',personalization=False,fixture=False)
+    page='<html><head><title>Company</title><meta name="description" content="A company that provides a factual service to its customers."></head><body><h1>Company</h1><p>This company provides useful services to customers in the local community.</p></body></html>'
+    def transient(url):
+        if 'batch-b' in url:raise httpx.ReadTimeout('temporary timeout')
+        return url,page
+    result=backfill(db,limit=3,fetcher=transient,concurrency=2)
+    assert result['attempted']==2
+    assert result['completed']==1 and result['incomplete']==1
+    assert result['failure_categories']=={'TRANSIENT_HTTP':1}
+    with db.transaction() as c:
+        rows={r.id:dict(r) for r in c.execute(select(candidates).where(candidates.c.id.in_(['batch-a','batch-b','batch-c']))).mappings()}
+    assert rows['batch-a']['personalization_status']=='READY'
+    assert rows['batch-b']['personalization_outcome']=='TRANSIENT_HTTP'
+    assert rows['batch-b']['personalization_attempts']==1
+    assert rows['batch-b']['personalization_retry_after']
+    assert rows['batch-c']['personalization_lease_token'] is None
 
 def test_postgres_text_keeps_embedded_nul_visible():
     assert postgres_text('before\x00after')=='before\ufffdafter'
     assert postgres_text(None) is None
+
+def test_engine_reconciliation_reports_sanitized_http_auth_stage():
+    class Response:
+        status_code=401
+    class Client:
+        def get(self,path):
+            assert path.startswith('/api/v1/integration/outreach-jobs/')
+            return Response()
+    engine=Engine.__new__(Engine);engine.client=Client()
+    with pytest.raises(ConfigurationBlocked,match=r'job reconciliation GET authorization denied: HTTP 401'):
+        engine.reconcile('existing-stable-key')

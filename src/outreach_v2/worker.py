@@ -134,43 +134,59 @@ def delivery_step(db,job,mail_factory):
 
 def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,renderer=None,max_jobs=20):
     run_id=uuid.uuid4().hex;errors=[];processed=0
+    subsystem_errors={'consent':[],'research':[],'report':[],'delivery':[]}
     with db.transaction() as c:c.execute(worker_runs.insert().values(id=run_id,started_at=now(),status='RUNNING'))
     try:
         rows=(sheets or Sheets()).read()
         if getattr(rows,'identity_status','VERIFIED')!='VERIFIED':
-            errors.append('Sheets identity verification: '+str(getattr(rows,'identity_error',None) or 'Google Forms verified respondent identity is unavailable'))
+            warning='Sheets identity verification: '+str(getattr(rows,'identity_error',None) or 'Google Forms verified respondent identity is unavailable')
+            errors.append(warning);subsystem_errors['consent'].append(warning)
         for row in rows:
             if isinstance(row,VerifiedFormResponse):process(db,row.answers,verified_identity=row.identity)
             else:process(db,row)
-    except Exception as e:errors.append('Sheets: '+safe_error(e))
+    except Exception as e:
+        warning='Sheets: '+safe_error(e);errors.append(warning);subsystem_errors['consent'].append(warning)
     for _ in range(max_jobs):
         job=claim(db)
         if not job:break
         try:
-            if job['stage']=='RESEARCH':research_step(db,job,engine_factory)
-            elif job['stage']=='REPORT':report_step(db,job,renderer)
-            elif job['stage']=='DELIVERY':delivery_step(db,job,mail_factory)
+            stage=job['stage']
+            if stage=='RESEARCH':research_step(db,job,engine_factory)
+            elif stage=='REPORT':report_step(db,job,renderer)
+            elif stage=='DELIVERY':delivery_step(db,job,mail_factory)
             else:raise ValueError('Unknown durable job stage')
             processed+=1
         except Exception as e:
             status='BLOCKED_CONSENT' if isinstance(e,PermissionError) else 'BLOCKED_CONFIGURATION' if isinstance(e,ConfigurationBlocked) else 'FAILED' if isinstance(e,ValueError) else 'RETRY_PENDING'
-            error=safe_error(e);errors.append(job['id']+': '+error)
+            error=safe_error(e);message=job['id']+': '+error;errors.append(message)
+            subsystem_errors[{'RESEARCH':'research','REPORT':'report','DELIVERY':'delivery'}.get(job['stage'],'research')].append(message)
             with db.transaction(serialized=True) as c:
                 row=c.execute(select(jobs.c.lease_token).where(jobs.c.id==job['id'])).first()
                 if row and row.lease_token==job['lease_token']:
                     transition(c,job['id'],status=status,error=error,next_attempt_at=later(min(3600,60*2**min(job['attempts'],6))))
         finally:
             with db.transaction() as c:c.execute(jobs.update().where(jobs.c.id==job['id'],jobs.c.lease_token==job['lease_token']).values(lease_until=None,lease_token=None))
-    personalization_backfill=None
+    personalization_backfill=None;personalization_error=None
     try:
         # Existing scheduled worker doubles as a bounded, pre-consent V1
         # personalization checkpoint. This path never contacts the GEO Engine.
         from .personalization import backfill
-        personalization_backfill=backfill(db,limit=1)
-        processed+=personalization_backfill['completed']+personalization_backfill['incomplete']
+        personalization_backfill=backfill(db,limit=12,concurrency=4,time_budget_seconds=150)
+        processed+=personalization_backfill['attempted']
     except Exception:
-        errors.append('Personalization backfill: bounded candidate checkpoint failed; it remains recoverable')
-    result={'worker_run_id':run_id,'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors,
+        personalization_error='Bounded candidate batch failed; claimed candidates remain recoverable'
+        errors.append('Personalization backfill: '+personalization_error)
+    consent_status='ATTENTION_REQUIRED' if subsystem_errors['consent'] else 'COMPLETED'
+    personalization_status='ATTENTION_REQUIRED' if personalization_error else 'COMPLETED'
+    result={'worker_run_id':run_id,'invocation_status':'COMPLETED',
+            'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors,
+            'subsystems':{
+                'consent':{'status':consent_status,'errors':subsystem_errors['consent']},
+                'personalization':{'status':personalization_status,'batch':personalization_backfill,'error':personalization_error},
+                'research':{'status':'ATTENTION_REQUIRED' if subsystem_errors['research'] else 'COMPLETED','errors':subsystem_errors['research']},
+                'report':{'status':'ATTENTION_REQUIRED' if subsystem_errors['report'] else 'COMPLETED','errors':subsystem_errors['report']},
+                'delivery':{'status':'ATTENTION_REQUIRED' if subsystem_errors['delivery'] else 'COMPLETED','errors':subsystem_errors['delivery']},
+            },
             'personalization_backfill':personalization_backfill}
     with db.transaction() as c:c.execute(worker_runs.update().where(worker_runs.c.id==run_id).values(finished_at=now(),status=result['status'],detail=dump(result)))
     return result

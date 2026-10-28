@@ -62,7 +62,7 @@ jobs:
               echo "Worker batch ${batch_number} returned HTTP ${status_code}."
               exit 1
             fi
-            parsed="$({ python - "$response_file" <<'PY'
+          parsed="$({ python3 - "$response_file" <<'PY'
           import json, sys
           with open(sys.argv[1], encoding='utf-8') as response:
               result = json.load(response)

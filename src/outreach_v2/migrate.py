@@ -50,6 +50,132 @@ class Migrator:
             if r.kind=='company' and r.domain: self.domains.setdefault(r.domain,[]).append((r.id,r.name.casefold()))
         self.local_map={}
 
+    def lean_operational_snapshot(self,path,*,archive_manifest,batch_size=500,expected=None):
+        """Copy current operational rows only; full source payloads stay in the verified archive."""
+        archive_manifest=Path(archive_manifest)
+        manifest=json.loads(archive_manifest.read_text())
+        archive=Path(manifest['source_snapshot'])
+        if not archive.is_file() or archive.stat().st_size!=manifest.get('bytes'):
+            raise ValueError('Verified source archive is missing or has a different size')
+        def file_sha(target):
+            h=hashlib.sha256()
+            with target.open('rb') as f:
+                for chunk in iter(lambda:f.read(8*1024*1024),b''):h.update(chunk)
+            return h.hexdigest()
+        archived_sha=manifest.get('sha256')
+        if not archived_sha or file_sha(archive)!=archived_sha or file_sha(Path(path))!=archived_sha:
+            raise ValueError('Source snapshot does not match the verified archive checksum')
+        if not 1<=batch_size<=5000:raise ValueError('Lean import batch size must be 1..5000')
+        with readonly(path) as source:
+            tables={r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            required={'candidates','contacts','sources','source_rows','source_memberships'}
+            if not required.issubset(tables):raise ValueError('Input is not the reconciled V2 snapshot')
+            counts={r[0]:r[1] for r in source.execute('SELECT kind,COUNT(*) FROM candidates GROUP BY kind')}
+            contact_count=source.execute('SELECT COUNT(*) FROM contacts').fetchone()[0]
+            fixture_count=source.execute('SELECT COUNT(*) FROM candidates WHERE fixture!=0').fetchone()[0]
+            isolated_count=source.execute("SELECT COUNT(*) FROM source_rows WHERE disposition='ISOLATED'").fetchone()[0]
+            memberships=source.execute('SELECT COALESCE(SUM(count),0) FROM source_memberships').fetchone()[0]
+            incomplete_sources=source.execute("SELECT COUNT(*) FROM sources WHERE status!='COMPLETE' OR expected!=processed").fetchone()[0]
+            unmapped_contacts=source.execute('''SELECT COUNT(*) FROM contacts x LEFT JOIN candidates c ON c.id=x.candidate_id WHERE c.id IS NULL''').fetchone()[0]
+            if fixture_count:raise ValueError('Owner fixtures must not enter the real-candidate namespace')
+            if incomplete_sources or unmapped_contacts:raise ValueError('Snapshot source reconciliation or contact identity mapping is incomplete')
+            if expected:
+                if counts!=expected.get('candidates') or contact_count!=expected.get('contacts') or isolated_count!=expected.get('isolated_rows') or memberships!=expected.get('source_memberships'):
+                    raise ValueError('Snapshot counts differ from the approved migration reconciliation')
+            existing_candidates=0;existing_contacts=0;existing_rows=0;existing_memberships=0
+            with self.db.transaction() as c:
+                existing_candidates=c.execute(select(func.count()).select_from(candidates)).scalar_one()
+                existing_contacts=c.execute(select(func.count()).select_from(contacts)).scalar_one()
+                existing_rows=c.execute(select(func.count()).select_from(source_rows)).scalar_one()
+                existing_memberships=c.execute(select(func.count()).select_from(source_memberships)).scalar_one()
+            if existing_rows or existing_memberships:
+                raise ValueError('Lean V2 namespace already contains duplicated archival payloads; refusing to mix import modes')
+            if existing_candidates>sum(counts.values()) or existing_contacts>contact_count:
+                raise ValueError('V2 operational namespace contains rows outside this snapshot')
+
+            # Map canonical candidates to their immutable content-addressed row in the archive.
+            candidate_refs={}
+            ref_query='''SELECT c.id,
+                (SELECT sr.id FROM source_rows sr JOIN sources s ON s.id=sr.source_id
+                 WHERE sr.candidate_id=c.id AND sr.disposition='PRESERVED' AND s.path=c.source
+                 ORDER BY CASE WHEN s.relation IN ('candidates','companies','research_records','csv') THEN 0 ELSE 1 END,
+                          s.relation,sr.source_key LIMIT 1),
+                (SELECT sr.checksum FROM source_rows sr JOIN sources s ON s.id=sr.source_id
+                 WHERE sr.candidate_id=c.id AND sr.disposition='PRESERVED' AND s.path=c.source
+                 ORDER BY CASE WHEN s.relation IN ('candidates','companies','research_records','csv') THEN 0 ELSE 1 END,
+                          s.relation,sr.source_key LIMIT 1)
+                FROM candidates c ORDER BY c.id'''
+            for ident,ref,checksum in source.execute(ref_query):
+                if ref:candidate_refs[ident]=(ref,checksum)
+            contact_checksums={}
+            for ident,candidate_id,raw in source.execute('SELECT id,candidate_id,raw FROM contacts ORDER BY id'):
+                checksum=sha(raw or '')
+                contact_checksums[(candidate_id,checksum)]=(ident,checksum)
+            direct_contact_refs={}
+            contact_ref_query='''SELECT sr.id,sr.candidate_id,sr.checksum FROM source_rows sr
+                JOIN sources s ON s.id=sr.source_id
+                WHERE sr.disposition='PRESERVED' AND sr.candidate_id IS NOT NULL
+                  AND (lower(s.relation) LIKE '%contact%' OR lower(s.relation) LIKE '%channel%')'''
+            for ref,candidate_id,checksum in source.execute(contact_ref_query):
+                key=(candidate_id,checksum)
+                if key in contact_checksums:direct_contact_refs[key]=(ref,checksum)
+
+            source_rows_data=[dict(r) for r in source.execute('SELECT * FROM sources ORDER BY id')]
+            for offset in range(0,len(source_rows_data),batch_size):
+                with self.db.transaction() as c:self.db.upsert(c,sources,source_rows_data[offset:offset+batch_size],update=False)
+            total=0;batch=[]
+            for raw in source.execute('SELECT * FROM candidates ORDER BY id'):
+                item=dict(raw);reference=candidate_refs.get(item['id'])
+                if reference:
+                    item['source_ref']='source_row:'+reference[0];item['source_checksum']=reference[1]
+                else:
+                    item['source_ref']='snapshot_candidate:'+item['id'];item['source_checksum']=sha(dump(item))
+                for key in ('suppressed','fixture'):item[key]=bool(item[key])
+                batch.append(item);total+=1
+                if len(batch)>=batch_size:
+                    with self.db.transaction() as c:self.db.upsert(c,candidates,batch,update=False)
+                    batch=[]
+            if batch:
+                with self.db.transaction() as c:self.db.upsert(c,candidates,batch,update=False)
+            total_contacts=0;batch=[]
+            for raw in source.execute('SELECT * FROM contacts ORDER BY id'):
+                item=dict(raw);key=(item['candidate_id'],sha(item['raw'] or ''));snapshot_checksum=sha(dump(item))
+                ref=direct_contact_refs.get(key) or candidate_refs.get(item['candidate_id'])
+                if ref:
+                    item['source_ref']='source_row:'+ref[0];item['source_checksum']=ref[1]
+                else:
+                    item['source_ref']='snapshot_contact:'+item['id'];item['source_checksum']=snapshot_checksum
+                item['raw']=None
+                item['suppressed']=bool(item['suppressed'])
+                batch.append(item);total_contacts+=1
+                if len(batch)>=batch_size:
+                    with self.db.transaction() as c:self.db.upsert(c,contacts,batch,update=False)
+                    batch=[]
+            if batch:
+                with self.db.transaction() as c:self.db.upsert(c,contacts,batch,update=False)
+        with self.db.transaction() as c:
+            persisted={r.kind:r.n for r in c.execute(select(candidates.c.kind,func.count().label('n')).group_by(candidates.c.kind))}
+            persisted_contacts=c.scalar(select(func.count()).select_from(contacts))
+            raw_contacts=c.scalar(select(func.count()).select_from(contacts).where(contacts.c.raw.is_not(None)))
+            missing_candidate_refs=c.scalar(select(func.count()).select_from(candidates).where(candidates.c.source_ref.is_(None)))
+            missing_contact_refs=c.scalar(select(func.count()).select_from(contacts).where(contacts.c.source_ref.is_(None)))
+            candidate_source_row_refs=c.scalar(select(func.count()).select_from(candidates).where(candidates.c.source_ref.like('source_row:%')))
+            contact_source_row_refs=c.scalar(select(func.count()).select_from(contacts).where(contacts.c.source_ref.like('source_row:%')))
+            candidate_snapshot_refs=c.scalar(select(func.count()).select_from(candidates).where(candidates.c.source_ref.like('snapshot_candidate:%')))
+            contact_snapshot_refs=c.scalar(select(func.count()).select_from(contacts).where(contacts.c.source_ref.like('snapshot_contact:%')))
+            v2_archive_rows=c.scalar(select(func.count()).select_from(source_rows))
+            v2_memberships=c.scalar(select(func.count()).select_from(source_memberships))
+        if persisted!=counts or persisted_contacts!=contact_count or raw_contacts or v2_archive_rows or v2_memberships:
+            raise ValueError('Lean operational migration failed persisted count or archive-isolation reconciliation')
+        return {'candidates':counts,'contacts':contact_count,'source_catalog_rows':len(source_rows_data),
+            'source_archive_rows_preserved_outside_v2':source.execute('SELECT COUNT(*) FROM source_rows').fetchone()[0],
+            'source_memberships_preserved_outside_v2':memberships,'isolated_historical_rows_excluded':isolated_count,
+            'candidate_rows_missing_archive_ref':missing_candidate_refs,'contact_rows_missing_archive_ref':missing_contact_refs,
+            'candidate_source_row_refs':candidate_source_row_refs,'candidate_snapshot_row_refs':candidate_snapshot_refs,
+            'contact_source_row_refs':contact_source_row_refs,'contact_snapshot_row_refs':contact_snapshot_refs,
+            'v2_source_rows':v2_archive_rows,'v2_source_memberships':v2_memberships,'duplicated_contact_raw_payloads':raw_contacts,
+            'checksum':archived_sha,'archive_path':str(archive),'persisted':True}
+
     def identity(self,row,kind,path):
         original=str(row.get('candidate_id') or row.get('source_candidate_id') or row.get('profile_id') or '')
         if original in self.ids: return original,False
@@ -205,8 +331,14 @@ class Migrator:
         return result
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--url',required=True);p.add_argument('--all-sources',action='store_true');p.add_argument('--cloud-snapshot');p.add_argument('--report',default='docs/rebuild/migration-reconciliation.json');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--url',required=True);p.add_argument('--all-sources',action='store_true');p.add_argument('--cloud-snapshot');p.add_argument('--lean-operational-snapshot');p.add_argument('--archive-manifest');p.add_argument('--report',default='docs/rebuild/migration-reconciliation.json');a=p.parse_args()
     db=Database(a.url);db.initialize();m=Migrator(db)
+    if a.lean_operational_snapshot:
+        if not a.archive_manifest:p.error('--archive-manifest is required with --lean-operational-snapshot')
+        result=m.lean_operational_snapshot(a.lean_operational_snapshot,archive_manifest=a.archive_manifest,
+            expected={'candidates':{'company':71325,'hotel':15262},'contacts':52077,'isolated_rows':392,'source_memberships':2173051})
+        Path(a.report).write_text(json.dumps(result,indent=2))
+        print(json.dumps(result,indent=2));return
     m.sqlite(Path('data/phase7_candidates.db'))
     m.sqlite(Path('data/hotel_candidates.db'),'hotel')
     if a.cloud_snapshot:m.sqlite(Path(a.cloud_snapshot),priority=True)

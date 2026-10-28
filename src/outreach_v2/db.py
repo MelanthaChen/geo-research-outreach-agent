@@ -21,13 +21,15 @@ candidates = table('candidates', col('id', String, primary_key=True), col('kind'
     col('name', nullable=False), col('website'), col('domain', String, index=True), col('industry'), col('location'),
     col('description'), col('website_status', String, default='UNKNOWN'), col('qualification', String, default='UNKNOWN'),
     col('geography', String, default='UNKNOWN'), col('suppressed', Boolean, nullable=False, default=False),
-    col('source', String), col('personalization', default='{}'), col('personalization_status', String, default='INCOMPLETE'),
+    col('source', String), col('source_ref', String), col('source_checksum', String),
+    col('personalization', default='{}'), col('personalization_status', String, default='INCOMPLETE'),
     col('personalization_at'), col('personalization_error'), col('fixture', Boolean, default=False, nullable=False),
     col('created_at', nullable=False), col('updated_at', nullable=False))
 contacts = table('contacts', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
     col('kind', String), col('email', String, index=True), col('url'), col('source_url'), col('evidence'),
-    col('verification', String), col('purpose'), col('suppressed', Boolean, default=False, nullable=False), col('raw'))
+    col('verification', String), col('purpose'), col('suppressed', Boolean, default=False, nullable=False),
+    col('source_ref', String), col('source_checksum', String), col('raw'))
 sources = table('sources', col('id', String, primary_key=True), col('path'), col('relation'), col('fingerprint'),
     col('expected', Integer), col('processed', Integer, default=0), col('status'), col('updated_at'))
 source_rows = table('source_rows', col('id', String, primary_key=True),
@@ -83,6 +85,9 @@ Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candid
 
 MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'submissions': {'identity_provider': 'TEXT', 'identity_verified_email': 'TEXT', 'identity_reference': 'TEXT'}
+}), (2, 'lean-operational-evidence-references', {
+    'candidates': {'source_ref': 'TEXT', 'source_checksum': 'TEXT'},
+    'contacts': {'source_ref': 'TEXT', 'source_checksum': 'TEXT'}
 })]
 
 class Database:

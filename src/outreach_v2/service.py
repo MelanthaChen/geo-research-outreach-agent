@@ -75,6 +75,18 @@ def detail(db,ident):
         from .db import source_rows
         row['evidence']=[dict(r) for r in c.execute(select(source_rows.c.source_id,source_rows.c.source_key,source_rows.c.raw).where(source_rows.c.candidate_id==ident).limit(30)).mappings()]
         for evidence in row['evidence']:evidence['raw']=unpack(evidence['raw'])
+        if not row['evidence']:
+            # Lean cloud imports retain the observed invitation evidence and stable
+            # archive references without copying every historical source payload.
+            row['evidence']=[{'source_id':row.get('source'),'source_key':'Operational evidence summary',
+                'raw':dump({'record_type':'LEAN_OPERATIONAL_EVIDENCE_SUMMARY','candidate_id':ident,
+                    'source_path':row.get('source'),'source_archive_row_ref':row.get('source_ref'),
+                    'source_row_checksum':row.get('source_checksum'),'website':row.get('website'),
+                    'website_status':row.get('website_status'),'qualification':row.get('qualification'),
+                    'personalization_sources':row['personalization'].get('source_urls',[]),
+                    'contacts':[{'source_ref':x.get('source_ref'),'source_checksum':x.get('source_checksum'),
+                        'source_url':x.get('source_url'),'evidence':x.get('evidence'),
+                        'verification':x.get('verification')} for x in row['contacts']]})}]
         return row
 
 def eligible_recipient(c,row):

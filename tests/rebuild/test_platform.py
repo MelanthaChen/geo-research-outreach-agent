@@ -1,13 +1,13 @@
-import csv,io,json,zipfile,sqlite3,threading
+import csv,io,json,zipfile,sqlite3,threading,hashlib,shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,now
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,now,sources,source_rows,source_memberships
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
-from outreach_v2.migrate import Migrator,dump
+from outreach_v2.migrate import Migrator,dump,pack,sha
 from outreach_v2.worker import tick
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,verified_form_rows,VerifiedFormResponse
 
@@ -136,7 +136,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==1
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==2
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -192,3 +192,57 @@ def test_migration_preserves_hotels_and_resume(db,tmp_path):
 
 def test_operational_destination_cannot_be_imported(db):
     with pytest.raises(ValueError,match='operational database'):Migrator(db).sqlite(Path(db.engine.url.database))
+
+def test_lean_snapshot_import_keeps_archive_refs_without_duplicate_payloads(tmp_path):
+    source_path=tmp_path/'reconciled.db';archive_path=tmp_path/'protected-archive.db';manifest_path=tmp_path/'archive-manifest.json'
+    source=Database('sqlite:///'+str(source_path));source.initialize()
+    raw='{"name":"Example","website":"https://example.test"}';checksum=sha(raw)
+    p={'data_classification':'OBSERVED','business_description':'Example business description.',
+       'company_strength':'The homepage describes its service.','source_urls':['https://example.test'],
+       'retrieved_at':now(),'recommendations':[{'title':'Page title','problem':'No page title.','suggestion':'Add a clear title.',
+       'source_urls':['https://example.test'],'observed_at':now()}]}
+    with source.transaction() as c:
+        c.execute(candidates.insert().values(id='company-1',kind='company',name='Example',website='https://example.test',
+            domain='example.test',industry='Software',location='Boston',description=p['business_description'],website_status='VERIFIED',
+            qualification='ELIGIBLE',geography='UNKNOWN',suppressed=False,source='source.db',personalization=dump(p),
+            personalization_status='READY',fixture=False,created_at=now(),updated_at=now()))
+        c.execute(contacts.insert().values(id='contact-1',candidate_id='company-1',kind='EMAIL',email='hello@example.test',
+            source_url='https://example.test/contact',evidence='Published contact page',verification='VERIFIED',
+            purpose='business',suppressed=False,raw=raw))
+        c.execute(sources.insert().values(id='source-1',path='source.db',relation='candidates',fingerprint='f',expected=1,
+            processed=1,status='COMPLETE',updated_at=now()))
+        c.execute(source_rows.insert().values(id='archive-row-1',source_id='source-1',source_key='company-1',candidate_id='company-1',
+            disposition='PRESERVED',reason='',checksum=checksum,raw=pack(raw)))
+        c.execute(source_memberships.insert().values(id='membership-1',source_id='source-1',offset=0,count=1,payload=b'archived'))
+    with source.engine.connect() as c:c.exec_driver_sql('PRAGMA wal_checkpoint(TRUNCATE)')
+    source.engine.dispose();shutil.copy2(source_path,archive_path);archive_path.chmod(0o600)
+    digest=hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps({'source_snapshot':str(archive_path),'bytes':archive_path.stat().st_size,
+        'sha256':digest,'sqlite_integrity_check':'ok'}))
+    target=Database('sqlite:///'+str(tmp_path/'target.db'));target.initialize()
+    result=Migrator(target).lean_operational_snapshot(archive_path,archive_manifest=manifest_path,
+        expected={'candidates':{'company':1},'contacts':1,'isolated_rows':0,'source_memberships':1})
+    with target.transaction() as c:
+        imported=c.execute(select(candidates).where(candidates.c.id=='company-1')).mappings().one()
+        contact=c.execute(select(contacts).where(contacts.c.id=='contact-1')).mappings().one()
+        assert c.scalar(select(func.count()).select_from(source_rows))==0
+        assert c.scalar(select(func.count()).select_from(source_memberships))==0
+        assert c.scalar(select(func.count()).select_from(sources))==1
+    assert imported['source_ref']=='source_row:archive-row-1' and imported['source_checksum']==checksum
+    assert contact['source_ref']=='source_row:archive-row-1' and contact['raw'] is None
+    assert result['candidates']=={'company':1} and result['contacts']==1
+    assert result['source_archive_rows_preserved_outside_v2']==1 and result['v2_source_rows']==0
+
+def test_v1_personalization_backfill_is_bounded_and_resumable(db):
+    from outreach_v2.personalization import backfill
+    candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
+        personalization=False,fixture=False)
+    page='<h1>Example services</h1><p>Example provides software services to small businesses and explains its core product offering.</p>'
+    fetch=lambda url:('https://example.com/',page)
+    with pytest.raises(ValueError,match='between 1 and 100'):backfill(db,limit=101,fetcher=fetch)
+    result=backfill(db,limit=1,fetcher=fetch)
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id=='real-backfill')).mappings().one()
+    assert result=={'completed':1,'incomplete':0}
+    assert row['personalization_status']=='READY' and row['personalization']!='{}'
+    assert backfill(db,limit=1,fetcher=fetch)=={'completed':0,'incomplete':0}

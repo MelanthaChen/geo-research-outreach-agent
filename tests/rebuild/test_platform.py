@@ -1,9 +1,10 @@
 import csv,io,json,zipfile,sqlite3,threading,hashlib,shutil
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,now,sources,source_rows,source_memberships
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,worker_runs,now,sources,source_rows,source_memberships
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
 from outreach_v2.template import render,BULK_SUBJECT
@@ -39,11 +40,12 @@ def count(db,table):
     with db.transaction() as c:return c.scalar(select(func.count()).select_from(table))
 
 def test_two_recipient_package_and_exact_binding(db):
-    candidate(db);candidate(db,'b','yuxaun.chen.1031@outlook.com','https://whisker-haven-demo.vercel.app','Whisker Haven')
+    candidate(db);candidate(db,'b','yuxaun.chen.1031@outlook.com','https://whisker-haven-demo.vercel.app/','Whisker Haven')
     batch=invite(db,['a','b']);z=zipfile.ZipFile(io.BytesIO(batch['package']))
     rows=list(csv.DictReader(io.StringIO(z.read('invitations.csv').decode('utf-8-sig'))))
     assert len(rows)==2
     assert [(r['company_name'],r['recipient_email']) for r in rows]==[('GeoAIResume','yuxuan.chen.1031@outlook.com'),('Whisker Haven','yuxaun.chen.1031@outlook.com')]
+    assert len({r['invitation_reference'] for r in rows})==2
     from openpyxl import load_workbook
     workbook=load_workbook(io.BytesIO(z.read('invitations.xlsx')))
     assert list(rows[0])==[c.value for c in workbook.active[1]]
@@ -51,10 +53,20 @@ def test_two_recipient_package_and_exact_binding(db):
     import re
     fields=re.findall('MERGEFIELD (body_paragraph_\\d+)',xml)
     assert fields and set(fields)<=set(rows[0])
+    from docx import Document
+    preview=Document(io.BytesIO(z.read('personalized-previews.docx')))
+    preview_text='\n'.join(p.text for p in preview.paragraphs)
     for r in rows:
         assert r['invitation_reference'] in r['email_body'] and r['questionnaire_url'] in r['email_body']
         assert r['bulk_subject']==BULK_SUBJECT
         assert r['Email Address']==r['recipient_email']
+        assert r['company_name'] in preview_text and r['recipient_email'] in preview_text
+        assert r['email_subject'] in preview_text and r['invitation_reference'] in preview_text
+        assert r['questionnaire_url'] in preview_text and r['bulk_subject'] in preview_text
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).order_by(invitations.c.candidate_id)).mappings().all()
+        assert [json.loads(x['authority'])['method'] for x in saved]==['OWNER_BINDING','OWNER_BINDING']
+        assert [x['website'] for x in saved]==['https://geo-ai-resume.vercel.app','https://whisker-haven-demo.vercel.app/']
     assert batch['send_status']=='UNVERIFIED'
     assert invite(db,['a','b'])['package']==batch['package']
     assert count(db,invitations)==2
@@ -83,11 +95,20 @@ def test_unknown_reference_and_company_scope_block(db):
     row=response(db);row['Business Website']='https://other.example'
     assert process(db,row)=='BLOCKED_SCOPE';assert count(db,jobs)==0
 
+def test_historical_reference_does_not_authorize_clean_invitation(db):
+    candidate(db);invite(db);row=response(db);row['Invitation Reference']='historical-response-reference'
+    assert process(db,row)=='BLOCKED_REFERENCE';assert count(db,jobs)==0
+
 def test_owner_consent_is_automatic_and_duplicate_safe(db):
     candidate(db);invite(db);row=response(db)
     assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
     assert process(db,row)=='DUPLICATE';row['Timestamp']='10/27/2026 22:31:00'
     assert process(db,row)=='DUPLICATE_CONSENT';assert count(db,jobs)==1
+
+def test_withdrawn_candidate_cannot_create_research_job(db):
+    candidate(db);invite(db)
+    with db.transaction() as c:c.execute(candidates.update().values(suppressed=True))
+    assert process(db,response(db))=='WITHDRAWN';assert count(db,jobs)==0
 
 def test_foreign_representative_does_not_redirect_report(db):
     candidate(db);invite(db);row=response(db,email='someone@other.example')
@@ -164,6 +185,34 @@ def test_auth_sessions_csrf_restart_and_private_endpoints(db,monkeypatch):
     assert restarted.post('/api/auth/logout',headers={'X-CSRF-Token':csrf}).status_code==200
     assert client.get('/api/candidates').status_code==401
 
+def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch):
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    token='test-worker-token-'+('x'*32)
+    monkeypatch.setenv('OUTREACH_WORKER_TOKEN',token)
+    with db.worker_lock() as acquired:assert acquired is False
+    offline=TestClient(create_app(db))
+    assert offline.post('/api/internal/worker-tick',headers={'Authorization':'Bearer '+token},json={}).status_code==503
+    db.postgres=True
+    locked=True
+    @contextmanager
+    def lock():yield locked
+    monkeypatch.setattr(db,'worker_lock',lock)
+    observed=[]
+    monkeypatch.setattr('outreach_v2.worker.tick',lambda database,max_jobs:observed.append((database,max_jobs)) or {'worker_run_id':'run-test','status':'COMPLETED','processed_stages':0,'errors':[]})
+    client=TestClient(create_app(db))
+    assert client.post('/api/internal/worker-tick',json={}).status_code==401
+    headers={'Authorization':'Bearer '+token}
+    assert client.post('/api/internal/worker-tick',headers=headers,content=b' '*1025).status_code==413
+    assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':11}).status_code==400
+    assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':'1'}).status_code==400
+    assert client.post('/api/internal/worker-tick',headers=headers,json={'unexpected':True}).status_code==400
+    response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':4})
+    assert response.status_code==200 and response.json()['worker_run_id']=='run-test'
+    assert observed==[(db,4)]
+    locked=False
+    assert client.post('/api/internal/worker-tick',headers=headers,json={}).status_code==409
+
 class EmptySheets:
     def read(self):return []
 
@@ -175,6 +224,25 @@ def test_scheduler_configuration_failure_is_truthful(db):
     with db.transaction() as c:
         assert c.scalar(select(jobs.c.status))=='BLOCKED_CONFIGURATION'
         assert c.scalar(select(jobs.c.completed_at)) is None
+    assert count(db,reports)==0 and count(db,deliveries)==0
+
+def test_worker_consent_intake_automatically_creates_job_without_research_execution(db,monkeypatch):
+    candidate(db);invite(db)
+    submitted=response(db)
+    class ConsentSheets:
+        def read(self):return [VerifiedFormResponse(submitted,{'provider':'OWNER_BINDING','email':'yuxuan.chen.1031@outlook.com'})]
+    def forbidden_engine():pytest.fail('Research provider must remain disabled in this test')
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
+    result=tick(db,sheets=ConsentSheets(),engine_factory=forbidden_engine)
+    assert result['status']=='ATTENTION_REQUIRED'
+    with db.transaction() as c:
+        invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='a')).mappings().one()
+        sub=c.execute(select(submissions).where(submissions.c.reference==invitation['reference'])).mappings().one()
+        job=c.execute(select(jobs).where(jobs.c.invitation_id==invitation['id'])).mappings().one()
+        assert sub['status']=='AUTHORIZED'
+        assert job['stage']=='RESEARCH' and job['status']=='BLOCKED_CONFIGURATION'
+        run=c.execute(select(worker_runs).where(worker_runs.c.id==result['worker_run_id'])).mappings().one()
+        assert run['finished_at'] is not None
     assert count(db,reports)==0 and count(db,deliveries)==0
 
 def test_migration_preserves_hotels_and_resume(db,tmp_path):

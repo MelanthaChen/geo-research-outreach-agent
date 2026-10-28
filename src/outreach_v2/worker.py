@@ -47,6 +47,8 @@ def validate_result(result,inv,job):
 
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
+    if os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()!='true':
+        raise ConfigurationBlocked('GEO research execution is disabled pending provider authorization and an approved budget')
     engine=engine_factory()
     result=engine.reconcile(job['idempotency_key'])
     if result is None:
@@ -156,7 +158,7 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
                     transition(c,job['id'],status=status,error=error,next_attempt_at=later(min(3600,60*2**min(job['attempts'],6))))
         finally:
             with db.transaction() as c:c.execute(jobs.update().where(jobs.c.id==job['id'],jobs.c.lease_token==job['lease_token']).values(lease_until=None,lease_token=None))
-    result={'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors}
+    result={'worker_run_id':run_id,'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors}
     with db.transaction() as c:c.execute(worker_runs.update().where(worker_runs.c.id==run_id).values(finished_at=now(),status=result['status'],detail=dump(result)))
     return result
 

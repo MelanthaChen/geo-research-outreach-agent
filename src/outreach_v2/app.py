@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json,os,uuid
+import hmac,json,os,uuid
 from pathlib import Path
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
@@ -20,7 +20,7 @@ def create_app(database=None):
     async def protect(request,call_next):
         path=request.url.path
         try:
-            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session'}:
+            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick'}:
                 current=auth.session(db,request.cookies.get(COOKIE))
                 if not current:return JSONResponse({'error':'Your administrator session has expired. Please sign in.'},401)
                 request.state.session=current
@@ -127,4 +127,36 @@ def create_app(database=None):
             'report_sender':os.environ.get('OUTREACH_REPORT_SENDER'),
             'report_delivery_configured':all(os.environ.get(k) for k in ['OUTREACH_REPORT_SENDER','OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET']),
             'last_worker_run':dict(run) if run else None}
+    @app.post('/api/internal/worker-tick')
+    async def scheduled_worker_tick(request:Request):
+        expected=os.environ.get('OUTREACH_WORKER_TOKEN','')
+        supplied=request.headers.get('authorization','')
+        if len(expected)<32 or not hmac.compare_digest(supplied,'Bearer '+expected):
+            raise HTTPException(status_code=401,detail='Worker authentication required')
+        if not db.postgres:
+            raise HTTPException(status_code=503,detail='Scheduled worker requires PostgreSQL durable locking')
+        try:
+            if int(request.headers.get('content-length','0'))>1024:
+                raise HTTPException(status_code=413,detail='Worker request is too large')
+            raw=bytearray()
+            async for chunk in request.stream():
+                if len(raw)+len(chunk)>1024:
+                    raise HTTPException(status_code=413,detail='Worker request is too large')
+                raw.extend(chunk)
+            body=json.loads(raw or b'{}')
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400,detail='Invalid worker request')
+        if not isinstance(body,dict) or set(body)-{'max_jobs'}:
+            raise HTTPException(status_code=400,detail='Invalid worker request')
+        max_jobs=body.get('max_jobs',10)
+        if type(max_jobs) is not int:
+            raise HTTPException(status_code=400,detail='Invalid worker limit')
+        if not 1<=max_jobs<=10:
+            raise HTTPException(status_code=400,detail='Worker limit must be between 1 and 10')
+        from .worker import tick
+        with db.worker_lock() as acquired:
+            if not acquired:
+                raise HTTPException(status_code=409,detail='A worker invocation is already running')
+            result=tick(db,max_jobs=max_jobs)
+        return result
     return app

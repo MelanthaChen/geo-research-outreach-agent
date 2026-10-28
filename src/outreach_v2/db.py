@@ -136,6 +136,20 @@ class Database:
             except BaseException:
                 c.rollback()
                 raise
+    @contextmanager
+    def worker_lock(self):
+        """Hold a PostgreSQL session lock for the full scheduler invocation."""
+        if not self.postgres:
+            yield False
+            return
+        with self.engine.connect() as c:
+            acquired = bool(c.scalar(text('SELECT pg_try_advisory_lock(824761933)')))
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    c.execute(text('SELECT pg_advisory_unlock(824761933)'))
+                    c.commit()
     def upsert(self, c, relation, rows, keys=('id',), update=True):
         if not rows: return
         if self.postgres:

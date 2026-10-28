@@ -6,7 +6,7 @@ The existing Neon database measured 741,523,456 bytes before migration. Its larg
 
 A rollback-only PostgreSQL sample used 2,000 representative V2 candidates and 2,000 contacts. It measured 892,928 bytes for candidates, including the primary key and domain index, and 1,687,552 bytes for contacts, including the primary key, candidate ID index, and email index. Extrapolated to 86,587 candidates and 52,077 contacts, that is 82,599,301 bytes before the additive archive-reference fields and the composite candidate filter index. The sample omitted the contact `raw` JSON because that payload duplicates the backed-up source archive.
 
-The 244 saved V1 personalizations average 2,493.5 bytes (2,412-byte median, 2,772-byte p95, 3,533-byte maximum). The remaining 19,641 currently eligible candidates can be processed by the existing resumable V1 backfill in calls of at most 100 websites. Even budgeting 3,533 bytes for every missing personalization adds about 69.4 MB before PostgreSQL compression. The lean operational copy, reference fields, indexes, workflow tables, and this conservative future V1 allowance are expected to stay below the existing Free database's remaining 258,476,544 bytes. Actual PostgreSQL sizes are checked again after import before any Render switch.
+The 244 saved V1 personalizations average 2,493.5 bytes (2,412-byte median, 2,772-byte p95, 3,533-byte maximum). The remaining 19,641 currently eligible candidates can be processed by the existing resumable V1 backfill in calls of at most 100 websites. Even budgeting 3,533 bytes for every missing personalization adds about 69.4 MB before PostgreSQL compression. This was a pre-import estimate only. The actual Neon size and persisted row counts were measured after import and are recorded below.
 
 ## What the cloud import stores
 
@@ -29,3 +29,12 @@ PostgreSQL text cannot store an embedded NUL byte. The reconciled snapshot conta
 To verify or recover the archive, use the protected snapshot path and manifest above. Recompute the file SHA-256 and compare it to the manifest, then run `sqlite3 <snapshot-path> 'PRAGMA integrity_check;'` and verify the listed table counts. For operational recovery, rerun `python -m outreach_v2.migrate --url <existing-neon-url> --lean-operational-snapshot <snapshot-path> --archive-manifest <manifest-path> --report <report-path>` from this feature branch. Supply the existing Neon URL through the protected operator environment; never put it in the command history or report. The separately saved PostgreSQL custom-format backup at `rebuild-backup-20261027/neon-operational-before-outreach-v2.dump` can restore the pre-migration legacy database if an operator ever needs to recover it.
 
 This is a protected local archive on the owner's machine, not an offsite cloud archive. No new object-storage service has been added. The complete source data is recoverable from this backed-up location while a shared remote archive destination remains unapproved.
+
+
+## Verified live import (2026-10-28)
+
+The additive import is installed in the existing Neon `outreach` database under `outreach_v2`; no legacy public tables were dropped or overwritten. Direct PostgreSQL verification after the live package-generation test confirmed 71,325 companies, 15,262 hotels, 52,077 contacts, 355 sources, 244 saved V1 personalizations, and zero imported fixture candidates. Candidate/contact source references and checksums are all present. The operational source-row and source-membership tables are empty by design; the complete source archive and the 392 isolated historical test/workflow rows remain in the protected local snapshot and manifest.
+
+The database measured 741,523,456 bytes before migration and 839,122,944 bytes after migration. The pre-migration custom-format backup at `rebuild-backup-20261027/neon-operational-before-outreach-v2.dump` is 69,480,248 bytes and passed `pg_restore --list`.
+
+Render staging now connects to this migrated database. One live Invitation V1 batch and invitation row were created through the dashboard. The batch stored the agreed shared subject and remains `UNVERIFIED`; no message was sent.

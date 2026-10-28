@@ -5,6 +5,7 @@ from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
 from .db import Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now
 from . import auth,service
 from .migrate import dump
@@ -157,6 +158,9 @@ def create_app(database=None):
         with db.worker_lock() as acquired:
             if not acquired:
                 raise HTTPException(status_code=409,detail='A worker invocation is already running')
-            result=tick(db,max_jobs=max_jobs)
+            # The durable tick performs bounded network and database I/O. Keep
+            # it off the ASGI event loop so health checks and other requests can
+            # continue while a batch is running.
+            result=await run_in_threadpool(tick,db,max_jobs=max_jobs)
         return result
     return app

@@ -171,7 +171,7 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
         # Existing scheduled worker doubles as a bounded, pre-consent V1
         # personalization checkpoint. This path never contacts the GEO Engine.
         from .personalization import backfill
-        personalization_backfill=backfill(db,limit=12,concurrency=4,time_budget_seconds=150)
+        personalization_backfill=backfill(db,limit=12,concurrency=4,time_budget_seconds=25)
         processed+=personalization_backfill['attempted']
     except Exception:
         personalization_error='Bounded candidate batch failed; claimed candidates remain recoverable'

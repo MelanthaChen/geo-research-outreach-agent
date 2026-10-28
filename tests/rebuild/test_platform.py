@@ -15,13 +15,21 @@ from outreach_agent.google_forms_integration import parse_sheet_row
 
 @pytest.fixture
 def db(tmp_path):
+    import os
+    os.environ.setdefault('OUTREACH_RESEARCHER_NAME','Yuxuan Chen')
+    os.environ.setdefault('OUTREACH_UNIVERSITY_AFFILIATION','Northeastern University')
+    os.environ.setdefault('OUTREACH_REPLY_TO','chen.yuxuan9@northeastern.edu')
     result=Database('sqlite:///'+str(tmp_path/'test.db'));result.initialize();return result
 
 def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=True):
-    p={'data_classification':'OBSERVED','business_description':'Resume building website.','company_strength':'The page describes resume building features.',
-       'source_urls':[website],'retrieved_at':now(),'recommendations':[{'title':'Page title','problem':'The sampled page has no title.','suggestion':'Add a descriptive page title.','source_urls':[website],'observed_at':now()}]}
+    p={'data_classification':'OBSERVED','business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.',
+       'company_strength':'The homepage heading identifies resume building as the main offering and directly explains the service visitors can use.',
+       'source_urls':[website],'retrieved_at':now(),'evidence':{'visible_text_excerpt':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.'},
+       'recommendations':[{'title':'Clarify page title','problem':'The rendered homepage at / has no non-empty HTML title element.','suggestion':'Add an HTML title for / that names the business and explains its resume-building page topic.','evidence_excerpt':'Observed HTML title element is absent. Visible content describes resume building tools.','source_urls':[website],'observed_at':now()}]}
     with db.transaction() as c:
-        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',fixture=fixture,created_at=now(),updated_at=now()))
+        from outreach_v2.quality import quality_reasons
+        errors=quality_reasons(p) if personalization else ['INSUFFICIENT_EVIDENCE']
+        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',personalization_quality_status='PASS' if not errors else 'FAIL',personalization_quality_errors=dump(errors),fixture=fixture,created_at=now(),updated_at=now()))
         c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
     return ident
 
@@ -214,7 +222,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==4
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==5
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -460,10 +468,28 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert detail.status_code==200 and len(detail.json()['members'])==100
     first_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
     second_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
-    assert first_package.status_code==second_package.status_code==200
+    assert first_package.status_code==second_package.status_code==200, first_package.text
     manifest=json.loads(zipfile.ZipFile(io.BytesIO(first_package.content)).read('manifest.json'))
     assert manifest['count']==100 and manifest['excluded']==[]
     assert first_package.headers['X-Batch-Id']==second_package.headers['X-Batch-Id']
+    assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
+    review_data=client.get(f'/api/admin/pilot-cohorts/{cohort_id}/review')
+    assert review_data.status_code==200 and review_data.json()['actual_recipients']==100
+    first_material=review_data.json()['invitations'][0]
+    assert {'recipient','subject','body','evidence','personalization_quality_status'}<=set(first_material)
+    assert review_data.json()['status']=='PENDING_REVIEW'
+    from outreach_v2.db import admin_users
+    reviewer_password='local-reviewer-password-strong'
+    with db.transaction() as c:c.execute(admin_users.insert().values(id='reviewer-1',email='reviewer@example.org',
+        password_hash=PasswordHasher().hash(reviewer_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
+    reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={'email':'reviewer@example.org','password':reviewer_password})
+    assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
+    approved=reviewer.post(f'/api/admin/pilot-cohorts/{cohort_id}/approve',headers={'X-CSRF-Token':review_login.json()['csrf']},
+        json={'package_sha256':review_data.json()['package_sha256'],'confirm_reviewed':True})
+    assert approved.status_code==200 and approved.json()['sent'] is False and approved.json()['send_status']=='READY_TO_SEND'
+    with db.transaction() as c:
+        approved_batch=c.execute(select(batches).where(batches.c.id==first_package.headers['X-Batch-Id'])).mappings().one()
+    assert approved_batch['pilot_review_status']=='APPROVED' and approved_batch['pilot_review_sha256']==review_data.json()['package_sha256']
     assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
     candidate(db,ident='questionnaire-check',email='check@external-example.org',website='https://check.external-example.org',
         name='Questionnaire Check',fixture=False)
@@ -548,7 +574,7 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     from outreach_v2.personalization import backfill, observe
     candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
         personalization=False,fixture=False)
-    page='<html><head><title>Example services</title><meta name="description" content="Example provides software services to small businesses."></head><body><h1>Example services</h1><p>Example provides software services to small businesses and explains its core product offering.</p></body></html>'
+    page='<html><head></head><body><h1>Software for small businesses</h1><p>Example provides software services to small businesses and explains its core product offering in detail for growing teams.</p></body></html>'
     fetch=lambda url:('https://example.com/',page)
     with pytest.raises(ValueError,match='between 1 and 100'):backfill(db,limit=101,fetcher=fetch)
     result=backfill(db,limit=1,fetcher=fetch)
@@ -558,8 +584,8 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     assert result['remaining_backlog']==0
     assert result['failure_categories']=={} and result['permanent_insufficiency']==0
     assert row['personalization_status']=='READY' and row['personalization']!='{}'
-    assert json.loads(row['personalization'])['recommendations'][0]['title']=='Answer common customer questions'
-    assert not any(x['title'] in {'Page title','Page description'} for x in json.loads(row['personalization'])['recommendations'])
+    assert json.loads(row['personalization'])['recommendations'][0]['title']=='Missing page title'
+    assert row['personalization_quality_status']=='PASS'
     partial=observe('https://example.com/',page,now(),truncated=True)
     assert partial['evidence']['content_sample_truncated'] is True
     assert backfill(db,limit=1,fetcher=fetch)['attempted']==0
@@ -582,7 +608,7 @@ def test_personalization_backfill_claims_distinct_domains_and_persists_transient
     candidate(db,ident='batch-a',email='hello@batch-a.example',website='https://batch-a.example',name='Batch A',personalization=False,fixture=False)
     candidate(db,ident='batch-b',email='hello@batch-b.example',website='https://batch-b.example',name='Batch B',personalization=False,fixture=False)
     candidate(db,ident='batch-c',email='hello@batch-a.example',website='https://www.batch-a.example',name='Batch A duplicate domain',personalization=False,fixture=False)
-    page='<html><head><title>Company</title><meta name="description" content="A company that provides a factual service to its customers."></head><body><h1>Company</h1><p>This company provides useful services to customers in the local community.</p></body></html>'
+    page='<html><head></head><body><h1>Resume writing and career profiles</h1><p>This company provides resume writing and career profile services to job seekers in the local community.</p></body></html>'
     def transient(url):
         if 'batch-b' in url:raise httpx.ReadTimeout('temporary timeout')
         return url,page
@@ -676,12 +702,13 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
 def test_invitation_content_preserves_legitimate_braces_and_flags_only_template_placeholders():
     from copy import deepcopy
     from outreach_v2.template import render
-    p={'data_classification':'OBSERVED','business_description':'A page with JSON-like content.',
-       'company_strength':'The site publishes {"availability": "open"} as an example.',
-       'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),
+    p={'data_classification':'OBSERVED','business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for job applications. It shows {"availability": "open"} as a sample setting.',
+       'company_strength':'The homepage presents resume building as a named service and explains the main task visitors can complete.',
+       'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),'evidence':{'visible_text_excerpt':'Resume building tools for job seekers.'},
        'introduction':'The observed snippet includes {one or more options}.',
-       'recommendations':[{'title':'Observed {schema} example','problem':'The page shows {"mode": "public"}.',
-         'suggestion':'Keep the {field_name} clear.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+       'recommendations':[{'title':'Observed {schema} example','problem':'The page heading shows {"mode": "public"} and does not explain how visitors choose a suitable template.',
+         'suggestion':'Add a short {field_name} heading that explains how a visitor selects a resume template for a particular role.',
+         'evidence_excerpt':'The visible heading contains {"mode": "public"} and says Resume templates; no selection guidance follows it.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
     original=deepcopy(p)
     _,body=render('GeoAIResume','https://geo-ai-resume.vercel.app',p,'https://forms.example/form','GEO-EXAMPLE',True)
     assert '{"availability": "open"}' in body
@@ -714,11 +741,51 @@ def test_mixed_invitation_batch_excludes_invalid_personalization_and_is_idempote
     with db.transaction() as c:
         assert c.scalar(select(invitations.c.reference).where(invitations.c.candidate_id=='valid'))==manifest['invitations'][0]['invitation_reference']
 
+def test_historical_ready_personalization_is_rechecked_at_export_even_with_stale_pass_flag(db):
+    candidate(db,'historical-ready')
+    poor={'data_classification':'OBSERVED','business_description':'The bounded sample contains factual business and service information.',
+        'company_strength':'The bounded sample contains factual business and service information.',
+        'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),
+        'recommendations':[{'title':'Generic','problem':'No meaningful issue was observed.','suggestion':'Improve your website for AI visibility.',
+            'evidence_excerpt':'No evidence.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    with db.transaction() as c:c.execute(candidates.update().where(candidates.c.id=='historical-ready').values(
+        personalization=dump(poor),personalization_status='READY',personalization_quality_status='PASS',personalization_quality_errors='[]'))
+    with pytest.raises(ValueError,match='No eligible invitations') as error:
+        generate(db,{'ids':['historical-ready']},'historical-ready-quality-recheck-key')
+    assert 'GENERIC_STRENGTH' in str(error.value) and 'GENERIC_RECOMMENDATION' in str(error.value)
+    assert count(db,batches)==0 and count(db,invitations)==0
+
 def test_all_invalid_invitation_batch_rolls_back_without_partial_records(db):
     candidate(db,'invalid-only',personalization=False)
     with pytest.raises(ValueError,match='No eligible invitations'):
         generate(db,{'ids':['invalid-only']},'all-invalid-invitation-request')
     assert count(db,batches)==0 and count(db,invitations)==0
+
+def test_exported_unsent_invitation_correction_is_versioned_and_preserves_original(db):
+    from outreach_v2.db import invitation_corrections
+    from outreach_v2.service import create_invitation_correction,approve_invitation_correction
+    from sqlalchemy import update
+    candidate(db,'correction-candidate','owner@example.org',website='https://example.org',name='Example Company',fixture=False)
+    batch=invite(db,['correction-candidate'],key='versioned-correction-source-key')
+    with db.transaction() as c:
+        original=c.execute(select(invitations).where(invitations.c.candidate_id=='correction-candidate')).mappings().one()
+        c.execute(batches.update().where(batches.c.id==batch['id']).values(send_status='NOT_SENT'))
+        c.execute(invitations.update().where(invitations.c.id==original['id']).values(send_status='NOT_SENT'))
+    with pytest.raises(ValueError,match='attestation'):
+        create_invitation_correction(db,original['id'],'admin@example.org',attest_not_sent=False)
+    draft=create_invitation_correction(db,original['id'],'admin@example.org',attest_not_sent=True)
+    approved=approve_invitation_correction(db,draft['id'],'reviewer@example.org',draft['sha256'])
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).where(invitations.c.id==original['id'])).mappings().one()
+        correction=c.execute(select(invitation_corrections).where(invitation_corrections.c.id==draft['id'])).mappings().one()
+    assert saved['body']==original['body'] and saved['reference']==original['reference']
+    assert draft['status']=='PENDING_REVIEW' and correction['status']=='APPROVED' and correction['version']==2
+    assert correction['proposed_sha256']==draft['sha256'] and correction['source_sha256']
+    with zipfile.ZipFile(io.BytesIO(approved['package'])) as package:
+        assert 'correction-version.json' in package.namelist() and 'invitation-mail-merge.docx' in package.namelist()
+        version=json.loads(package.read('correction-version.json'))
+        assert version['invitation_reference']==original['reference'] and version['corrected_sha256']==draft['sha256']
+    assert count(db,invitation_corrections)==1
 
 def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_package(db,monkeypatch):
     from copy import deepcopy
@@ -728,10 +795,13 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     from outreach_v2.app import create_app
     candidate(db,'package-valid','yuxuan.chen.1031@outlook.com',name='Brace Company',website='https://geo-ai-resume.vercel.app')
     candidate(db,'package-invalid','invalid@ordinary.example',name='Incomplete Company',website='https://ordinary.example',fixture=False)
-    valid_personalization={'data_classification':'OBSERVED','business_description':'The page documents {"mode": "public"}.',
-        'company_strength':'It presents {verified examples}.','source_urls':['https://geo-ai-resume.vercel.app'],
-        'retrieved_at':now(),'recommendations':[{'title':'Observed {schema} example','problem':'The page shows {field: value}.',
-            'suggestion':'Keep the {field} label consistent.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    valid_personalization={'data_classification':'OBSERVED','business_description':'Brace Company publishes a service page describing its product using an example configuration shown to visitors.',
+        'company_strength':'Its service page uses a concrete {verified examples} configuration to explain how the product handles a visitor supplied setting.',
+        'evidence':{'visible_text_excerpt':'The page shows {"mode": "public"} as an example configuration.'},'source_urls':['https://geo-ai-resume.vercel.app'],
+        'retrieved_at':now(),'recommendations':[{'title':'Explain configuration example','problem':'The service page shows a {"mode": "public"} example and a {field: value} pair without saying what the mode controls.',
+            'suggestion':'Add a sentence below the example explaining when a visitor should use the public mode.',
+            'evidence_excerpt':'Visible example: {"mode": "public"}. No explanatory sentence appears beside the example.',
+            'source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
     with db.transaction() as c:
         c.execute(candidates.update().where(candidates.c.id=='package-valid').values(personalization=dump(valid_personalization)))
         c.execute(candidates.update().where(candidates.c.id=='package-invalid').values(personalization=dump({

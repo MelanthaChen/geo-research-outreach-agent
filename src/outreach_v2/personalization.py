@@ -18,6 +18,7 @@ from .db import candidates, contacts, events, invitations, now
 from .migrate import dump
 from .service import email_contacts
 from .template import same_site, validate
+from .quality import CODE_MARKERS
 
 MAX_PAGE_BYTES = 512_000
 # A fourth same-site page gives evidence-limited companies another grounded
@@ -85,9 +86,30 @@ def fetch_page(url):
 
 def _page_text(html):
     soup = BeautifulSoup(html, 'html.parser')
-    for tag in soup(['script', 'style', 'nav', 'footer', 'noscript']):
+    # Site builders often place large app state, hydration payloads and editor
+    # templates beside the rendered page. Never treat those as visible copy.
+    structured=[]
+    for script in soup.find_all('script', attrs={'type': re.compile(r'application/ld\+json',re.I)}):
+        try:
+            import json
+            payload=json.loads(script.string or script.get_text())
+            nodes=payload if isinstance(payload,list) else [payload]
+            for node in nodes:
+                if isinstance(node,dict):
+                    for key in ('name','description','slogan'):
+                        if isinstance(node.get(key),str): structured.append(node[key])
+        except (ValueError,TypeError):
+            pass
+    for tag in soup(['script', 'style', 'template', 'noscript', 'svg', 'canvas', 'iframe', 'object', 'embed', 'nav', 'footer', 'code', 'pre']):
         tag.decompose()
-    return soup, soup.get_text(' ', strip=True)
+    for tag in soup.find_all(True):
+        style=(tag.get('style') or '').replace(' ','').lower()
+        if tag.has_attr('hidden') or tag.get('aria-hidden')=='true' or 'display:none' in style or 'visibility:hidden' in style:
+            tag.decompose()
+    text=' '.join(soup.get_text(' ', strip=True).split())
+    if structured:
+        text=' '.join(dict.fromkeys([text,*structured]))
+    return soup, text
 
 
 def _evidence_urls(home_url, html):
@@ -118,6 +140,7 @@ def observe(url, html, stamp, name=None, truncated=False, additional_pages=()):
     for (page_url, _, was_truncated), (soup, body_text) in zip(pages, parsed):
         description_tag = soup.find('meta', attrs={'name': 'description'})
         description = description_tag.get('content', '').strip() if description_tag else ''
+        if CODE_MARKERS.search(description): description=''
         if not description:
             description = next((p.get_text(' ', strip=True) for p in soup.find_all('p')
                                 if 70 <= len(p.get_text(' ', strip=True)) <= 700), '')
@@ -127,13 +150,15 @@ def observe(url, html, stamp, name=None, truncated=False, additional_pages=()):
             descriptions.append(description)
         combined_text.append(body_text)
         if not soup.find('title') or not soup.find('title').get_text(strip=True):
-            rec.append({'title': 'Page title', 'problem': f'The sampled page {urlparse(page_url).path or "/"} has no non-empty HTML title.',
-                         'suggestion': 'Provide a concise title that identifies the business and the page topic.',
-                         'evidence_excerpt': body_text[:400], 'source_urls': [page_url], 'observed_at': stamp})
+            path=urlparse(page_url).path or '/'
+            rec.append({'title': 'Missing page title', 'problem': f'The rendered page at {path} has no non-empty HTML title element.',
+                         'suggestion': f'Add an HTML title for {path} that names the business and this page topic.',
+                         'evidence_excerpt': f'Observed HTML title element is absent at {page_url}. Visible content: {body_text[:250]}', 'source_urls': [page_url], 'observed_at': stamp})
         if not description_tag:
-            rec.append({'title': 'Page description', 'problem': f'The sampled page {urlparse(page_url).path or "/"} has no meta description.',
-                         'suggestion': 'Add an accurate description of the business and the purpose of this page.',
-                         'evidence_excerpt': body_text[:400], 'source_urls': [page_url], 'observed_at': stamp})
+            path=urlparse(page_url).path or '/'
+            rec.append({'title': 'Missing search description', 'problem': f'The rendered page at {path} has no meta description element.',
+                         'suggestion': f'Add a meta description for {path} that accurately summarizes the visible business content.',
+                         'evidence_excerpt': f'Observed meta description is absent at {page_url}. Visible content: {body_text[:250]}', 'source_urls': [page_url], 'observed_at': stamp})
     if not descriptions:
         raise ValueError('A grounded business description cannot yet be established from the sampled same-site pages')
     visible = ' '.join(combined_text)
@@ -153,8 +178,8 @@ def observe(url, html, stamp, name=None, truncated=False, additional_pages=()):
     heading = heading.get_text(' ', strip=True) if heading else ''
     description = descriptions[0]
     return {'data_classification': 'OBSERVED', 'business_description': description,
-            'company_strength': (f'The sampled homepage explicitly presents this heading: “{heading}”.' if heading
-                                 else f'The sampled homepage includes factual descriptive text: “{description[:240]}”.'),
+            'company_strength': (f'The homepage identifies its main offering in the heading “{heading}”, giving visitors a direct description of what the business presents.' if heading
+                                 else f'The homepage description states: “{description[:240]}”, which gives visitors a direct summary of the business offering.'),
             'source_urls': [item[0] for item in pages], 'retrieved_at': stamp,
             'recommendations': rec[:2],
             'evidence': {'description_quote': description, 'heading_quote': heading,
@@ -274,10 +299,12 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
             personalization = _sample(fetcher, row['website'], observed_at)
             validate(personalization, row['website'])
             return row, {'personalization': dump(personalization), 'personalization_status': 'READY',
+                         'personalization_quality_status': 'PASS','personalization_quality_errors':'[]',
                          'personalization_at': observed_at, 'personalization_error': None,
                          'personalization_outcome': 'READY', 'personalization_retry_after': None,
                          'description': personalization['business_description']}, None
         except Exception as exc:
+            from .quality import quality_reasons
             kind = _failure_kind(exc)
             attempts = int(row.get('personalization_attempts') or 0) + 1
             if isinstance(exc, ValueError):
@@ -286,7 +313,10 @@ def backfill(db, limit=25, fetcher=fetch_page, *, concurrency=4, time_budget_sec
                 reason = f'HTTP {exc.response.status_code}'
             else:
                 reason = type(exc).__name__
+            quality_errors=quality_reasons(locals().get('personalization',{})) if 'personalization' in locals() else []
             return row, {'personalization_status': 'INCOMPLETE', 'personalization_at': observed_at,
+                         'personalization_quality_status':'FAIL' if quality_errors else 'UNVERIFIED',
+                         'personalization_quality_errors':dump(quality_errors),
                          'personalization_error': reason, 'personalization_outcome': kind,
                          'personalization_attempts': attempts,
                          'personalization_retry_after': _retry_time(kind, attempts, observed_at)}, kind

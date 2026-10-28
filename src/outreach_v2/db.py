@@ -23,6 +23,7 @@ candidates = table('candidates', col('id', String, primary_key=True), col('kind'
     col('geography', String, default='UNKNOWN'), col('suppressed', Boolean, nullable=False, default=False),
     col('source', String), col('source_ref', String), col('source_checksum', String),
     col('personalization', default='{}'), col('personalization_status', String, default='INCOMPLETE'),
+    col('personalization_quality_status', String, default='UNVERIFIED'), col('personalization_quality_errors', Text, default='[]'),
     col('personalization_at'), col('personalization_error'), col('personalization_outcome'),
     col('personalization_attempts', Integer, nullable=False, default=0, server_default='0'),
     col('personalization_retry_after'), col('personalization_lease_token'), col('personalization_lease_until'),
@@ -45,14 +46,15 @@ source_memberships = table('source_memberships', col('id', String, primary_key=T
 suppressions = table('suppressions', col('email', String, primary_key=True), col('reason'), col('recorded_at'))
 batches = table('batches', col('id', String, primary_key=True), col('request_key', String, unique=True, nullable=False),
     col('selection_hash', String, nullable=False), col('created_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
-    col('send_evidence'), col('send_recorded_at'), col('excluded', default='[]'), col('package', LargeBinary), col('bulk_subject'))
+    col('send_evidence'), col('send_recorded_at'), col('excluded', default='[]'), col('package', LargeBinary), col('bulk_subject'),
+    col('pilot_review_status', String, default='NOT_REQUIRED'), col('pilot_review_sha256'), col('pilot_reviewed_by'), col('pilot_reviewed_at'))
 invitations = table('invitations', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), unique=True, nullable=False),
     Column('batch_id', String, ForeignKey(f'{SCHEMA}.batches.id'), nullable=False, index=True),
     col('reference', String, unique=True, nullable=False), col('recipient', String, nullable=False),
     col('website', nullable=False), col('company_name', nullable=False), col('subject'), col('body'), col('form_url'),
     col('template_version'), col('questionnaire_id'), col('personalization'), col('generated_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
-    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'))
+    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'), col('researcher_name'), col('university_affiliation'), col('reply_to'))
 submissions = table('submissions', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), index=True), col('reference'),
     col('interest'), col('authorization'), col('representative_name'), col('representative_role'), col('representative_email'),
@@ -104,6 +106,11 @@ pilot_members = table('pilot_members', Column('cohort_id', String, ForeignKey(f'
 report_reviews = table('report_reviews', col('id', String, primary_key=True),
     Column('report_id', String, ForeignKey(f'{SCHEMA}.reports.id'), nullable=False, index=True), col('document_sha256', String, nullable=False),
     col('decision', String, nullable=False), col('reviewer_email', String, nullable=False), col('reviewed_at', nullable=False), col('note'))
+invitation_corrections = table('invitation_corrections', col('id', String, primary_key=True),
+    Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), nullable=False, index=True),
+    col('version', Integer, nullable=False), col('source_sha256', String, nullable=False), col('proposed_sha256', String, nullable=False),
+    col('subject'), col('body'), col('recipient'), col('evidence'), col('package', LargeBinary), col('status', String, nullable=False),
+    col('created_by', String, nullable=False), col('created_at', nullable=False), col('approved_by'), col('approved_at'))
 Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candidates.c.qualification)
 
 MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
@@ -122,6 +129,10 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
 }), (4, 'multi-admin-pilot-and-versioned-report-review', {
     'reports': {'approval_required': 'BOOLEAN NOT NULL DEFAULT TRUE'},
     'invitations': {'questionnaire_id': 'TEXT'}
+}), (5, 'evidence-quality-gate-and-versioned-pilot-review', {
+    'candidates': {'personalization_quality_status': "TEXT NOT NULL DEFAULT 'UNVERIFIED'", 'personalization_quality_errors': "TEXT NOT NULL DEFAULT '[]'"},
+    'batches': {'pilot_review_status': "TEXT NOT NULL DEFAULT 'NOT_REQUIRED'", 'pilot_review_sha256': 'TEXT', 'pilot_reviewed_by': 'TEXT', 'pilot_reviewed_at': 'TEXT'},
+    'invitations': {'researcher_name': 'TEXT', 'university_affiliation': 'TEXT', 'reply_to': 'TEXT'}
 })]
 
 class Database:
@@ -155,6 +166,26 @@ class Database:
                         if column_name not in existing:
                             schema = f'{SCHEMA}.' if self.postgres else ''
                             c.execute(text(f'ALTER TABLE {schema}{table_name} ADD COLUMN {column_name} {sql_type}'))
+                if version == 5:
+                    # The release migration assesses existing READY records
+                    # without changing their personalization or invitation history.
+                    from .quality import quality_reasons
+                    import json
+                    rows=c.execute(select(candidates.c.id,candidates.c.personalization,candidates.c.website)
+                        .where(candidates.c.personalization_status=='READY')).mappings().all()
+                    for row in rows:
+                        p={}
+                        try:
+                            p=json.loads(row['personalization'] or '{}') if isinstance(row['personalization'],str) else (row['personalization'] or {})
+                            from .template import validate
+                            validate(p,row['website'])
+                            failures=[]
+                        except (ValueError,TypeError):
+                            failures=quality_reasons(p)
+                            if not failures: failures=['INSUFFICIENT_EVIDENCE']
+                        c.execute(candidates.update().where(candidates.c.id==row['id']).values(
+                            personalization_quality_status='PASS' if not failures else 'FAIL',
+                            personalization_quality_errors=json.dumps(failures,separators=(',',':'))))
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
     @contextmanager
     def transaction(self, *, serialized=False):

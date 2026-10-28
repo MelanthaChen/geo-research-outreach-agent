@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select,func
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
-    admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,candidates as candidate_table)
+    admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,candidates as candidate_table)
 from . import auth,service
 from .migrate import dump
 from outreach_agent.google_forms_integration import FORM_VIEW_URL,INVITATION_REFERENCE_ENTRY
@@ -300,9 +300,96 @@ def create_app(database=None):
                 .order_by(pilot_members.c.position)).all()]
         if len(ids)!=100:raise ValueError('Pilot cohort no longer contains exactly 100 saved members')
         batch=service.generate(db,{'ids':ids},'pilot-cohort-package-'+ident)
+        excluded=json.loads(batch['excluded'])
+        with db.transaction() as c:
+            c.execute(batches.update().where(batches.c.id==batch['id']).values(
+                pilot_review_status='PENDING_REVIEW' if len(excluded)==0 else 'BLOCKED_INCOMPLETE'))
         return Response(batch['package'],media_type='application/zip',headers={
             'Content-Disposition':f'attachment; filename="{batch["id"]}.zip"','X-Batch-Id':batch['id'],
             'X-Excluded-Count':str(len(json.loads(batch['excluded'])))})
+
+    @app.get('/api/admin/pilot-cohorts/{ident}/review')
+    def pilot_cohort_review(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        request_key='pilot-cohort-package-'+ident
+        with db.transaction() as c:
+            batch=c.execute(select(batches).where(batches.c.request_key==request_key)).mappings().first()
+            if not batch: raise LookupError('Pilot package has not been generated')
+            rows=c.execute(select(invitations,candidate_table.c.personalization_quality_status,
+                candidate_table.c.personalization_quality_errors,
+                invitations.c.personalization.label('invitation_personalization')).select_from(
+                invitations.join(candidate_table,candidate_table.c.id==invitations.c.candidate_id))
+                .where(invitations.c.batch_id==batch['id']).order_by(invitations.c.company_name)).mappings().all()
+            invitations_review=[]
+            for row in rows:
+                item=dict(row);item['evidence']=json.loads(item.pop('invitation_personalization') or '{}')
+                item['quality_errors']=json.loads(item.pop('personalization_quality_errors') or '[]')
+                invitations_review.append(item)
+            return {'batch_id':batch['id'],'status':batch['pilot_review_status'],'send_status':batch['send_status'],
+                'package_sha256':hashlib.sha256(batch['package'] or b'').hexdigest(),
+                'excluded':json.loads(batch['excluded'] or '[]'),'expected_recipients':100,
+                'actual_recipients':len(invitations_review),'invitations':invitations_review}
+
+    @app.post('/api/admin/pilot-cohorts/{ident}/approve')
+    async def approve_pilot_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'APPROVER')
+        body=await request.json();provided=str(body.get('package_sha256') or '')
+        if body.get('confirm_reviewed') is not True: raise ValueError('Reviewer must explicitly confirm the complete batch was reviewed')
+        request_key='pilot-cohort-package-'+ident
+        stamp=now()
+        with db.transaction(serialized=True) as c:
+            batch=c.execute(select(batches).where(batches.c.request_key==request_key)).mappings().first()
+            if not batch: raise LookupError('Pilot package has not been generated')
+            rows=c.execute(select(invitations.c.id,invitations.c.candidate_id,invitations.c.personalization,
+                invitations.c.website,candidate_table.c.personalization_quality_status).select_from(
+                invitations.join(candidate_table,candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==batch['id'])).all()
+            digest=hashlib.sha256(batch['package'] or b'').hexdigest()
+            if provided!=digest: raise ValueError('Approval must match the current complete package SHA-256')
+            quality_ok=True
+            for row in rows:
+                try: service.validate(json.loads(row.personalization or '{}'),row.website)
+                except (ValueError,TypeError): quality_ok=False
+            if len(rows)!=100 or json.loads(batch['excluded'] or '[]') or any(r.personalization_quality_status!='PASS' for r in rows) or not quality_ok:
+                raise ValueError('Pilot batch must contain exactly 100 quality-passed recipients with no exclusions')
+            c.execute(batches.update().where(batches.c.id==batch['id']).values(pilot_review_status='APPROVED',
+                pilot_review_sha256=digest,pilot_reviewed_by=request.state.session['email'],pilot_reviewed_at=stamp,
+                send_status='READY_TO_SEND'))
+            c.execute(invitations.update().where(invitations.c.batch_id==batch['id']).values(send_status='READY_TO_SEND'))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch['id'],event='PILOT_BATCH_APPROVED',
+                detail=json.dumps({'sha256':digest,'count':100,'reviewer':request.state.session['email']},sort_keys=True),created_at=stamp))
+        return {'batch_id':batch['id'],'status':'APPROVED','send_status':'READY_TO_SEND','sent':False,'package_sha256':digest}
+
+    @app.post('/api/admin/batches/{ident}/mark-not-sent')
+    async def mark_batch_not_sent(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        body=await request.json()
+        if body.get('attest_not_sent') is not True: raise ValueError('Explicit operator not-sent attestation is required')
+        with db.transaction(serialized=True) as c:
+            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not batch: raise LookupError('Batch not found')
+            if batch['send_status'] in {'SENT','PARTIALLY_SENT'}: raise ValueError('Sent batch cannot be marked NOT_SENT')
+            c.execute(batches.update().where(batches.c.id==ident).values(send_status='NOT_SENT',send_evidence='Operator attested not sent',send_recorded_at=now()))
+            c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='NOT_SENT'))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='BATCH_MARKED_NOT_SENT',
+                detail=json.dumps({'actor':request.state.session['email']},sort_keys=True),created_at=now()))
+        return {'batch_id':ident,'send_status':'NOT_SENT'}
+
+    @app.post('/api/admin/invitations/{ident}/corrections')
+    async def correct_invitation(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        body=await request.json()
+        result=service.create_invitation_correction(db,ident,request.state.session['email'],
+            attest_not_sent=body.get('attest_not_sent'))
+        return result
+
+    @app.post('/api/admin/invitation-corrections/{ident}/approve')
+    async def approve_invitation_correction(ident:str,request:Request):
+        auth.require_role(request.state.session,'APPROVER')
+        body=await request.json()
+        result=service.approve_invitation_correction(db,ident,request.state.session['email'],body.get('sha256'))
+        return Response(result['package'],media_type='application/zip',headers={
+            'Content-Disposition':f'attachment; filename="invitation-correction-v{result["version"]}.zip"',
+            'X-Correction-Id':result['id'],'X-Correction-SHA256':result['sha256']})
     @app.get('/api/settings')
     def settings():
         with db.transaction() as c:run=c.execute(select(worker_runs).order_by(worker_runs.c.started_at.desc()).limit(1)).mappings().first()
@@ -311,6 +398,10 @@ def create_app(database=None):
             'engine_url':os.environ.get('GEO_ENGINE_API_URL'),
             'engine_configured':bool(os.environ.get('GEO_ENGINE_HANDOFF_TOKEN')),
             'report_sender':os.environ.get('OUTREACH_REPORT_SENDER'),
+            'researcher_identity_configured':all(os.environ.get(k) for k in ['OUTREACH_RESEARCHER_NAME','OUTREACH_UNIVERSITY_AFFILIATION','OUTREACH_REPLY_TO']),
+            'researcher_name':os.environ.get('OUTREACH_RESEARCHER_NAME'),
+            'university_affiliation':os.environ.get('OUTREACH_UNIVERSITY_AFFILIATION'),
+            'reply_to':os.environ.get('OUTREACH_REPLY_TO'),
             'report_delivery_configured':all(os.environ.get(k) for k in ['OUTREACH_REPORT_SENDER','OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET']),
             'last_worker_run':dict(run) if run else None}
     @app.post('/api/internal/worker-tick')

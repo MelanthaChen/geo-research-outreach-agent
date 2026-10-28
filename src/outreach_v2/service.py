@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,secrets,uuid
 from sqlalchemy import select,func,and_,or_,exists
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,now
+from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from outreach_agent.google_forms_integration import prefilled_form_url
@@ -20,6 +20,7 @@ def email_contacts():
 def readiness():
     return and_(candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',
+        candidates.c.personalization_quality_status=='PASS',
         select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()==1,
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
 
@@ -104,6 +105,9 @@ def eligible_recipient(c,row):
     if c.scalar(select(invitations.c.id).where(invitations.c.candidate_id==row['id'])):reasons.append('Invitation already exists; download its saved batch')
     try:validate(parse(row['personalization']),row['website'])
     except ValueError as e:reasons.append(str(e))
+    if row.get('personalization_quality_status')!='PASS':
+        reasons.append('Personalization quality is '+str(row.get('personalization_quality_status') or 'UNVERIFIED')+
+                       (': '+str(row.get('personalization_quality_errors') or 'quality audit required') if row.get('personalization_quality_errors') else ''))
     emails=set()
     for contact in c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings():
         email=(contact['email'] or '').lower()
@@ -168,6 +172,9 @@ def generate(db,selection,key):
             item=dict(id=invitation_id,candidate_id=row['id'],batch_id=batch_id,reference=reference,recipient=recipient,
                       website=row['website'],company_name=row['name'],subject=subject,body=body,form_url=url,
                       template_version=VERSION,questionnaire_id=questionnaire['id'] if questionnaire else None,
+                      researcher_name=__import__('os').getenv('OUTREACH_RESEARCHER_NAME'),
+                      university_affiliation=__import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION'),
+                      reply_to=__import__('os').getenv('OUTREACH_REPLY_TO'),
                       personalization=dump(p),generated_at=stamp,exported_at=stamp,
                       send_status='UNVERIFIED',consent_status='NOT_RECEIVED',authority=dump(authority))
             c.execute(invitations.insert().values(**item));generated.append(item);seen.add(recipient)
@@ -193,3 +200,73 @@ def dashboard(db):
                 'failures':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.error.is_not(None))),
                 'latest_worker_run':({'id':run['id'],'status':run['status'],'started_at':run['started_at'],
                     'detail':parse(run['detail'])} if run else None)}
+
+def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
+    """Save a new immutable correction version; original exported invitation stays unchanged."""
+    if attest_not_sent is not True: raise ValueError('Explicit not-sent attestation is required')
+    stamp=now()
+    with db.transaction(serialized=True) as c:
+        inv=c.execute(select(invitations).where(invitations.c.id==invitation_id)).mappings().first()
+        if not inv: raise LookupError('Invitation not found')
+        batch=c.execute(select(batches).where(batches.c.id==inv['batch_id'])).mappings().one()
+        if inv['send_status']!='NOT_SENT' or batch['send_status']!='NOT_SENT':
+            raise ValueError('The batch must be explicitly recorded NOT_SENT before preparing a correction')
+        if inv['consent_status']!='NOT_RECEIVED' or c.scalar(select(submissions.c.id).where(submissions.c.invitation_id==invitation_id)) or c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitation_id)):
+            raise ValueError('Invitation has consent or research activity and cannot be corrected as unsent')
+        candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
+        p=parse(candidate['personalization'])
+        try: validate(p,candidate['website'])
+        except ValueError as exc: raise ValueError('Current personalization does not pass quality validation: '+str(exc)) from exc
+        subject,body=render(inv['company_name'],inv['website'],p,inv['form_url'],inv['reference'],bool(candidate['fixture']))
+        current_version=c.scalar(select(func.max(invitation_corrections.c.version)).where(invitation_corrections.c.invitation_id==invitation_id)) or 1
+        source_hash=hashlib.sha256((str(inv['subject'])+'\0'+str(inv['body'])).encode()).hexdigest()
+        proposed_hash=hashlib.sha256((subject+'\0'+body).encode()).hexdigest()
+        ident='inv-correction-'+uuid.uuid4().hex
+        evidence=dump({'personalization':p,'source_urls':p.get('source_urls',[]),'quality_status':candidate['personalization_quality_status'],
+            'quality_errors':parse(candidate['personalization_quality_errors'],[]),'source_invitation_id':invitation_id,
+            'source_invitation_reference':inv['reference'],'source_invitation_version':inv['template_version']})
+        c.execute(invitation_corrections.insert().values(id=ident,invitation_id=invitation_id,version=current_version+1,
+            source_sha256=source_hash,proposed_sha256=proposed_hash,subject=subject,body=body,recipient=inv['recipient'],
+            evidence=evidence,status='PENDING_REVIEW',created_by=actor,created_at=stamp))
+        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=invitation_id,event='CORRECTION_VERSION_PROPOSED',
+            detail=dump({'correction_id':ident,'version':current_version+1,'source_sha256':source_hash,'proposed_sha256':proposed_hash}),created_at=stamp))
+        return {'id':ident,'invitation_id':invitation_id,'version':current_version+1,'status':'PENDING_REVIEW',
+            'subject':subject,'body':body,'recipient':inv['recipient'],'evidence':evidence,'sha256':proposed_hash}
+
+def approve_invitation_correction(db, correction_id, actor, expected_sha256):
+    """Approve and package one exact corrected draft without replacing its source invitation."""
+    import io, zipfile
+    from .package import build_package
+    with db.transaction(serialized=True) as c:
+        correction=c.execute(select(invitation_corrections).where(invitation_corrections.c.id==correction_id)).mappings().first()
+        if not correction: raise LookupError('Invitation correction not found')
+        if correction['status']!='PENDING_REVIEW' or correction['proposed_sha256']!=expected_sha256:
+            raise ValueError('Correction is not pending review or its exact content hash does not match')
+        inv=c.execute(select(invitations).where(invitations.c.id==correction['invitation_id'])).mappings().one()
+        batch=c.execute(select(batches).where(batches.c.id==inv['batch_id'])).mappings().one()
+        if inv['send_status']!='NOT_SENT' or batch['send_status']!='NOT_SENT' or inv['consent_status']!='NOT_RECEIVED':
+            raise ValueError('Source invitation is no longer confirmed unsent')
+        if c.scalar(select(submissions.c.id).where(submissions.c.invitation_id==inv['id'])) or c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==inv['id'])):
+            raise ValueError('Source invitation has consent or research activity')
+        source_hash=hashlib.sha256((str(inv['subject'])+'\0'+str(inv['body'])).encode()).hexdigest()
+        if source_hash!=correction['source_sha256']:
+            raise ValueError('Source invitation changed since this correction was prepared')
+        corrected_hash=hashlib.sha256((str(correction['subject'])+'\0'+str(correction['body'])).encode()).hexdigest()
+        if corrected_hash!=correction['proposed_sha256'] or corrected_hash!=expected_sha256:
+            raise ValueError('Correction contents changed since this version was reviewed')
+        evidence=parse(correction['evidence']);p=evidence.get('personalization') or {}
+        validate(p,inv['website'])
+        item={**dict(inv),'subject':correction['subject'],'body':correction['body'],'personalization':dump(p),
+            'template_version':(inv['template_version'] or VERSION)+'+quality-correction-v1'}
+        package=build_package([item],[],BULK_SUBJECT)
+        package_buffer=io.BytesIO(package)
+        with zipfile.ZipFile(package_buffer,'a',zipfile.ZIP_DEFLATED) as z:
+            z.writestr('correction-version.json',dump({'correction_id':correction_id,'invitation_id':inv['id'],
+                'invitation_reference':inv['reference'],'version':correction['version'],'source_sha256':source_hash,
+                'corrected_sha256':correction['proposed_sha256'],'status':'APPROVED_VERSIONED_COPY'}))
+        package=package_buffer.getvalue()
+        c.execute(invitation_corrections.update().where(invitation_corrections.c.id==correction_id).values(
+            status='APPROVED',approved_by=actor,approved_at=now(),package=package))
+        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=inv['id'],event='CORRECTION_VERSION_APPROVED',
+            detail=dump({'correction_id':correction_id,'version':correction['version'],'sha256':correction['proposed_sha256'],'reviewer':actor}),created_at=now()))
+        return {'id':correction_id,'version':correction['version'],'package':package,'sha256':correction['proposed_sha256']}

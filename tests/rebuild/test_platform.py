@@ -90,11 +90,16 @@ def test_select_all_filtered_not_page_limited(db):
 def test_negative_consent_never_starts(db,interest,authorization):
     candidate(db);invite(db);process(db,response(db,interest,authorization));assert count(db,jobs)==0
 
-def test_unknown_reference_and_company_scope_block(db):
+def test_unknown_reference_blocks_and_removed_scope_fields_are_optional(db):
     candidate(db);invite(db);row=response(db);row['Invitation Reference']='GEO-INVALID'
     assert process(db,row)=='BLOCKED_REFERENCE';assert count(db,jobs)==0
-    row=response(db);row['Business Website']='https://other.example'
-    assert process(db,row)=='BLOCKED_SCOPE';assert count(db,jobs)==0
+    row=response(db);row.pop('Business Name');row.pop('Business Website')
+    assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
+
+def test_ordinary_scope_is_resolved_from_invitation_not_self_reported_fields(db):
+    candidate(db);invite(db);row=response(db)
+    row['Business Name']='An unrelated self-reported name';row['Business Website']='https://other.example'
+    assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
 
 def test_historical_reference_does_not_authorize_clean_invitation(db):
     candidate(db);invite(db);row=response(db);row['Invitation Reference']='historical-response-reference'
@@ -135,8 +140,10 @@ def test_geoairesume_saved_blocked_scope_revalidates_once_and_ordinary_mismatch_
 
     candidate(db,ident='ordinary-company',email='owner@ordinary.example',website='https://ordinary.example',name='Ordinary Company',fixture=False)
     invite(db,['ordinary-company'],key='ordinary-mismatch-test-key')
-    ordinary=response(db,id='ordinary-company');ordinary['Business Name']='Ordinary Co'
-    assert process(db,ordinary)=='BLOCKED_SCOPE'
+    ordinary=response(db,id='ordinary-company');ordinary['Business Name']='Ordinary Co';ordinary['Business Website']='https://unrelated.example'
+    # Respondent-entered scope labels are ignored; this non-fixture still cannot
+    # authorize from a self-reported business email without verified identity.
+    assert process(db,ordinary)=='BLOCKED_IDENTITY'
     with db.transaction() as c:
         assert c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitations.c.id).where(invitations.c.candidate_id=='ordinary-company')) is None
 

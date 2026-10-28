@@ -10,7 +10,7 @@ REQUIRED_HEADERS={
  'Invitation Reference','Is your company interested in participating in this research?',
  'Does your company authorize our research team to conduct the research described above?',
  'Full Name of the Authorized Company Representative','Job Title of the Authorized Company Representative',
- 'Business Email Address of the Authorized Company Representative','Timestamp','Business Name','Business Website',
+ 'Business Email Address of the Authorized Company Representative','Timestamp',
  'Do you confirm that you are authorized to provide this permission on behalf of your business?'}
 
 _GEOAIRESUME_FIXTURE_ID='geoairesume-owner-test-v1'
@@ -25,9 +25,7 @@ def _geoairesume_fixture_name_allowed(inv,candidate,parsed,row,authority):
         and inv['website']==_GEOAIRESUME_FIXTURE_WEBSITE
         and candidate['website']==_GEOAIRESUME_FIXTURE_WEBSITE
         and authority.get('method')=='OWNER_BINDING'
-        and str(row.get('Business Name') or '').strip().casefold()=='geoairesume'
-        and str(row.get('Business Website') or '').strip()==_GEOAIRESUME_FIXTURE_WEBSITE
-        and host(str(row.get('Business Website') or ''))==host(inv['website']))
+        and host(candidate['website'])==host(inv['website']))
 
 def _saved_fixture_revalidation(c,db,ident,stamp):
     """Revalidate only this exact previously blocked saved response, atomically."""
@@ -104,9 +102,8 @@ def process(db,row,verified_identity=None):
                 status='BLOCKED_IDENTITY';reason='Representative identity is incomplete'
             elif not parsed.submitted_at:
                 status='BLOCKED_IDENTITY';reason='Submission timestamp is missing'
-            elif (str(row.get('Business Name') or '').strip().casefold()!=inv['company_name'].strip().casefold()
-                  and not _geoairesume_fixture_name_allowed(inv,candidate,parsed,row,authority)) or host(str(row.get('Business Website') or ''))!=host(inv['website']):
-                status='BLOCKED_SCOPE';reason='Declared business identity or website differs from the invitation'
+            # Resolve company name and exact site from the immutable invitation reference.
+            # Removed respondent fields were self-reported and are not part of the contract.
             elif str(row.get('Do you confirm that you are authorized to provide this permission on behalf of your business?') or '').strip().casefold() not in {'yes','yes, i confirm'}:
                 status='BLOCKED_IDENTITY';reason='Representative has not affirmed authority to provide permission'
             elif authority.get('website')!=inv['website'] or host(candidate['website'])!=host(inv['website']):

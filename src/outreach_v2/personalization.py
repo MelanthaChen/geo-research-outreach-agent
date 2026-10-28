@@ -20,7 +20,9 @@ from .service import email_contacts
 from .template import same_site, validate
 
 MAX_PAGE_BYTES = 512_000
-MAX_PAGES_PER_CANDIDATE = 3
+# A fourth same-site page gives evidence-limited companies another grounded
+# source opportunity while preserving the strict per-page size and time bounds.
+MAX_PAGES_PER_CANDIDATE = 4
 LEASE_SECONDS = 300
 
 

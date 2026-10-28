@@ -437,6 +437,16 @@ def test_v1_personalization_backfill_is_bounded_and_resumable(db):
     assert partial['evidence']['content_sample_truncated'] is True
     assert backfill(db,limit=1,fetcher=fetch)['attempted']==0
 
+def test_personalization_expands_to_three_grounded_same_site_pages():
+    from outreach_v2.personalization import _evidence_urls
+    html='''<a href="/about">About</a><a href="/services">Services</a>
+        <a href="/products">Products</a><a href="/faq">FAQ</a>
+        <a href="https://external.example/about">About</a>'''
+    urls=_evidence_urls('https://example.test/',html)
+    assert len(urls)==3
+    assert all(url.startswith('https://example.test/') for url in urls)
+    assert not any('external.example' in url for url in urls)
+
 def test_personalization_backfill_claims_distinct_domains_and_persists_transient_backoff(db):
     from outreach_v2.personalization import backfill
     from outreach_v2.db import candidates

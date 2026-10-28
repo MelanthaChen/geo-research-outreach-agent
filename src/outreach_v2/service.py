@@ -146,8 +146,14 @@ def generate(db,selection,key):
             if recipient and c.scalar(select(invitations.c.id).where(invitations.c.recipient==recipient)):reasons.append('Recipient already has an invitation; resend is not automatic')
             if reasons:
                 excluded.append({'candidate_id':row['id'],'company':row['name'],'reasons':reasons});continue
+            p=parse(row['personalization'])
             invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper();url=prefilled_form_url(reference)
-            p=parse(row['personalization']);subject,body=render(row['name'],row['website'],p,url,reference,row['fixture'])
+            try:
+                subject,body=render(row['name'],row['website'],p,url,reference,row['fixture'])
+            except ValueError as exc:
+                excluded.append({'candidate_id':row['id'],'company':row['name'],
+                                 'reasons':['Invalid invitation personalization: '+str(exc)]})
+                continue
             authority={'method':'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','website':row['website']}
             if row['fixture']:
                 binding=OWNER_BINDINGS.get(host(row['website']))

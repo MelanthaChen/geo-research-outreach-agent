@@ -7,7 +7,7 @@ from sqlalchemy import select,func
 from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,sessions,worker_runs,now,sources,source_rows,source_memberships
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
-from outreach_v2.template import render,BULK_SUBJECT
+from outreach_v2.template import render,render_template,BULK_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick,claim,research_step,report_step
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,Engine,verified_form_rows,VerifiedFormResponse,_sheet_row
@@ -545,3 +545,50 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
     research=client.get('/api/research')
     assert research.status_code==200
     assert any(row['invitation_id'] for row in research.json()['rows'])
+
+def test_invitation_content_preserves_legitimate_braces_and_flags_only_template_placeholders():
+    from copy import deepcopy
+    from outreach_v2.template import render
+    p={'data_classification':'OBSERVED','business_description':'A page with JSON-like content.',
+       'company_strength':'The site publishes {"availability": "open"} as an example.',
+       'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),
+       'introduction':'The observed snippet includes {one or more options}.',
+       'recommendations':[{'title':'Observed {schema} example','problem':'The page shows {"mode": "public"}.',
+         'suggestion':'Keep the {field_name} clear.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    original=deepcopy(p)
+    _,body=render('GeoAIResume','https://geo-ai-resume.vercel.app',p,'https://forms.example/form','GEO-EXAMPLE',True)
+    assert '{"availability": "open"}' in body
+    assert '{one or more options}' in body
+    assert '{"mode": "public"}' in body and '{field_name}' in body
+    assert p==original
+    with pytest.raises(ValueError,match=r'Unresolved invitation variable: \{\{company_name\}\}'):
+        render_template('Invitation for {{company_name}}',{})
+
+def test_mixed_invitation_batch_excludes_invalid_personalization_and_is_idempotent(db):
+    candidate(db,'valid','yuxuan.chen.1031@outlook.com')
+    candidate(db,'invalid','invalid@geo-ai-resume.vercel.app')
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='invalid').values(
+            personalization=dump({'data_classification':'OBSERVED','company_strength':'observed',
+                'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),
+                'recommendations':[{'problem':'observed','suggestion':'suggested',
+                    'source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]})))
+    key='mixed-valid-invalid-invitation-request'
+    batch=generate(db,{'ids':['valid','invalid']},key)
+    manifest=json.loads(zipfile.ZipFile(io.BytesIO(batch['package'])).read('manifest.json'))
+    assert manifest['count']==1
+    assert len(manifest['invitations'])==1 and manifest['invitations'][0]['company_id']=='valid'
+    assert manifest['excluded']==json.loads(batch['excluded'])
+    assert manifest['excluded']==[{'candidate_id':'invalid','company':'GeoAIResume',
+        'reasons':['Missing V1 field: business_description']}]
+    retry=generate(db,{'ids':['valid','invalid']},key)
+    assert retry['id']==batch['id'] and retry['package']==batch['package']
+    assert count(db,batches)==1 and count(db,invitations)==1
+    with db.transaction() as c:
+        assert c.scalar(select(invitations.c.reference).where(invitations.c.candidate_id=='valid'))==manifest['invitations'][0]['invitation_reference']
+
+def test_all_invalid_invitation_batch_rolls_back_without_partial_records(db):
+    candidate(db,'invalid-only',personalization=False)
+    with pytest.raises(ValueError,match='No eligible invitations'):
+        generate(db,{'ids':['invalid-only']},'all-invalid-invitation-request')
+    assert count(db,batches)==0 and count(db,invitations)==0

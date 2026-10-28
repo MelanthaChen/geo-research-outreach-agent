@@ -6,6 +6,17 @@ VERSION = 'manual-invitation-v1/evidence-2'
 BULK_SUBJECT = 'GEO research participation invitation'  # Authorized shared Word subject.
 REQUIRED = ('business_description','company_strength','source_urls','retrieved_at','recommendations')
 EMAIL = re.compile(r'^[A-Za-z0-9.!#$%&\'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$')
+_TEMPLATE_VARIABLE = re.compile(r'\{\{([a-z][a-z0-9_]*)\}\}')
+
+def render_template(template, values):
+    """Substitute only template-owned variables; inserted company text stays literal."""
+    variables=_TEMPLATE_VARIABLE.findall(template)
+    missing=sorted(set(variables)-set(values))
+    if missing:
+        raise ValueError('Unresolved invitation variable: {{'+missing[0]+'}}')
+    for name in variables:
+        template=template.replace('{{'+name+'}}',str(values[name]))
+    return template
 
 def host(url):
     try:
@@ -17,6 +28,7 @@ def same_site(a,b):
     return bool(host(a)) and host(a)==host(b)
 
 def validate(personalization, website):
+    if not isinstance(personalization,dict): raise ValueError('Personalization must be an object')
     if personalization.get('data_classification') != 'OBSERVED':
         raise ValueError('Observed personalization is missing')
     for field in REQUIRED:
@@ -48,15 +60,19 @@ def render(name, website, p, form_url, reference, fixture=False):
     intro=str(p.get('introduction') or '')
     description=str(p.get('business_description') or '')
     label='OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n' if fixture else ''
-    body=(f'{label}Hello,\n\n'
-          f"{intro + chr(10) + chr(10) if intro else ''}"
-          f'We are inviting {name} to participate in a research study about how public website information is represented in AI search. The website in this record is {website}.\n\n'
-          f"{('Business description: ' + description + chr(10) + chr(10)) if description else ''}"
-          f"Company strength: {p['company_strength']}\n\n"
-          'Preliminary website observations already recorded in the research registry:\n'+'\n'.join(observations)+'\n\n'
+    body_template=('{{label}}Hello,\n\n{{intro_block}}'
+          'We are inviting {{company_name}} to participate in a research study about how public website information is represented in AI search. The website in this record is {{website}}.\n\n'
+          '{{description_block}}Company strength: {{company_strength}}\n\n'
+          'Preliminary website observations already recorded in the research registry:\n{{observations}}\n\n'
           'These are observations and research hypotheses, not measured AI visibility results or guaranteed improvements. The proposed work is read-only public-website analysis; no website changes, experiments, or monitoring begin from this invitation.\n\n'
-          f'Questionnaire: {form_url}\nInvitation reference: {reference}\n\n'
+          'Questionnaire: {{form_url}}\nInvitation reference: {{reference}}\n\n'
           'Please answer both research interest and research authorization separately. Detailed research starts only after valid consent and identity and scope checks.\n\n'
           'Best regards\nGEO Research Outreach')
-    if re.search(r'\{\{?[^{}]+\}\}?',body): raise ValueError('Unresolved invitation variables')
+    body=render_template(body_template,{
+        'label':label,'intro_block':intro+'\n\n' if intro else '',
+        'company_name':str(name),'website':str(website),
+        'description_block':'Business description: '+description+'\n\n' if description else '',
+        'company_strength':str(p['company_strength']),'observations':'\n'.join(observations),
+        'form_url':str(form_url),'reference':str(reference),
+    })
     return f'GEO research participation invitation - {name}',body

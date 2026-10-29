@@ -22,14 +22,24 @@ def db(tmp_path):
     result=Database('sqlite:///'+str(tmp_path/'test.db'));result.initialize();return result
 
 def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=True):
-    p={'data_classification':'OBSERVED','business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.',
-       'company_strength':'The homepage heading identifies resume building as the main offering and directly explains the service visitors can use.',
-       'source_urls':[website],'retrieved_at':now(),'evidence':{'visible_text_excerpt':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.'},
-       'recommendations':[{'title':'Clarify page title','problem':'The rendered homepage at / has no non-empty HTML title element.','suggestion':'Add an HTML title for / that names the business and explains its resume-building page topic.','evidence_excerpt':'Observed HTML title element is absent. Visible content describes resume building tools.','source_urls':[website],'observed_at':now()}]}
+    source_excerpt='GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.'
+    p={'data_classification':'OBSERVED','analysis_version':'structured-evidence-v2','pipeline_version':'semantic-openai-v1',
+       'business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.',
+       'company_strength':'Its online tools help applicants build resumes and organize materials for job applications.',
+       'recipient_copy':{'business_summary':'GeoAIResume offers online resume-building tools for job seekers.',
+           'distinctive_detail':'Its online tools help applicants build resumes and organize job-application materials.',
+           'research_relevance':'That pairing is useful for studying whether AI-powered search carries a product’s stated use through to the people and task it serves.',
+           'supported_observation':'','support':{'business_summary':['main'],'distinctive_detail':['main'],'research_relevance':['main']}},
+       'claim_support':{'business_description':['main'],'company_strength':['main']},
+       'evidence_profile':{'pages':[{'url':website,'type':'home_or_other','title':name,'headings':[],'truncated':False}],
+           'facts':[{'id':'main','statement':source_excerpt,'evidence_excerpt':source_excerpt,'source_urls':[website],
+              'assertion_type':'FIRST_PARTY_PAGE_CLAIM','attribution':'COMPANY_STATED'}]},
+       'source_urls':[website],'retrieved_at':now(),'evidence':{'visible_text_excerpt':source_excerpt},
+       'recommendations':[],'assessment':{'geo_observation':'NOT_ESTABLISHED'}}
     with db.transaction() as c:
         from outreach_v2.quality import quality_reasons
         errors=quality_reasons(p) if personalization else ['INSUFFICIENT_EVIDENCE']
-        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',personalization_quality_status='PASS' if not errors else 'FAIL',personalization_quality_errors=dump(errors),fixture=fixture,created_at=now(),updated_at=now()))
+        c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',personalization_quality_status='PASS' if not errors else 'FAIL',personalization_quality_errors=dump(errors),fixture=fixture,personalization_version=1 if personalization else 0,personalization_analysis_version='semantic-openai-v1' if personalization else None,personalization_fingerprint='unit-test-fingerprint' if personalization else None,created_at=now(),updated_at=now()))
         c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
     return ident
 
@@ -47,6 +57,38 @@ def response(db,interest='YES',authorization='YES',id='a',email=None):
 
 def count(db,table):
     with db.transaction() as c:return c.scalar(select(func.count()).select_from(table))
+
+def evidence_site(base, name):
+    pages={
+      base: f'''<html><head><title>{name}</title></head><body>
+      <p>Opened in 2003, {name} offers books on literary fiction, art, history, science, and books for young readers.</p>
+      <p>Missed readings can be watched on YouTube.</p><a href="https://www.youtube.com/@192Books/streams">YouTube</a>
+      <a href="{base.rstrip('/')}/upcoming-events/">Events</a><a href="{base.rstrip('/')}/staff-picks/">Staff Picks</a>
+      <a href="{base.rstrip('/')}/personal-library/">Personal Library</a></body></html>''',
+      base.rstrip('/')+'/upcoming-events/': '''<html><head><title>EVENTS</title></head><body>
+      <p>Archived recordings of readings are available on Youtube.</p><a href="https://paulacoopergallery-studio.com/posts">Youtube</a>
+      <h2>Wednesday, September 16, 6pm | Pamela Hanson: The 90s</h2>
+      <p>Pamela Hanson presents a book of photographs from fashion editorials and candid moments.</p></body></html>''',
+      base.rstrip('/')+'/staff-picks/': '''<html><head><title>STAFF PICKS</title></head><body>
+      <p>Fall 2026—Books We Are Reading, Have Read, Recommend, or Want You to Read.</p>
+      <p>Staff picks are available for purchase in our store and online. Terrence’s Pick The Recognitions by William Gaddis.</p></body></html>''',
+      base.rstrip('/')+'/personal-library/': '''<html><head><title>PERSONAL LIBRARY</title></head><body>
+      <p>Our booksellers prepare custom library lists of art and literary books for homes, offices, and businesses.</p></body></html>'''
+    }
+    pages[base.rstrip('/')]=pages[base]
+    return pages
+
+
+def test_invitation_generation_rejects_legacy_ready_quality_pass_without_writing(db):
+    candidate(db,ident='legacy-ready')
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='legacy-ready').values(
+            personalization_analysis_version=None,personalization_version=0,personalization_fingerprint=None,
+            personalization_quality_status='PASS'))
+    with pytest.raises(ValueError,match='legacy, missing, or outdated'):
+        generate(db,{'ids':['legacy-ready']},'legacy-ready-request-key')
+    assert count(db,invitations)==0
+    assert count(db,batches)==0
 
 def test_two_recipient_package_and_exact_binding(db):
     candidate(db);candidate(db,'b','yuxaun.chen.1031@outlook.com','https://whisker-haven-demo.vercel.app/','Whisker Haven')
@@ -222,7 +264,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==5
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==6
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -570,25 +612,47 @@ def test_lean_snapshot_import_keeps_archive_refs_without_duplicate_payloads(tmp_
     assert result['candidates']=={'company':1} and result['contacts']==1
     assert result['source_archive_rows_preserved_outside_v2']==1 and result['v2_source_rows']==0
 
-def test_v1_personalization_backfill_is_bounded_and_resumable(db):
-    from outreach_v2.personalization import backfill, observe
+def c_count(db, relation):
+    return count(db, relation)
+
+def test_semantic_personalization_is_disabled_by_default_and_performs_no_fetch_or_write(db, monkeypatch):
+    from outreach_v2.personalization import backfill
+    from outreach_v2.db import personalization_runs
     candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
         personalization=False,fixture=False)
-    page='<html><head></head><body><h1>Software for small businesses</h1><p>Example provides software services to small businesses and explains its core product offering in detail for growing teams.</p></body></html>'
-    fetch=lambda url:('https://example.com/',page)
-    with pytest.raises(ValueError,match='between 1 and 100'):backfill(db,limit=101,fetcher=fetch)
-    result=backfill(db,limit=1,fetcher=fetch)
+    called=[]
+    result=backfill(db,limit=1,fetcher=lambda url: called.append(url),time_budget_seconds=10)
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='real-backfill')).mappings().one()
-    assert result['attempted']==1 and result['completed']==1 and result['incomplete']==0
-    assert result['remaining_backlog']==0
-    assert result['failure_categories']=={} and result['permanent_insufficiency']==0
-    assert row['personalization_status']=='READY' and row['personalization']!='{}'
-    assert json.loads(row['personalization'])['recommendations'][0]['title']=='Missing page title'
-    assert row['personalization_quality_status']=='PASS'
-    partial=observe('https://example.com/',page,now(),truncated=True)
-    assert partial['evidence']['content_sample_truncated'] is True
-    assert backfill(db,limit=1,fetcher=fetch)['attempted']==0
+    assert result['status']=='DISABLED' and result['attempted']==0
+    assert called==[]
+    assert row['personalization_status']=='INCOMPLETE' and row['personalization']=='{}'
+    assert c_count(db,personalization_runs)==0
+    with pytest.raises(ValueError,match='1–10'):
+        backfill(db,limit=101,fetcher=lambda url: called.append(url))
+
+
+def test_semantic_backfill_stops_before_call_when_run_budget_is_too_small(db, monkeypatch):
+    from outreach_v2.db import personalization_attempts
+    from outreach_v2.personalization import backfill
+    from test_semantic_openai_adapter import profile
+    import outreach_v2.personalization as module
+    candidate(db,ident='budget-stop',email='hello@lagoonny.com',website='https://www.lagoonny.com/',
+        name='Lagoon New York',personalization=False,fixture=False)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MODEL','gpt-5.4-mini-2026-03-17')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.01')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','1.00')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
+    class Backend:
+        calls=0
+        def analyze_once(self,*args,**kwargs): self.calls+=1; raise AssertionError('network call is prohibited in this test')
+    backend=Backend()
+    result=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=lambda _:1000)
+    assert result['status']=='BUDGET_STOPPED' and result['budget_stopped'] is True
+    assert backend.calls==0 and count(db,personalization_attempts)==0
 
 def test_personalization_expands_to_three_grounded_same_site_pages():
     from outreach_v2.personalization import _evidence_urls
@@ -600,33 +664,57 @@ def test_personalization_expands_to_three_grounded_same_site_pages():
     assert all(url.startswith('https://example.test/') for url in urls)
     assert not any('external.example' in url for url in urls)
 
-def test_personalization_backfill_claims_distinct_domains_and_persists_transient_backoff(db):
+def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_response(db, monkeypatch):
+    from outreach_v2.db import personalization_attempts, personalization_versions, personalization_runs
     from outreach_v2.personalization import backfill
-    from outreach_v2.db import candidates
-    from sqlalchemy import select
-    import httpx
-    candidate(db,ident='batch-a',email='hello@batch-a.example',website='https://batch-a.example',name='Batch A',personalization=False,fixture=False)
-    candidate(db,ident='batch-b',email='hello@batch-b.example',website='https://batch-b.example',name='Batch B',personalization=False,fixture=False)
-    candidate(db,ident='batch-c',email='hello@batch-a.example',website='https://www.batch-a.example',name='Batch A duplicate domain',personalization=False,fixture=False)
-    page='<html><head></head><body><h1>Resume writing and career profiles</h1><p>This company provides resume writing and career profile services to job seekers in the local community.</p></body></html>'
-    def transient(url):
-        if 'batch-b' in url:raise httpx.ReadTimeout('temporary timeout')
-        return url,page
-    result=backfill(db,limit=3,fetcher=transient,concurrency=2)
-    assert result['attempted']==2
-    assert result['completed']==1 and result['incomplete']==1
-    assert result['failure_categories']=={'TRANSIENT_HTTP':1}
-    assert result['remaining_backlog']==2
+    from test_semantic_openai_adapter import profile, response
+    import outreach_v2.personalization as module
+    candidate(db,ident='lagoon-ai',email='hello@lagoonny.com',website='https://www.lagoonny.com/',
+        name='Lagoon New York',personalization=False,fixture=False)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MODEL','gpt-5.4-mini-2026-03-17')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.20')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','1.00')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
+    import outreach_v2.semantic_openai as semantic_module
+    real_build=semantic_module.build_automated_personalization
+    transforms={'count':0}
+    def fail_once(raw, selection, *, stamp):
+        transforms['count']+=1
+        if transforms['count']==1: raise ValueError('local transformation failure')
+        return real_build(raw,selection,stamp=stamp)
+    monkeypatch.setattr(semantic_module,'build_automated_personalization',fail_once)
+    class Backend:
+        calls=0
+        def analyze_once(self,evidence,*,token_count=None):
+            self.calls+=1
+            return {'provider':'openai','model':'gpt-5.4-mini-2026-03-17','request_id':'req-test',
+                'status':'completed','usage':{'input_tokens':1000,'output_tokens':400,'reasoning_tokens':0},
+                'estimated_cost_usd':0.00255,'preflight':{'worst_case_usd':0.03825},
+                'structured_output':response(),'rejected_claims':[],'raw_response':{'id':'req-test'}}
+    backend=Backend(); counter=lambda _text:1000
+    first=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
+    assert first['attempted']==1 and first['incomplete']==1 and backend.calls==1
     with db.transaction() as c:
-        rows={r.id:dict(r) for r in c.execute(select(candidates).where(candidates.c.id.in_(['batch-a','batch-b','batch-c']))).mappings()}
-    assert rows['batch-a']['personalization_status']=='READY'
-    assert rows['batch-b']['personalization_outcome']=='TRANSIENT_HTTP'
-    assert rows['batch-b']['personalization_attempts']==1
-    assert rows['batch-b']['personalization_retry_after']
-    assert rows['batch-c']['personalization_lease_token'] is None
-    # A second worker invocation in the same scheduler window must honor the
-    # durable 15-minute domain cooldown as well as candidate retry backoff.
-    assert backfill(db,limit=3,fetcher=transient,concurrency=2)['attempted']==0
+        attempt=c.execute(select(personalization_attempts)).mappings().one()
+        assert attempt['status']=='COMPLETED' and attempt['provider_response']
+        c.exec_driver_sql("UPDATE events SET created_at='2000-01-01T00:00:00+00:00' WHERE entity_id='lagoon-ai'")
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_REPROCESS_ENABLED','true')
+    second=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30,selected_candidate_ids=['lagoon-ai'])
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id=='lagoon-ai')).mappings().one()
+        versions=c.execute(select(personalization_versions).where(personalization_versions.c.candidate_id=='lagoon-ai')).mappings().all()
+        assert c.scalar(select(func.count()).select_from(personalization_attempts))==1
+        assert c.scalar(select(func.count()).select_from(personalization_runs))==2
+    assert second['replayed']==1 and second['completed']==1 and backend.calls==1
+    assert row['personalization_status']=='READY'
+    assert row['personalization_analysis_version']=='semantic-openai-v1' and row['personalization_version']==1
+    assert len(versions)==2 and versions[0]['analysis_version']=='LEGACY_SNAPSHOT'
+    assert versions[1]['request_id']=='req-test'
+    assert count(db,invitations)==0
+
 
 def test_robots_server_error_is_classified_as_transient(monkeypatch):
     import httpx
@@ -701,19 +789,19 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
 
 def test_invitation_content_preserves_legitimate_braces_and_flags_only_template_placeholders():
     from copy import deepcopy
+    from outreach_v2.personalization import observe
     from outreach_v2.template import render
-    p={'data_classification':'OBSERVED','business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for job applications. It shows {"availability": "open"} as a sample setting.',
-       'company_strength':'The homepage presents resume building as a named service and explains the main task visitors can complete.',
-       'source_urls':['https://geo-ai-resume.vercel.app'],'retrieved_at':now(),'evidence':{'visible_text_excerpt':'Resume building tools for job seekers.'},
-       'introduction':'The observed snippet includes {one or more options}.',
-       'recommendations':[{'title':'Observed {schema} example','problem':'The page heading shows {"mode": "public"} and does not explain how visitors choose a suitable template.',
-         'suggestion':'Add a short {field_name} heading that explains how a visitor selects a resume template for a particular role.',
-         'evidence_excerpt':'The visible heading contains {"mode": "public"} and says Resume templates; no selection guidance follows it.','source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    p=observe('https://geo-ai-resume.vercel.app/', '''<html><head><title>GeoAIResume</title></head><body><main>
+      <h1>Resume builder</h1><p>GeoAIResume offers online tools that help job seekers build and organize professional resumes for job applications. A sample option is {availability: open} for people updating a resume.</p>
+      </main></body></html>''',now(),name='GeoAIResume')
     original=deepcopy(p)
-    _,body=render('GeoAIResume','https://geo-ai-resume.vercel.app',p,'https://forms.example/form','GEO-EXAMPLE',True)
-    assert '{"availability": "open"}' in body
-    assert '{one or more options}' in body
-    assert '{"mode": "public"}' in body and '{field_name}' in body
+    record={'id':'geoairesume-owner-test-v1','fixture':True,'name':'GeoAIResume','website':'https://geo-ai-resume.vercel.app/'}
+    _,fixture_body=render('GeoAIResume','https://geo-ai-resume.vercel.app/',p,'https://forms.example/form','GEO-EXAMPLE',record=record)
+    _,preview_body=render('GeoAIResume','https://geo-ai-resume.vercel.app/',p,'https://forms.example/form','GEO-PREVIEW')
+    assert 'OWNER-CONTROLLED STAGING TEST' in fixture_body
+    assert 'OWNER-CONTROLLED STAGING TEST' not in preview_body
+    assert '{availability: open}' not in preview_body
+    assert '{availability: open}' in p['evidence_profile']['facts'][0]['evidence_excerpt']
     assert p==original
     with pytest.raises(ValueError,match=r'Unresolved invitation variable: \{\{company_name\}\}'):
         render_template('Invitation for {{company_name}}',{})
@@ -795,13 +883,28 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     from outreach_v2.app import create_app
     candidate(db,'package-valid','yuxuan.chen.1031@outlook.com',name='Brace Company',website='https://geo-ai-resume.vercel.app')
     candidate(db,'package-invalid','invalid@ordinary.example',name='Incomplete Company',website='https://ordinary.example',fixture=False)
-    valid_personalization={'data_classification':'OBSERVED','business_description':'Brace Company publishes a service page describing its product using an example configuration shown to visitors.',
-        'company_strength':'Its service page uses a concrete {verified examples} configuration to explain how the product handles a visitor supplied setting.',
-        'evidence':{'visible_text_excerpt':'The page shows {"mode": "public"} as an example configuration.'},'source_urls':['https://geo-ai-resume.vercel.app'],
-        'retrieved_at':now(),'recommendations':[{'title':'Explain configuration example','problem':'The service page shows a {"mode": "public"} example and a {field: value} pair without saying what the mode controls.',
-            'suggestion':'Add a sentence below the example explaining when a visitor should use the public mode.',
-            'evidence_excerpt':'Visible example: {"mode": "public"}. No explanatory sentence appears beside the example.',
-            'source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]}
+    source_excerpt='The setup guide shows {"mode": "public"} and {field: value} as examples of a visitor-controlled resume visibility setting.'
+    valid_personalization={'analysis_version':'structured-evidence-v2','data_classification':'OBSERVED',
+        'business_description':'Brace Company offers an online resume service for job seekers.',
+        'company_strength':'The setup guide documents how visitors can configure public resume visibility.',
+        'recipient_copy':{'business_summary':'Brace Company offers an online resume service for job seekers.',
+            'distinctive_detail':'Its setup guide explains how visitors configure public resume visibility.',
+            'research_relevance':'The guide makes this site useful for examining whether AI-powered search carries a product setting through to a clear description of the service.',
+            'supported_observation':'','support':{'business_summary':['description'],'distinctive_detail':['setting'],'research_relevance':['setting']}},
+        'evidence_profile':{'pages':[{'url':'https://geo-ai-resume.vercel.app'}],
+            'facts':[{'id':'description','statement':'Brace Company offers an online resume service for job seekers.',
+                'evidence_excerpt':'Brace Company offers an online resume service for job seekers.',
+                'source_urls':['https://geo-ai-resume.vercel.app'],'assertion_type':'FIRST_PARTY_PAGE_CLAIM','attribution':'COMPANY_STATED'},
+                {'id':'setting','statement':'The setup guide shows a public visibility setting.',
+                 'evidence_excerpt':source_excerpt,'source_urls':['https://geo-ai-resume.vercel.app'],
+                 'assertion_type':'FIRST_PARTY_PAGE_CLAIM','attribution':'COMPANY_STATED'}],
+            'relationships':[]},
+        'claim_support':{'business_description':['description'],'company_strength':['setting']},
+        'evidence':{'visible_text_excerpt':source_excerpt},'source_urls':['https://geo-ai-resume.vercel.app'],
+        'retrieved_at':now(),'recommendations':[],
+        'assessment':{'geo_observation':'NOT_ESTABLISHED'}}
+    from outreach_v2.quality import quality_reasons
+    assert quality_reasons(valid_personalization)==[]
     with db.transaction() as c:
         c.execute(candidates.update().where(candidates.c.id=='package-valid').values(personalization=dump(valid_personalization)))
         c.execute(candidates.update().where(candidates.c.id=='package-invalid').values(personalization=dump({
@@ -816,22 +919,25 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     assert login.status_code==200 and login.json()['role']=='ADMIN'
     response=client.post('/api/batches',headers={'X-CSRF-Token':login.json()['csrf'],'Idempotency-Key':'isolated-api-package-key-123'},
         json={'ids':['package-valid','package-invalid']})
-    assert response.status_code==200
+    assert response.status_code==200, response.text
     package=zipfile.ZipFile(io.BytesIO(response.content));manifest=json.loads(package.read('manifest.json'))
     assert manifest['count']==1 and manifest['excluded'][0]['candidate_id']=='package-invalid'
     assert manifest['excluded'][0]['reasons']==['Missing V1 field: business_description']
     csv_rows=list(csv.DictReader(io.StringIO(package.read('invitations.csv').decode('utf-8-sig'))))
     workbook=load_workbook(io.BytesIO(package.read('invitations.xlsx')))
     assert list(csv_rows[0])==[cell.value for cell in workbook.active[1]]
-    assert list(csv_rows[0].values())==[cell.value for cell in workbook.active[2]]
+    assert [value or None for value in csv_rows[0].values()]==[cell.value for cell in workbook.active[2]]
     assert csv_rows[0]['company_name']=='Brace Company'
-    assert '{"mode": "public"}' in csv_rows[0]['email_body'] and '{field: value}' in csv_rows[0]['email_body']
+    assert '{"mode": "public"}' not in csv_rows[0]['email_body'] and '{field: value}' not in csv_rows[0]['email_body']
     assert manifest['invitations'][0]['invitation_id']==csv_rows[0]['invitation_id']
     assert manifest['invitations'][0]['invitation_reference']==csv_rows[0]['invitation_reference']
     from docx import Document
     preview=Document(io.BytesIO(package.read('personalized-previews.docx')))
     preview_text='\n'.join(p.text for p in preview.paragraphs)
-    assert '{"mode": "public"}' in preview_text and csv_rows[0]['invitation_reference'] in preview_text
+    assert '{"mode": "public"}' not in preview_text and csv_rows[0]['invitation_reference'] in preview_text
+    saved=json.loads(db.engine.connect().exec_driver_sql(
+        "SELECT personalization FROM invitations WHERE candidate_id='package-valid'").scalar_one())
+    assert source_excerpt in saved['evidence_profile']['facts'][1]['evidence_excerpt']
     merge=zipfile.ZipFile(io.BytesIO(package.read('invitation-mail-merge.docx')))
     assert 'word/document.xml' in merge.namelist()
     assert manifest['excluded']==json.loads(package.read('manifest.json'))['excluded']

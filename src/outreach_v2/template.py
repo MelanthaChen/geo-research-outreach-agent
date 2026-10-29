@@ -33,6 +33,11 @@ def validate(personalization, website):
     if personalization.get('data_classification') != 'OBSERVED':
         raise ValueError('Observed personalization is missing')
     for field in REQUIRED:
+        if field == 'recommendations' and personalization.get('analysis_version') == 'structured-evidence-v2':
+            if not isinstance(personalization.get(field),list): raise ValueError('Invalid recommendations')
+            if not personalization[field] and (personalization.get('assessment') or {}).get('geo_observation') != 'NOT_ESTABLISHED':
+                raise ValueError('Empty observations require an explicit NOT_ESTABLISHED assessment')
+            continue
         if not personalization.get(field): raise ValueError('Missing V1 field: '+field)
     urls=personalization['source_urls']
     if not isinstance(urls,list) or not all(same_site(website,u) for u in urls):
@@ -52,9 +57,13 @@ def validate(personalization, website):
     from .quality import quality_reasons
     failures=quality_reasons(personalization)
     if failures: raise ValueError('Personalization quality failed: '+','.join(failures))
+    from .quality import quality_decisions
+    decisions=quality_decisions(personalization)
+    if not decisions['OUTREACH_REVIEW_READY']['passed']:
+        raise ValueError('Outreach review quality failed: '+','.join(decisions['OUTREACH_REVIEW_READY']['reasons']))
     return personalization
 
-def render(name, website, p, form_url, reference, fixture=False, identity=None):
+def render(name, website, p, form_url, reference, record=None, identity=None):
     validate(p,website)
     identity=identity or {}
     researcher=(identity.get('researcher_name') or os.getenv('OUTREACH_RESEARCHER_NAME') or '').strip()
@@ -62,28 +71,38 @@ def render(name, website, p, form_url, reference, fixture=False, identity=None):
     reply_to=(identity.get('reply_to') or os.getenv('OUTREACH_REPLY_TO') or '').strip()
     if not researcher or not affiliation or not EMAIL.fullmatch(reply_to):
         raise ValueError('Researcher name, university affiliation, and valid reply-to address must be configured')
-    observations=[]
-    for item in p['recommendations'][:2]:
-        title=item.get('title') or item.get('observation') or 'Preliminary observation'
-        urls=', '.join(item['source_urls'])
-        observations.append(f"- {title}: {item['problem']} Recommendation: {item['suggestion']} ({urls}; observed {item['observed_at']})")
     intro=str(p.get('introduction') or '')
     description=str(p.get('business_description') or '')
-    label='OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n' if fixture else ''
-    body_template=('{{label}}Hello,\n\n{{intro_block}}'
-          'We are inviting {{company_name}} to participate in a university research study about how businesses are described in AI-powered search. We reviewed public pages on {{website}}.\n\n'
-          '{{description_block}}Company strength: {{company_strength}}\n\n'
-          'A few preliminary observations from those pages:\n{{observations}}\n\n'
-          'These are observations for further study, not measured search performance or guaranteed improvements. The study reviews public pages only; it does not change or monitor your website.\n\n'
+    is_fixture=bool(record and record.get('fixture') is True and record.get('id') and
+                    record.get('name')==name and record.get('website')==website)
+    label='OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n' if is_fixture else ''
+    copy=p.get('recipient_copy') or {}
+    business_summary=copy.get('business_summary') or ''
+    distinctive_detail=copy.get('distinctive_detail') or ''
+    research_relevance=copy.get('research_relevance') or ''
+    observation=(f'One detail that stood out: {copy.get("supported_observation")}\n\n'
+                 if copy.get('supported_observation') else '')
+    body_template=('{{label}}Hello,\n\n'
+          'We are inviting {{company_name}} to participate in a university study about how AI-powered search represents businesses and their offerings.\n\n'
+          '{{business_summary}} {{distinctive_detail}}\n\n'
+          '{{research_relevance}}\n\n'
+          '{{observation}}'
+          'The study considers publicly available website information. It does not change or monitor your website, and we have not measured search performance or outcomes.\n\n'
           'Questionnaire: {{form_url}}\nInvitation reference: {{reference}}\n\n'
           'Please answer the research interest and research authorization questions separately. We will begin only after reviewing your responses and confirming that the study applies to your website.\n\n'
           'Best regards\n{{researcher_name}}\n{{university_affiliation}}\nReply to: {{reply_to}}')
     body=render_template(body_template,{
-        'label':label,'intro_block':intro+'\n\n' if intro else '',
+        'label':label,
         'company_name':str(name),'website':str(website),
-        'description_block':'Business description: '+description+'\n\n' if description else '',
-        'company_strength':str(p['company_strength']),'observations':'\n'.join(observations),
+        'business_summary':business_summary,
+        'distinctive_detail':distinctive_detail,
+        'research_relevance':research_relevance,
+        'observation':observation,
         'form_url':str(form_url),'reference':str(reference),
         'researcher_name':researcher,'university_affiliation':affiliation,'reply_to':reply_to,
     })
+    from .quality import quality_decisions
+    decisions=quality_decisions(p,body,record=record,candidate_name=name,website=website)
+    if not decisions['OUTREACH_REVIEW_READY']['passed']:
+        raise ValueError('Rendered invitation is not review-ready: '+','.join(decisions['OUTREACH_REVIEW_READY']['reasons']))
     return f'GEO research participation invitation - {name}',body

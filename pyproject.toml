@@ -20,6 +20,7 @@ dependencies = [
   "argon2-cffi>=23.1,<26",
   "fastapi>=0.115,<1",
   "uvicorn>=0.30,<1",
+  "tiktoken>=0.8,<1",
 ]
 
 [project.optional-dependencies]

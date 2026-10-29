@@ -1,0 +1,3 @@
+# Optional local tokenizer required for fail-closed OpenAI input preflight.
+# The application uses its existing httpx dependency for a single no-retry POST.
+tiktoken>=0.8,<1

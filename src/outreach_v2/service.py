@@ -21,6 +21,8 @@ def readiness():
     return and_(candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',
         candidates.c.personalization_quality_status=='PASS',
+        candidates.c.personalization_analysis_version=='semantic-openai-v1',
+        candidates.c.personalization_version>0,
         select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()==1,
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
 
@@ -99,6 +101,8 @@ def detail(db,ident):
 
 def eligible_recipient(c,row):
     reasons=[]
+    if row.get('personalization_analysis_version')!='semantic-openai-v1' or int(row.get('personalization_version') or 0)<1:
+        reasons.append('Personalization is legacy, missing, or outdated; current semantic version required')
     if row['suppressed']:reasons.append('Candidate suppressed or withdrawn')
     if row['website_status']!='VERIFIED':reasons.append('Official website not verified')
     if row['qualification'] not in {'ELIGIBLE','QUALIFIED'}:reasons.append('Candidate not qualified')
@@ -158,7 +162,7 @@ def generate(db,selection,key):
             invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper()
             url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
             try:
-                subject,body=render(row['name'],row['website'],p,url,reference,row['fixture'])
+                subject,body=render(row['name'],row['website'],p,url,reference,record=row)
             except ValueError as exc:
                 excluded.append({'candidate_id':row['id'],'company':row['name'],
                                  'reasons':['Invalid invitation personalization: '+str(exc)]})
@@ -217,7 +221,7 @@ def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
         p=parse(candidate['personalization'])
         try: validate(p,candidate['website'])
         except ValueError as exc: raise ValueError('Current personalization does not pass quality validation: '+str(exc)) from exc
-        subject,body=render(inv['company_name'],inv['website'],p,inv['form_url'],inv['reference'],bool(candidate['fixture']))
+        subject,body=render(inv['company_name'],inv['website'],p,inv['form_url'],inv['reference'],record=candidate)
         current_version=c.scalar(select(func.max(invitation_corrections.c.version)).where(invitation_corrections.c.invitation_id==invitation_id)) or 1
         source_hash=hashlib.sha256((str(inv['subject'])+'\0'+str(inv['body'])).encode()).hexdigest()
         proposed_hash=hashlib.sha256((subject+'\0'+body).encode()).hexdigest()

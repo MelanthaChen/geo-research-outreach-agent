@@ -25,6 +25,8 @@ candidates = table('candidates', col('id', String, primary_key=True), col('kind'
     col('personalization', default='{}'), col('personalization_status', String, default='INCOMPLETE'),
     col('personalization_quality_status', String, default='UNVERIFIED'), col('personalization_quality_errors', Text, default='[]'),
     col('personalization_at'), col('personalization_error'), col('personalization_outcome'),
+    col('personalization_version', Integer, nullable=False, default=0, server_default='0'),
+    col('personalization_analysis_version', String), col('personalization_fingerprint', String),
     col('personalization_attempts', Integer, nullable=False, default=0, server_default='0'),
     col('personalization_retry_after'), col('personalization_lease_token'), col('personalization_lease_until'),
     col('fixture', Boolean, default=False, nullable=False),
@@ -78,6 +80,27 @@ deliveries = table('deliveries', col('id', String, primary_key=True),
     col('error'), col('next_attempt_at'), col('attempts', Integer, default=0))
 events = table('events', col('id', String, primary_key=True), col('entity_id', String, index=True),
     col('event'), col('detail'), col('created_at'))
+personalization_versions = table('personalization_versions', col('id', String, primary_key=True),
+    Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
+    col('version', Integer, nullable=False), col('analysis_version', String, nullable=False),
+    col('evidence_fingerprint', String, nullable=False), col('personalization', Text, nullable=False),
+    col('quality_status', String, nullable=False), col('quality_errors', Text, nullable=False),
+    col('provider', String), col('model', String), col('request_id', String), col('usage', Text),
+    col('estimated_cost_usd', String), col('created_at', nullable=False),
+    UniqueConstraint('candidate_id', 'version', name='uq_personalization_version'))
+personalization_runs = table('personalization_runs', col('id', String, primary_key=True),
+    col('started_at', nullable=False), col('finished_at'), col('status', nullable=False),
+    col('candidate_limit', Integer, nullable=False), col('run_budget_usd', String, nullable=False),
+    col('cumulative_budget_usd', String, nullable=False), col('reserved_usd', String, nullable=False, default='0'),
+    col('actual_cost_usd', String, nullable=False, default='0'), col('detail', Text))
+personalization_attempts = table('personalization_attempts', col('id', String, primary_key=True),
+    Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
+    Column('run_id', String, ForeignKey(f'{SCHEMA}.personalization_runs.id'), nullable=False, index=True),
+    col('evidence_fingerprint', String, nullable=False), col('operation_id', String, nullable=False), col('model', String, nullable=False),
+    col('status', String, nullable=False), col('reserved_usd', String, nullable=False),
+    col('actual_cost_usd', String), col('request_id', String), col('usage', Text),
+    col('provider_response', Text), col('error_code', String), col('created_at', nullable=False), col('finished_at'),
+    UniqueConstraint('candidate_id', 'evidence_fingerprint', 'operation_id', name='uq_personalization_attempt_operation'))
 sessions = table('sessions', col('token_hash', String, primary_key=True), col('csrf_hash'), col('email'),
     col('expires_at'), col('created_at'))
 auth_attempts = table('auth_attempts', col('id', String, primary_key=True), col('source', String, index=True),
@@ -133,6 +156,8 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'candidates': {'personalization_quality_status': "TEXT NOT NULL DEFAULT 'UNVERIFIED'", 'personalization_quality_errors': "TEXT NOT NULL DEFAULT '[]'"},
     'batches': {'pilot_review_status': "TEXT NOT NULL DEFAULT 'NOT_REQUIRED'", 'pilot_review_sha256': 'TEXT', 'pilot_reviewed_by': 'TEXT', 'pilot_reviewed_at': 'TEXT'},
     'invitations': {'researcher_name': 'TEXT', 'university_affiliation': 'TEXT', 'reply_to': 'TEXT'}
+}), (6, 'audited-semantic-personalization-ledger', {
+    'candidates': {'personalization_version': "INTEGER NOT NULL DEFAULT 0", 'personalization_analysis_version': 'TEXT', 'personalization_fingerprint': 'TEXT'}
 })]
 
 class Database:

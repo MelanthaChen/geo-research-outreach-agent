@@ -8,7 +8,8 @@ from docx.oxml.ns import qn
 from openpyxl import Workbook
 
 BASE=('invitation_id','company_id','company_name','recipient_email','Email Address','email_subject',
-      'bulk_subject','email_body','invitation_reference','questionnaire_url','business_description','company_strength')
+      'bulk_subject','email_body','invitation_reference','questionnaire_url','business_description','company_strength',
+      'sender_email','reply_to','researcher_name','university_affiliation')
 
 def field(paragraph,name):
     element=OxmlElement('w:fldSimple');element.set(qn('w:instr'),f' MERGEFIELD {name} \\* MERGEFORMAT ')
@@ -26,7 +27,8 @@ def build_package(invitations,excluded,bulk_subject):
     rows=[]
     for inv in invitations:
         p=json.loads(inv['personalization']);row=dict(zip(BASE,[inv['id'],inv['candidate_id'],inv['company_name'],inv['recipient'],inv['recipient'],
-            inv['subject'],bulk_subject,inv['body'],inv['reference'],inv['form_url'],p['business_description'],p['company_strength']]))
+            inv['subject'],bulk_subject,inv['body'],inv['reference'],inv['form_url'],p['business_description'],p['company_strength'],
+            inv.get('sender_email'),inv.get('reply_to'),inv.get('researcher_name'),inv.get('university_affiliation')]))
         for i,value in enumerate(inv['body'].split('\n\n'),1):row[f'body_paragraph_{i:02}']=value
         if any(len(str(v))>32767 for v in row.values()):raise ValueError('Invitation exceeds Excel cell limit')
         rows.append(row)

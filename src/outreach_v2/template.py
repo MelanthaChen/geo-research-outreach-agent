@@ -8,6 +8,50 @@ BULK_SUBJECT = 'GEO research participation invitation'  # Authorized shared Word
 REQUIRED = ('business_description','company_strength','source_urls','retrieved_at','recommendations')
 EMAIL = re.compile(r'^[A-Za-z0-9.!#$%&\'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$')
 _TEMPLATE_VARIABLE = re.compile(r'\{\{([a-z][a-z0-9_]*)\}\}')
+INVITATION_TEMPLATE_FIELDS = frozenset({
+    'label','company_name','website','business_summary','distinctive_detail',
+    'research_relevance','observation','form_url','reference','researcher_name',
+    'university_affiliation','reply_to'
+})
+REQUIRED_INVITATION_BODY_FIELDS = frozenset({
+    'company_name','business_summary','distinctive_detail','research_relevance',
+    'form_url','reference','researcher_name','university_affiliation','reply_to'
+})
+
+DEFAULT_INVITATION_SUBJECT='GEO research participation invitation - {{company_name}}'
+DEFAULT_INVITATION_BODY=('{{label}}Hello,\n\n'
+    'We are inviting {{company_name}} to participate in a university study about how AI-powered search represents businesses and their offerings.\n\n'
+    '{{business_summary}} {{distinctive_detail}}\n\n{{research_relevance}}\n\n{{observation}}'
+    'The study considers publicly available website information. It does not change or monitor your website, and we have not measured search performance or outcomes.\n\n'
+    'Questionnaire: {{form_url}}\nInvitation reference: {{reference}}\n\n'
+    'Please answer the research interest and research authorization questions separately. We will begin only after reviewing your responses and confirming that the study applies to your website.\n\n'
+    'Best regards\n{{researcher_name}}\n{{university_affiliation}}\nReply to: {{reply_to}}')
+
+def validate_invitation_template(subject, body, *, sender, reply_to, researcher_name, university_affiliation):
+    """Fail closed on missing identity, unknown substitutions, and generic templates."""
+    for label, value, limit in (('subject',subject,200),('body',body,20000)):
+        if not isinstance(value,str) or not value.strip() or len(value)>limit:
+            raise ValueError('Invitation '+label+' is empty or exceeds limits')
+        # Reject malformed or unsupported template syntax before saving a version.
+        residue=re.sub(r'\{\{[a-z][a-z0-9_]*\}\}','',value)
+        if '{{' in residue or '}}' in residue:
+            raise ValueError('Invitation template contains malformed variables')
+        variables=set(_TEMPLATE_VARIABLE.findall(value))
+        unknown=variables-INVITATION_TEMPLATE_FIELDS
+        if unknown:
+            raise ValueError('Invitation template contains unsupported variables')
+    if 'company_name' not in _TEMPLATE_VARIABLE.findall(subject):
+        raise ValueError('Invitation subject must include the company name variable')
+    body_variables=set(_TEMPLATE_VARIABLE.findall(body))
+    if not REQUIRED_INVITATION_BODY_FIELDS.issubset(body_variables):
+        raise ValueError('Invitation body is missing required personalization or participation variables')
+    if not EMAIL.fullmatch(str(sender or '').strip()) or not EMAIL.fullmatch(str(reply_to or '').strip()):
+        raise ValueError('A valid invitation sender and reply-to address are required')
+    if not str(researcher_name or '').strip() or not str(university_affiliation or '').strip():
+        raise ValueError('Researcher identity and university affiliation are required')
+    literal=re.sub(r'\{\{[a-z][a-z0-9_]*\}\}',' ',body).casefold()
+    if 'research interest' not in literal or 'research authorization' not in literal or 'questionnaire' not in literal:
+        raise ValueError('Invitation must preserve the separate consent questions and questionnaire link')
 
 def render_template(template, values):
     """Substitute only template-owned variables; inserted company text stays literal."""
@@ -63,14 +107,16 @@ def validate(personalization, website):
         raise ValueError('Outreach review quality failed: '+','.join(decisions['OUTREACH_REVIEW_READY']['reasons']))
     return personalization
 
-def render(name, website, p, form_url, reference, record=None, identity=None):
+def render(name, website, p, form_url, reference, record=None, identity=None, template_config=None):
     validate(p,website)
     identity=identity or {}
-    researcher=(identity.get('researcher_name') or os.getenv('OUTREACH_RESEARCHER_NAME') or '').strip()
-    affiliation=(identity.get('university_affiliation') or os.getenv('OUTREACH_UNIVERSITY_AFFILIATION') or '').strip()
-    reply_to=(identity.get('reply_to') or os.getenv('OUTREACH_REPLY_TO') or '').strip()
-    if not researcher or not affiliation or not EMAIL.fullmatch(reply_to):
-        raise ValueError('Researcher name, university affiliation, and valid reply-to address must be configured')
+    template_config=template_config or {}
+    researcher=(identity.get('researcher_name') or template_config.get('researcher_name') or os.getenv('OUTREACH_RESEARCHER_NAME') or '').strip()
+    affiliation=(identity.get('university_affiliation') or template_config.get('university_affiliation') or os.getenv('OUTREACH_UNIVERSITY_AFFILIATION') or '').strip()
+    reply_to=(identity.get('reply_to') or template_config.get('reply_to') or os.getenv('OUTREACH_REPLY_TO') or '').strip()
+    sender=(identity.get('sender') or template_config.get('sender') or os.getenv('OUTREACH_INVITATION_SENDER') or reply_to).strip()
+    if not researcher or not affiliation or not EMAIL.fullmatch(reply_to) or not EMAIL.fullmatch(sender):
+        raise ValueError('Researcher identity, university affiliation, sender, and valid reply-to address must be configured')
     intro=str(p.get('introduction') or '')
     description=str(p.get('business_description') or '')
     is_fixture=bool(record and record.get('fixture') is True and record.get('id') and
@@ -82,16 +128,11 @@ def render(name, website, p, form_url, reference, record=None, identity=None):
     research_relevance=copy.get('research_relevance') or ''
     observation=(f'One detail that stood out: {copy.get("supported_observation")}\n\n'
                  if copy.get('supported_observation') else '')
-    body_template=('{{label}}Hello,\n\n'
-          'We are inviting {{company_name}} to participate in a university study about how AI-powered search represents businesses and their offerings.\n\n'
-          '{{business_summary}} {{distinctive_detail}}\n\n'
-          '{{research_relevance}}\n\n'
-          '{{observation}}'
-          'The study considers publicly available website information. It does not change or monitor your website, and we have not measured search performance or outcomes.\n\n'
-          'Questionnaire: {{form_url}}\nInvitation reference: {{reference}}\n\n'
-          'Please answer the research interest and research authorization questions separately. We will begin only after reviewing your responses and confirming that the study applies to your website.\n\n'
-          'Best regards\n{{researcher_name}}\n{{university_affiliation}}\nReply to: {{reply_to}}')
-    body=render_template(body_template,{
+    subject_template=template_config.get('subject') or DEFAULT_INVITATION_SUBJECT
+    body_template=template_config.get('body') or DEFAULT_INVITATION_BODY
+    validate_invitation_template(subject_template,body_template,sender=sender,reply_to=reply_to,
+        researcher_name=researcher,university_affiliation=affiliation)
+    values={
         'label':label,
         'company_name':str(name),'website':str(website),
         'business_summary':business_summary,
@@ -100,9 +141,11 @@ def render(name, website, p, form_url, reference, record=None, identity=None):
         'observation':observation,
         'form_url':str(form_url),'reference':str(reference),
         'researcher_name':researcher,'university_affiliation':affiliation,'reply_to':reply_to,
-    })
+    }
+    body=render_template(body_template,values)
+    subject=render_template(subject_template,values)
     from .quality import quality_decisions
     decisions=quality_decisions(p,body,record=record,candidate_name=name,website=website)
     if not decisions['OUTREACH_REVIEW_READY']['passed']:
         raise ValueError('Rendered invitation is not review-ready: '+','.join(decisions['OUTREACH_REVIEW_READY']['reasons']))
-    return f'GEO research participation invitation - {name}',body
+    return subject,body

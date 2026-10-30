@@ -264,7 +264,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==6
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==7
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -485,6 +485,12 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     for i in range(100):
         candidate(db,ident=f'pilot-{i:03}',email=f'contact{i}@pilot-example.org',
             website=f'https://company-{i:03}.pilot-example.org',name=f'Pilot Company {i:03}',fixture=False)
+    candidate(db,ident='pilot-duplicate-domain',email='duplicate@pilot-example.org',
+        website='https://company-000.pilot-example.org',name='Duplicate Domain',fixture=False)
+    candidate(db,ident='pilot-duplicate-recipient',email='contact0@pilot-example.org',
+        website='https://another-company.pilot-example.org',name='Duplicate Recipient',fixture=False)
+    candidate(db,ident='pilot-fixture',email='fixture@pilot-example.org',
+        website='https://fixture-company.pilot-example.org',name='Pilot Fixture',fixture=True)
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false');monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
@@ -508,12 +514,17 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     cohort_id=cohort.json()['id']
     detail=client.get(f'/api/admin/pilot-cohorts/{cohort_id}')
     assert detail.status_code==200 and len(detail.json()['members'])==100
+    selected_members=detail.json()['members']
+    assert len({m['website'] for m in selected_members})==100
+    assert 'pilot-duplicate-domain' not in {m['id'] for m in selected_members}
+    assert 'pilot-duplicate-recipient' not in {m['id'] for m in selected_members}
+    assert 'pilot-fixture' not in {m['id'] for m in selected_members}
     first_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
     second_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
     assert first_package.status_code==second_package.status_code==200, first_package.text
-    manifest=json.loads(zipfile.ZipFile(io.BytesIO(first_package.content)).read('manifest.json'))
-    assert manifest['count']==100 and manifest['excluded']==[]
-    assert first_package.headers['X-Batch-Id']==second_package.headers['X-Batch-Id']
+    batch_id=first_package.json()['batch_id']
+    assert first_package.json()['review_status']=='PENDING_REVIEW' and first_package.json()['download_available'] is False
+    assert batch_id==second_package.json()['batch_id']
     assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
     review_data=client.get(f'/api/admin/pilot-cohorts/{cohort_id}/review')
     assert review_data.status_code==200 and review_data.json()['actual_recipients']==100
@@ -526,11 +537,16 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
         password_hash=PasswordHasher().hash(reviewer_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
     reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={'email':'reviewer@example.org','password':reviewer_password})
     assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
+    reviewer_headers={'X-CSRF-Token':review_login.json()['csrf']}
+    assert reviewer.post('/api/batches',headers=reviewer_headers,json={'ids':['pilot-000']}).status_code==403
+    assert reviewer.post('/api/batches/missing/send-record',headers=reviewer_headers,json={'evidence':'not sent'}).status_code==403
     approved=reviewer.post(f'/api/admin/pilot-cohorts/{cohort_id}/approve',headers={'X-CSRF-Token':review_login.json()['csrf']},
         json={'package_sha256':review_data.json()['package_sha256'],'confirm_reviewed':True})
     assert approved.status_code==200 and approved.json()['sent'] is False and approved.json()['send_status']=='READY_TO_SEND'
+    manifest=json.loads(zipfile.ZipFile(io.BytesIO(client.get(f'/api/batches/{batch_id}/download').content)).read('manifest.json'))
+    assert manifest['count']==100 and manifest['excluded']==[]
     with db.transaction() as c:
-        approved_batch=c.execute(select(batches).where(batches.c.id==first_package.headers['X-Batch-Id'])).mappings().one()
+        approved_batch=c.execute(select(batches).where(batches.c.id==batch_id)).mappings().one()
     assert approved_batch['pilot_review_status']=='APPROVED' and approved_batch['pilot_review_sha256']==review_data.json()['package_sha256']
     assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
     candidate(db,ident='questionnaire-check',email='check@external-example.org',website='https://check.external-example.org',
@@ -542,6 +558,46 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert 'entry.123456' in saved['form_url'] and form.split('/viewform')[0] in saved['form_url']
     with db.transaction() as c:
         assert c.scalar(select(func.count()).select_from(pilot_members).where(pilot_members.c.cohort_id==cohort_id))==100
+
+def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_subject(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    template={
+        'kind':'INVITATION','subject':'{{company_name}} research invitation',
+        'body':('Hello {{company_name}}. {{business_summary}} {{distinctive_detail}} '
+            '{{research_relevance}} Questionnaire: {{form_url}} Reference: {{reference}} '
+            'Please answer the research interest and research authorization questions separately. '
+            '{{researcher_name}}, {{university_affiliation}}. Reply to {{reply_to}}.'),
+        'sender':'researcher@northeastern.edu','reply_to':'reply@northeastern.edu',
+        'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'}
+    missing=client.post('/api/admin/email-templates',headers=headers,json={**template,'body':'Hello {{company_name}}'})
+    assert missing.status_code==422
+    first=client.post('/api/admin/email-templates',headers=headers,json=template)
+    second=client.post('/api/admin/email-templates',headers=headers,json=template)
+    assert first.status_code==second.status_code==200
+    versions=client.get('/api/admin/email-templates').json()['rows']
+    invitation_versions=[row for row in versions if row['template_kind']=='INVITATION']
+    assert len(invitation_versions)==2 and [row['active'] for row in invitation_versions]==[True,False]
+    assert all(row['sender']=='researcher@northeastern.edu' and row['reply_to']=='reply@northeastern.edu' for row in invitation_versions)
+    candidate(db,ident='templated',email='contact@templated.example',website='https://templated.example',
+        name='Templated Company',fixture=False)
+    batch=invite(db,['templated'],key='versioned-template-stable-request')
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).where(invitations.c.candidate_id=='templated')).mappings().one()
+    assert saved['template_version']==f"invitation-template-v{second.json()['version']}"
+    assert saved['subject']=='Templated Company research invitation'
+    assert saved['sender_email']=='researcher@northeastern.edu' and saved['reply_to']=='reply@northeastern.edu'
+    assert 'Templated Company' in saved['body'] and 'research interest and research authorization questions separately' in saved['body']
+    package=zipfile.ZipFile(io.BytesIO(batch['package']))
+    rows=list(csv.DictReader(io.StringIO(package.read('invitations.csv').decode('utf-8-sig'))))
+    assert rows[0]['bulk_subject']==BULK_SUBJECT
+    assert rows[0]['sender_email']=='researcher@northeastern.edu' and rows[0]['reply_to']=='reply@northeastern.edu'
 
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)
@@ -983,7 +1039,18 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     response=client.post('/api/batches',headers={'X-CSRF-Token':login.json()['csrf'],'Idempotency-Key':'isolated-api-package-key-123'},
         json={'ids':['package-valid','package-invalid']})
     assert response.status_code==200, response.text
-    package=zipfile.ZipFile(io.BytesIO(response.content));manifest=json.loads(package.read('manifest.json'))
+    prepared=response.json();batch_id=prepared['batch_id']
+    assert prepared['review_status']=='PENDING_REVIEW' and prepared['download_available'] is False
+    assert client.get(f'/api/batches/{batch_id}/download').status_code==403
+    review=client.get(f'/api/batches/{batch_id}/review').json()
+    assert review['status']=='PENDING_REVIEW' and len(review['invitations'])==1
+    assert review['excluded'][0]['candidate_id']=='package-invalid'
+    assert client.post(f'/api/batches/{batch_id}/approve',headers={'X-CSRF-Token':login.json()['csrf']},
+        json={'package_sha256':'0'*64,'confirm_reviewed':True}).status_code==422
+    approved=client.post(f'/api/batches/{batch_id}/approve',headers={'X-CSRF-Token':login.json()['csrf']},
+        json={'package_sha256':review['package_sha256'],'confirm_reviewed':True})
+    assert approved.status_code==200 and approved.json()['sent'] is False
+    package=zipfile.ZipFile(io.BytesIO(client.get(f'/api/batches/{batch_id}/download').content));manifest=json.loads(package.read('manifest.json'))
     assert manifest['count']==1 and manifest['excluded'][0]['candidate_id']=='package-invalid'
     assert manifest['excluded'][0]['reasons']==['Missing V1 field: business_description']
     csv_rows=list(csv.DictReader(io.StringIO(package.read('invitations.csv').decode('utf-8-sig'))))

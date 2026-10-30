@@ -56,7 +56,7 @@ invitations = table('invitations', col('id', String, primary_key=True),
     col('reference', String, unique=True, nullable=False), col('recipient', String, nullable=False),
     col('website', nullable=False), col('company_name', nullable=False), col('subject'), col('body'), col('form_url'),
     col('template_version'), col('questionnaire_id'), col('personalization'), col('generated_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
-    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'), col('researcher_name'), col('university_affiliation'), col('reply_to'))
+    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'), col('researcher_name'), col('university_affiliation'), col('reply_to'), col('sender_email'))
 submissions = table('submissions', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), index=True), col('reference'),
     col('interest'), col('authorization'), col('representative_name'), col('representative_role'), col('representative_email'),
@@ -117,7 +117,9 @@ admin_invites = table('admin_invites', col('id', String, primary_key=True), col(
     col('invited_by', String, nullable=False), col('accepted_at'))
 email_templates = table('email_templates', col('id', String, primary_key=True), col('version', Integer, nullable=False),
     col('subject', String, nullable=False), col('body', Text, nullable=False), col('sender', String),
-    col('active', Boolean, nullable=False, default=False), col('created_by', String), col('created_at', nullable=False))
+    col('active', Boolean, nullable=False, default=False), col('created_by', String), col('created_at', nullable=False),
+    col('template_kind', String, nullable=False, default='REPORT', server_default='REPORT'), col('reply_to'),
+    col('researcher_name'), col('university_affiliation'))
 questionnaires = table('questionnaires', col('id', String, primary_key=True), col('version', Integer, nullable=False),
     col('form_url', Text, nullable=False), col('field_map', Text, nullable=False), col('active', Boolean, nullable=False, default=False),
     col('created_by', String), col('created_at', nullable=False))
@@ -158,6 +160,10 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'invitations': {'researcher_name': 'TEXT', 'university_affiliation': 'TEXT', 'reply_to': 'TEXT'}
 }), (6, 'audited-semantic-personalization-ledger', {
     'candidates': {'personalization_version': "INTEGER NOT NULL DEFAULT 0", 'personalization_analysis_version': 'TEXT', 'personalization_fingerprint': 'TEXT'}
+}), (7, 'versioned-invitation-template-and-sender-identity', {
+    'email_templates': {'template_kind': "TEXT NOT NULL DEFAULT 'REPORT'", 'reply_to': 'TEXT',
+        'researcher_name': 'TEXT', 'university_affiliation': 'TEXT'},
+    'invitations': {'sender_email': 'TEXT'}
 })]
 
 class Database:

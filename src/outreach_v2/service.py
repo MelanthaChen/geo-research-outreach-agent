@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,secrets,uuid
 from sqlalchemy import select,func,and_,or_,exists
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,now
+from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from outreach_agent.google_forms_integration import prefilled_form_url
@@ -124,6 +124,39 @@ def eligible_recipient(c,row):
     if len(emails)!=1:reasons.append('No single valid first-party business email' if not emails else 'Multiple recipient emails; no unambiguous recipient')
     return (next(iter(emails)) if len(emails)==1 else None),reasons
 
+def select_pilot_cohort(c, limit=100):
+    """Select distinct, currently invitation-ready companies with industry spread."""
+    if limit != 100: raise ValueError('The professor pilot cohort is fixed at 100 companies')
+    rows=c.execute(select(candidates).where(candidates.c.kind=='company',candidates.c.fixture.is_(False),
+        readiness()).order_by(candidates.c.industry,candidates.c.id)).mappings().all()
+    by_industry={}
+    seen_domains=set();seen_recipients=set()
+    from .template import host
+    for item in rows:
+        row=dict(item);recipient,reasons=eligible_recipient(c,row)
+        domain=host(row.get('website'))
+        if reasons or not recipient or not domain or domain in seen_domains or recipient.casefold() in seen_recipients:
+            continue
+        key=(row.get('industry') or 'Unclassified').strip() or 'Unclassified'
+        by_industry.setdefault(key,[]).append((row,recipient,domain))
+    # Round-robin industries so a long single-industry run cannot monopolize the cohort.
+    selected=[]
+    industries=sorted(by_industry)
+    while industries and len(selected)<limit:
+        remaining=[]
+        for industry in industries:
+            queue=by_industry[industry]
+            while queue:
+                row,recipient,domain=queue.pop(0)
+                if domain in seen_domains or recipient.casefold() in seen_recipients:
+                    continue
+                selected.append(row);seen_domains.add(domain);seen_recipients.add(recipient.casefold())
+                break
+            if queue:remaining.append(industry)
+            if len(selected)>=limit:break
+        industries=remaining
+    return selected
+
 OWNER_BINDINGS={
  'geo-ai-resume.vercel.app':{'recipient':'yuxuan.chen.1031@outlook.com','representative':'yuxuan.chen.1031@outlook.com'},
  'whisker-haven-demo.vercel.app':{'recipient':'yuxaun.chen.1031@outlook.com','representative':'yuxaun.chen.1031@outlook.com'}}
@@ -148,10 +181,13 @@ def generate(db,selection,key):
             query=select(candidates).where(candidates.c.id.in_(ids)).order_by(candidates.c.id)
         batch_id='batch-'+uuid.uuid4().hex;generated=[];excluded=[];seen=set()
         questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
+        invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
+            email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
         questionnaire_fields=parse(questionnaire['field_map']) if questionnaire else {}
         configured_form=questionnaire['form_url'] if questionnaire else None
         reference_entry=questionnaire_fields.get('invitation_reference_entry_id') if questionnaire else None
-        c.execute(batches.insert().values(id=batch_id,request_key=key,selection_hash=selection_hash,created_at=stamp,bulk_subject=BULK_SUBJECT))
+        c.execute(batches.insert().values(id=batch_id,request_key=key,selection_hash=selection_hash,created_at=stamp,
+            bulk_subject=BULK_SUBJECT,pilot_review_status='PENDING_REVIEW'))
         for row in c.execute(query).mappings():
             recipient,reasons=eligible_recipient(c,row)
             if recipient in seen:reasons.append('Duplicate recipient within batch')
@@ -162,7 +198,8 @@ def generate(db,selection,key):
             invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper()
             url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
             try:
-                subject,body=render(row['name'],row['website'],p,url,reference,record=row)
+                subject,body=render(row['name'],row['website'],p,url,reference,record=row,
+                    template_config=invitation_template)
             except ValueError as exc:
                 excluded.append({'candidate_id':row['id'],'company':row['name'],
                                  'reasons':['Invalid invitation personalization: '+str(exc)]})
@@ -175,10 +212,12 @@ def generate(db,selection,key):
                 authority={'method':'OWNER_BINDING','website':row['website'],**binding}
             item=dict(id=invitation_id,candidate_id=row['id'],batch_id=batch_id,reference=reference,recipient=recipient,
                       website=row['website'],company_name=row['name'],subject=subject,body=body,form_url=url,
-                      template_version=VERSION,questionnaire_id=questionnaire['id'] if questionnaire else None,
-                      researcher_name=__import__('os').getenv('OUTREACH_RESEARCHER_NAME'),
-                      university_affiliation=__import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION'),
-                      reply_to=__import__('os').getenv('OUTREACH_REPLY_TO'),
+                      template_version=(f"invitation-template-v{invitation_template['version']}" if invitation_template else VERSION),
+                      questionnaire_id=questionnaire['id'] if questionnaire else None,
+                      researcher_name=(invitation_template['researcher_name'] if invitation_template else __import__('os').getenv('OUTREACH_RESEARCHER_NAME')),
+                      university_affiliation=(invitation_template['university_affiliation'] if invitation_template else __import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION')),
+                      reply_to=(invitation_template['reply_to'] if invitation_template else __import__('os').getenv('OUTREACH_REPLY_TO')),
+                      sender_email=(invitation_template['sender'] if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER') or __import__('os').getenv('OUTREACH_REPLY_TO'))),
                       personalization=dump(p),generated_at=stamp,exported_at=stamp,
                       send_status='UNVERIFIED',consent_status='NOT_RECEIVED',authority=dump(authority))
             c.execute(invitations.insert().values(**item));generated.append(item);seen.add(recipient)
@@ -221,7 +260,10 @@ def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
         p=parse(candidate['personalization'])
         try: validate(p,candidate['website'])
         except ValueError as exc: raise ValueError('Current personalization does not pass quality validation: '+str(exc)) from exc
-        subject,body=render(inv['company_name'],inv['website'],p,inv['form_url'],inv['reference'],record=candidate)
+        invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
+            email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
+        subject,body=render(inv['company_name'],inv['website'],p,inv['form_url'],inv['reference'],record=candidate,
+            template_config=invitation_template)
         current_version=c.scalar(select(func.max(invitation_corrections.c.version)).where(invitation_corrections.c.invitation_id==invitation_id)) or 1
         source_hash=hashlib.sha256((str(inv['subject'])+'\0'+str(inv['body'])).encode()).hexdigest()
         proposed_hash=hashlib.sha256((subject+'\0'+body).encode()).hexdigest()

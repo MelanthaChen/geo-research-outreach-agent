@@ -97,7 +97,8 @@ def report_step(db,job,renderer=None):
 def delivery_step(db,job,mail_factory):
     with db.transaction() as c:
         inv,_=context(c,job);report=dict(c.execute(select(reports).where(reports.c.job_id==job['id'])).mappings().one())
-        template=c.execute(select(email_templates).where(email_templates.c.active.is_(True)).order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
+        template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
+            email_templates.c.template_kind=='REPORT').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
         if report['recipient']!=inv['recipient']:raise ValueError('Report recipient does not match original invitation')
         document_hash=hashlib.sha256(report['document'] or b'').hexdigest()
         if not report['document'] or not report['sha256'] or not hmac.compare_digest(document_hash,report['sha256']):

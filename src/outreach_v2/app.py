@@ -95,8 +95,16 @@ def create_app(database=None):
     def candidate(ident:str):return service.detail(db,ident)
     @app.post('/api/batches')
     async def generate(request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
         body=await request.json();result=service.generate(db,body,request.headers.get('idempotency-key'))
-        return Response(result['package'],media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{result["id"]}.zip"','X-Batch-Id':result['id'],'X-Excluded-Count':str(len(json.loads(result['excluded'])))})
+        excluded=json.loads(result.get('excluded') or '[]')
+        import io,zipfile
+        with zipfile.ZipFile(io.BytesIO(result['package'])) as package:
+            manifest=json.loads(package.read('manifest.json'))
+        status=result.get('pilot_review_status','PENDING_REVIEW')
+        return {'batch_id':result['id'],'review_status':status,
+            'invitation_count':manifest['count'],'excluded_count':len(excluded),
+            'download_available':status=='APPROVED','sent':False}
     @app.get('/api/batches')
     def batch_list(page:int=1):
         with db.transaction() as c:
@@ -105,14 +113,64 @@ def create_app(database=None):
     def download(ident:str):
         with db.transaction() as c:row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
         if not row:raise LookupError('Batch not found')
+        if row['pilot_review_status']!='APPROVED':
+            raise PermissionError('Invitation package is not available until the exact batch receives human approval')
+        if row['pilot_review_status']=='APPROVED' and hashlib.sha256(row['package'] or b'').hexdigest()!=row['pilot_review_sha256']:
+            raise PermissionError('Approved invitation package hash no longer matches; approval is invalidated')
         return Response(row['package'],media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{ident}.zip"'})
+    @app.get('/api/batches/{ident}/review')
+    def review_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        with db.transaction() as c:
+            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not batch:raise LookupError('Batch not found')
+            rows=c.execute(select(invitations,candidate_table.c.personalization_quality_status,
+                candidate_table.c.personalization_quality_errors).select_from(invitations.join(candidate_table,
+                candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==ident)
+                .order_by(invitations.c.company_name)).mappings().all()
+            items=[]
+            for row in rows:
+                item=dict(row);item['personalization']=json.loads(item.get('personalization') or '{}')
+                item['personalization_quality_errors']=json.loads(item.get('personalization_quality_errors') or '[]')
+                items.append(item)
+            return {'batch_id':ident,'status':batch['pilot_review_status'],'package_sha256':hashlib.sha256(batch['package'] or b'').hexdigest(),
+                'excluded':json.loads(batch['excluded'] or '[]'),'invitations':items,'download_available':batch['pilot_review_status']=='APPROVED'}
+    @app.post('/api/batches/{ident}/approve')
+    async def approve_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','APPROVER')
+        body=await request.json();provided=str(body.get('package_sha256') or '')
+        if body.get('confirm_reviewed') is not True:raise ValueError('Reviewer must confirm the complete invitation batch was reviewed')
+        with db.transaction(serialized=True) as c:
+            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not batch:raise LookupError('Batch not found')
+            if batch['pilot_review_status'] not in {'PENDING_REVIEW','BLOCKED_INCOMPLETE','NOT_REQUIRED'}:raise ValueError('Batch is not awaiting review')
+            digest=hashlib.sha256(batch['package'] or b'').hexdigest()
+            if not provided or not hmac.compare_digest(provided,digest):raise ValueError('Approval must match the current complete package SHA-256')
+            rows=c.execute(select(invitations.c.id,invitations.c.website,invitations.c.personalization,
+                candidate_table.c.personalization_quality_status).select_from(invitations.join(candidate_table,
+                candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==ident)).all()
+            if not rows:raise ValueError('Empty invitation batch cannot be approved')
+            for row in rows:
+                if row.personalization_quality_status!='PASS':raise ValueError('Every invitation must pass the current personalization quality gate')
+                service.validate(json.loads(row.personalization or '{}'),row.website)
+            stamp=now();actor=request.state.session['email']
+            c.execute(batches.update().where(batches.c.id==ident).values(pilot_review_status='APPROVED',pilot_review_sha256=digest,
+                pilot_reviewed_by=actor,pilot_reviewed_at=stamp,send_status='READY_TO_SEND'))
+            c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='READY_TO_SEND'))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_BATCH_APPROVED',
+                detail=json.dumps({'sha256':digest,'count':len(rows),'reviewer':actor},sort_keys=True),created_at=stamp))
+        return {'batch_id':ident,'status':'APPROVED','package_sha256':digest,'send_status':'READY_TO_SEND','sent':False}
     @app.post('/api/batches/{ident}/send-record')
     async def record_send(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
         body=await request.json();evidence=str(body.get('evidence') or '').strip()
         if not evidence:raise ValueError('Describe the actual Outlook batch send evidence')
         # Operator attestation is not a provider receipt or delivery confirmation.
         with db.transaction(serialized=True) as c:
-            if not c.scalar(select(batches.c.id).where(batches.c.id==ident)):raise LookupError('Batch not found')
+            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not batch:raise LookupError('Batch not found')
+            if batch['pilot_review_status']!='APPROVED':
+                raise PermissionError('Invitation batch must be reviewed before recording a send')
             c.execute(batches.update().where(batches.c.id==ident).values(send_status='OPERATOR_REPORTED',send_evidence=evidence,send_recorded_at=now()))
             c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='OPERATOR_REPORTED'))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='OPERATOR_REPORTED_SEND',detail=evidence,created_at=now()))
@@ -190,6 +248,8 @@ def create_app(database=None):
             c.execute(admin_invites.insert().values(id=invite_id,email=email,role=role,token_hash=auth.digest(token),
                 expires_at=(datetime.now(timezone.utc)+timedelta(hours=48)).isoformat(),
                 invited_by=request.state.session['email'],accepted_at=None))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=invite_id,event='ADMIN_INVITE_CREATED',
+                detail=json.dumps({'email':email,'role':role,'invited_by':request.state.session['email']},sort_keys=True),created_at=now()))
         # The bearer token is returned once for the operator to deliver over an
         # approved channel; this API never emails it or exposes it again.
         return {'invite_id':invite_id,'email':email,'role':role,'token':token,'expires_in_hours':48,
@@ -209,11 +269,13 @@ def create_app(database=None):
                 password_hash=PasswordHasher().hash(password),role=invite['role'],status='ACTIVE',
                 created_by=invite['invited_by'],created_at=now()))
             c.execute(admin_invites.update().where(admin_invites.c.id==invite['id']).values(accepted_at=now()))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=invite['id'],event='ADMIN_INVITE_ACCEPTED',
+                detail=json.dumps({'email':invite['email'],'role':invite['role']},sort_keys=True),created_at=now()))
         return {'created':True,'email':invite['email'],'role':invite['role']}
 
     @app.get('/api/admin/email-templates')
     def list_email_templates(request:Request):
-        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
         with db.transaction() as c:return {'rows':[dict(r) for r in c.execute(select(email_templates).order_by(email_templates.c.version.desc())).mappings()]}
 
     @app.post('/api/admin/email-templates')
@@ -221,16 +283,33 @@ def create_app(database=None):
         auth.require_role(request.state.session,'ADMIN')
         body=await request.json();subject=str(body.get('subject') or '').strip();content=str(body.get('body') or '').strip()
         sender=str(body.get('sender') or '').strip()
-        if not subject or len(subject)>200 or not content or len(content)>20000:raise ValueError('Template subject/body is empty or exceeds limits')
-        configured_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
-        if sender and configured_sender and sender.lower()!=configured_sender.lower():
-            raise ValueError('Template sender must match the authorized report mailbox')
+        kind=str(body.get('kind') or 'REPORT').strip().upper()
+        if kind not in {'REPORT','INVITATION'}:raise ValueError('Template kind must be REPORT or INVITATION')
+        reply_to=str(body.get('reply_to') or '').strip()
+        researcher_name=str(body.get('researcher_name') or '').strip()
+        affiliation=str(body.get('university_affiliation') or '').strip()
+        if kind=='INVITATION':
+            from .template import validate_invitation_template
+            validate_invitation_template(subject,content,sender=sender,reply_to=reply_to,
+                researcher_name=researcher_name,university_affiliation=affiliation)
+            configured_sender=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
+            if configured_sender and sender.lower()!=configured_sender.lower():
+                raise ValueError('Invitation sender must match the configured researcher mailbox')
+        else:
+            if not subject or len(subject)>200 or not content or len(content)>20000:raise ValueError('Template subject/body is empty or exceeds limits')
+            configured_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
+            if sender and configured_sender and sender.lower()!=configured_sender.lower():
+                raise ValueError('Template sender must match the authorized report mailbox')
         with db.transaction(serialized=True) as c:
             version=(c.scalar(select(func.max(email_templates.c.version))) or 0)+1
-            c.execute(email_templates.update().values(active=False));ident='email-template-'+uuid.uuid4().hex
+            c.execute(email_templates.update().where(email_templates.c.template_kind==kind).values(active=False));ident='email-template-'+uuid.uuid4().hex
             c.execute(email_templates.insert().values(id=ident,version=version,subject=subject,body=content,sender=sender or None,
-                active=True,created_by=request.state.session['email'],created_at=now()))
-        return {'id':ident,'version':version,'active':True,'sender_configured':bool(configured_sender and (not sender or sender.lower()==configured_sender.lower()))}
+                active=True,created_by=request.state.session['email'],created_at=now(),template_kind=kind,
+                reply_to=reply_to or None,researcher_name=researcher_name or None,university_affiliation=affiliation or None))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_VERSION_CREATED',
+                detail=json.dumps({'kind':kind,'version':version,'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
+        return {'id':ident,'version':version,'kind':kind,'active':True,
+            'sender_configured':bool(configured_sender and (not sender or sender.lower()==configured_sender.lower()))}
 
     @app.get('/api/admin/questionnaires')
     def list_questionnaires(request:Request):
@@ -254,6 +333,8 @@ def create_app(database=None):
             c.execute(questionnaires.update().values(active=False));ident='questionnaire-'+uuid.uuid4().hex
             c.execute(questionnaires.insert().values(id=ident,version=version,form_url=url,field_map=json.dumps(mapping,sort_keys=True),
                 active=True,created_by=request.state.session['email'],created_at=now()))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='QUESTIONNAIRE_MAPPING_VERSION_CREATED',
+                detail=json.dumps({'version':version,'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
         return {'id':ident,'version':version,'active':True}
 
     @app.post('/api/admin/pilot-cohorts')
@@ -261,16 +342,17 @@ def create_app(database=None):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
         body=await request.json();name=str(body.get('name') or '100-company pilot').strip()
         if len(name)>120:raise ValueError('Cohort name is too long')
-        from .service import readiness
+        from .service import select_pilot_cohort
         with db.transaction(serialized=True) as c:
-            rows=c.execute(select(candidate_table).where(candidate_table.c.kind=='company',readiness()).order_by(candidate_table.c.id).limit(100)).mappings().all()
+            rows=select_pilot_cohort(c,100)
             if len(rows)!=100:raise ValueError(f'Pilot cohort needs 100 eligible, personalized companies; currently {len(rows)} are available')
             cohort_id='pilot-'+uuid.uuid4().hex
             c.execute(pilot_cohorts.insert().values(id=cohort_id,name=name,target_size=100,
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(pilot_members.insert(),[{'cohort_id':cohort_id,'candidate_id':r['id'],'position':i+1,
                 'eligibility_snapshot':json.dumps({'website_status':r['website_status'],'qualification':r['qualification'],
-                    'personalization_status':r['personalization_status'],'website':r['website']},sort_keys=True)} for i,r in enumerate(rows)])
+                    'personalization_status':r['personalization_status'],'personalization_quality_status':r['personalization_quality_status'],
+                    'website':r['website'],'industry':r['industry']},sort_keys=True)} for i,r in enumerate(rows)])
         return {'id':cohort_id,'name':name,'target_size':100,'member_count':100,'invitations_created':0,'send_status':'NOT_SENT'}
 
     @app.get('/api/admin/pilot-cohorts')
@@ -304,9 +386,9 @@ def create_app(database=None):
         with db.transaction() as c:
             c.execute(batches.update().where(batches.c.id==batch['id']).values(
                 pilot_review_status='PENDING_REVIEW' if len(excluded)==0 else 'BLOCKED_INCOMPLETE'))
-        return Response(batch['package'],media_type='application/zip',headers={
-            'Content-Disposition':f'attachment; filename="{batch["id"]}.zip"','X-Batch-Id':batch['id'],
-            'X-Excluded-Count':str(len(json.loads(batch['excluded'])))})
+        manifest=json.loads(__import__('zipfile').ZipFile(__import__('io').BytesIO(batch['package'])).read('manifest.json'))
+        return {'batch_id':batch['id'],'review_status':'PENDING_REVIEW' if not excluded else 'BLOCKED_INCOMPLETE',
+            'invitation_count':manifest['count'],'excluded_count':len(excluded),'download_available':False,'sent':False}
 
     @app.get('/api/admin/pilot-cohorts/{ident}/review')
     def pilot_cohort_review(ident:str,request:Request):
@@ -332,7 +414,7 @@ def create_app(database=None):
 
     @app.post('/api/admin/pilot-cohorts/{ident}/approve')
     async def approve_pilot_batch(ident:str,request:Request):
-        auth.require_role(request.state.session,'APPROVER')
+        auth.require_role(request.state.session,'APPROVER','ADMIN')
         body=await request.json();provided=str(body.get('package_sha256') or '')
         if body.get('confirm_reviewed') is not True: raise ValueError('Reviewer must explicitly confirm the complete batch was reviewed')
         request_key='pilot-cohort-package-'+ident

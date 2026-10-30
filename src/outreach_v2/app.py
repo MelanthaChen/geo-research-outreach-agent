@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hmac,json,os,uuid,hashlib,secrets,re
+import hmac,json,os,uuid,hashlib,secrets,re,csv,io
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from fastapi import FastAPI,Request,HTTPException
@@ -286,30 +286,97 @@ def create_app(database=None):
         kind=str(body.get('kind') or 'REPORT').strip().upper()
         if kind not in {'REPORT','INVITATION'}:raise ValueError('Template kind must be REPORT or INVITATION')
         reply_to=str(body.get('reply_to') or '').strip()
+        sender_name=str(body.get('sender_name') or '').strip()
         researcher_name=str(body.get('researcher_name') or '').strip()
         affiliation=str(body.get('university_affiliation') or '').strip()
         if kind=='INVITATION':
             from .template import validate_invitation_template
-            validate_invitation_template(subject,content,sender=sender,reply_to=reply_to,
+            validate_invitation_template(subject,content,sender=sender,sender_name=sender_name,reply_to=reply_to,
                 researcher_name=researcher_name,university_affiliation=affiliation)
             configured_sender=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
             if configured_sender and sender.lower()!=configured_sender.lower():
                 raise ValueError('Invitation sender must match the configured researcher mailbox')
+            configured_sender_name=os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip()
+            if configured_sender_name and sender_name.casefold()!=configured_sender_name.casefold():
+                raise ValueError('Invitation sender display name must match the configured researcher identity')
         else:
-            if not subject or len(subject)>200 or not content or len(content)>20000:raise ValueError('Template subject/body is empty or exceeds limits')
+            from .template import validate_report_template
+            validate_report_template(subject,content,sender=sender,reply_to=reply_to,sender_name=sender_name)
             configured_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
             if sender and configured_sender and sender.lower()!=configured_sender.lower():
                 raise ValueError('Template sender must match the authorized report mailbox')
+            if sender_name and len(sender_name)>120:raise ValueError('Report sender display name is too long')
         with db.transaction(serialized=True) as c:
-            version=(c.scalar(select(func.max(email_templates.c.version))) or 0)+1
-            c.execute(email_templates.update().where(email_templates.c.template_kind==kind).values(active=False));ident='email-template-'+uuid.uuid4().hex
-            c.execute(email_templates.insert().values(id=ident,version=version,subject=subject,body=content,sender=sender or None,
-                active=True,created_by=request.state.session['email'],created_at=now(),template_kind=kind,
+            version=(c.scalar(select(func.max(email_templates.c.version)).where(email_templates.c.template_kind==kind)) or 0)+1
+            ident='email-template-'+uuid.uuid4().hex
+            c.execute(email_templates.insert().values(id=ident,version=version,subject=subject,body=content,sender=sender or None,sender_name=sender_name or None,
+                active=False,created_by=request.state.session['email'],created_at=now(),template_kind=kind,
                 reply_to=reply_to or None,researcher_name=researcher_name or None,university_affiliation=affiliation or None))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_VERSION_CREATED',
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_DRAFT_CREATED',
                 detail=json.dumps({'kind':kind,'version':version,'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
-        return {'id':ident,'version':version,'kind':kind,'active':True,
+        return {'id':ident,'version':version,'kind':kind,'active':False,
             'sender_configured':bool(configured_sender and (not sender or sender.lower()==configured_sender.lower()))}
+
+    @app.post('/api/admin/email-templates/{ident}/activate')
+    async def activate_email_template(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        with db.transaction(serialized=True) as c:
+            row=c.execute(select(email_templates).where(email_templates.c.id==ident)).mappings().first()
+            if not row:raise LookupError('Email template version not found')
+            if row['template_kind']=='INVITATION':
+                from .template import validate_invitation_template
+                validate_invitation_template(row['subject'],row['body'],sender=row['sender'],sender_name=row.get('sender_name'),
+                    reply_to=row['reply_to'],researcher_name=row['researcher_name'],university_affiliation=row['university_affiliation'])
+            else:
+                from .template import validate_report_template
+                validate_report_template(row['subject'],row['body'],sender=row['sender'] or '',
+                    reply_to=row['reply_to'] or '',sender_name=row.get('sender_name') or '')
+            c.execute(email_templates.update().where(email_templates.c.template_kind==row['template_kind']).values(active=False))
+            c.execute(email_templates.update().where(email_templates.c.id==ident).values(active=True))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_ACTIVATED',
+                detail=json.dumps({'kind':row['template_kind'],'version':row['version'],'actor':request.state.session['email']},sort_keys=True),created_at=now()))
+        return {'id':ident,'kind':row['template_kind'],'version':row['version'],'active':True}
+
+    @app.post('/api/admin/email-templates/{ident}/preview')
+    async def preview_email_template(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        body=await request.json()
+        with db.transaction() as c:
+            template=c.execute(select(email_templates).where(email_templates.c.id==ident)).mappings().first()
+            if not template:raise LookupError('Email template version not found')
+            questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
+        from .template import render_template
+        if template['template_kind']=='INVITATION':
+            company=str(body.get('company_name') or 'Example business')
+            form=questionnaire['form_url'] if questionnaire else (os.environ.get('GEO_RESEARCH_FORM_URL') or FORM_VIEW_URL)
+            fields=json.loads(questionnaire['field_map']) if questionnaire else {}
+            form_url=__import__('outreach_agent.google_forms_integration',fromlist=['prefilled_form_url']).prefilled_form_url(
+                'PREVIEW-NOT-SENDABLE',form_url=form,entry_id=fields.get('invitation_reference_entry_id') or INVITATION_REFERENCE_ENTRY)
+            values={'label':'REVIEW PREVIEW / NOT SENT\n\n','company_name':company,'website':str(body.get('website') or 'https://example.invalid'),
+                'business_summary':str(body.get('business_summary') or '[Business summary placeholder]'),
+                'distinctive_detail':str(body.get('distinctive_detail') or '[Distinctive detail placeholder]'),
+                'research_relevance':str(body.get('research_relevance') or '[Research relevance placeholder]'),
+                'observation':'','form_url':form_url,'reference':'PREVIEW-NOT-SENDABLE',
+                'researcher_name':template['researcher_name'] or '',
+                'university_affiliation':template['university_affiliation'] or '',
+                'reply_to':template['reply_to'] or '','sender_name':template.get('sender_name') or ''}
+            from .template import validate_invitation_template
+            validate_invitation_template(template['subject'],template['body'],sender=template['sender'],sender_name=values['sender_name'],
+                reply_to=values['reply_to'],researcher_name=values['researcher_name'],university_affiliation=values['university_affiliation'])
+        else:
+            company=str(body.get('company_name') or 'Example business')
+            values={'company_name':company,'recipient':str(body.get('recipient') or 'recipient@example.invalid'),
+                'report_name':'GEO research report','researcher_name':template['researcher_name'] or '',
+                'university_affiliation':template['university_affiliation'] or '',
+                'reply_to':template['reply_to'] or '','sender_name':template.get('sender_name') or ''}
+            from .template import validate_report_template
+            validate_report_template(template['subject'],template['body'],sender=template['sender'] or '',
+                reply_to=template['reply_to'] or '',sender_name=template.get('sender_name') or '')
+        return {'id':ident,'version':template['version'],'kind':template['template_kind'],'status':'REVIEW_PREVIEW_NOT_SENT',
+            'subject':render_template(template['subject'],values),'body':render_template(template['body'],values),
+            'sender':template['sender'],'sender_name':template.get('sender_name'),'reply_to':template['reply_to'],
+            'questionnaire_url':values.get('form_url'),'reference':'PREVIEW-NOT-SENDABLE' if template['template_kind']=='INVITATION' else None,
+            'sent':False,'persisted_invitation':False}
 
     @app.get('/api/admin/questionnaires')
     def list_questionnaires(request:Request):
@@ -342,17 +409,18 @@ def create_app(database=None):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
         body=await request.json();name=str(body.get('name') or '100-company pilot').strip()
         if len(name)>120:raise ValueError('Cohort name is too long')
-        from .service import select_pilot_cohort
+        from .service import select_pilot_cohort,cohort_member_snapshot
         with db.transaction(serialized=True) as c:
             rows=select_pilot_cohort(c,100)
-            if len(rows)!=100:raise ValueError(f'Pilot cohort needs 100 eligible, personalized companies; currently {len(rows)} are available')
+            if len(rows)!=100:raise ValueError(f'100-company cohort requires 100 verified, eligible companies with one verified first-party business email; currently {len(rows)} qualify')
             cohort_id='pilot-'+uuid.uuid4().hex
             c.execute(pilot_cohorts.insert().values(id=cohort_id,name=name,target_size=100,
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(pilot_members.insert(),[{'cohort_id':cohort_id,'candidate_id':r['id'],'position':i+1,
-                'eligibility_snapshot':json.dumps({'website_status':r['website_status'],'qualification':r['qualification'],
-                    'personalization_status':r['personalization_status'],'personalization_quality_status':r['personalization_quality_status'],
-                    'website':r['website'],'industry':r['industry']},sort_keys=True)} for i,r in enumerate(rows)])
+                'eligibility_snapshot':json.dumps(cohort_member_snapshot(r),sort_keys=True)} for i,r in enumerate(rows)])
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=cohort_id,event='VERIFIED_COMPANY_COHORT_CREATED',
+                detail=json.dumps({'criteria_version':'verified-company-cohort-v2','member_count':100,
+                    'created_by':request.state.session['email'],'personalization_run':False,'invitations_created':False},sort_keys=True),created_at=now()))
         return {'id':cohort_id,'name':name,'target_size':100,'member_count':100,'invitations_created':0,'send_status':'NOT_SENT'}
 
     @app.get('/api/admin/pilot-cohorts')
@@ -367,10 +435,30 @@ def create_app(database=None):
             cohort=c.execute(select(pilot_cohorts).where(pilot_cohorts.c.id==ident)).mappings().first()
             if not cohort:raise LookupError('Pilot cohort not found')
             members=c.execute(select(pilot_members.c.position,pilot_members.c.eligibility_snapshot,candidate_table.c.id,
-                candidate_table.c.name,candidate_table.c.website).select_from(pilot_members).join(candidate_table,
+                candidate_table.c.name,candidate_table.c.website,candidate_table.c.personalization_status,
+                candidate_table.c.personalization_quality_status,
+                candidate_table.c.industry,candidate_table.c.location).select_from(pilot_members).join(candidate_table,
                 candidate_table.c.id==pilot_members.c.candidate_id).where(pilot_members.c.cohort_id==ident)
                 .order_by(pilot_members.c.position)).mappings().all()
-            return {'cohort':dict(cohort),'members':[dict(r) for r in members]}
+            return {'cohort':dict(cohort),'members':[{**dict(r),'eligibility_snapshot':json.loads(r['eligibility_snapshot'] or '{}')} for r in members]}
+
+    @app.get('/api/admin/pilot-cohorts/{ident}/export.csv')
+    def export_pilot_cohort(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
+        with db.transaction() as c:
+            cohort=c.execute(select(pilot_cohorts).where(pilot_cohorts.c.id==ident)).mappings().first()
+            if not cohort:raise LookupError('Pilot cohort not found')
+            rows=c.execute(select(pilot_members.c.position,pilot_members.c.eligibility_snapshot)
+                .where(pilot_members.c.cohort_id==ident).order_by(pilot_members.c.position)).mappings().all()
+        output=io.StringIO(newline='');fields=['position','candidate_id','company_name','business_description','industry','location','website','business_email',
+            'website_status','qualification_status','outreach_eligibility','contact_kind','contact_purpose','contact_verification','contact_source_url','contact_evidence',
+            'contact_source_ref','contact_source_checksum','candidate_source','candidate_source_ref','candidate_source_checksum',
+            'personalization_status','review_status','smb_size_evidence_status','criteria_version']
+        writer=csv.DictWriter(output,fieldnames=fields,extrasaction='ignore');writer.writeheader()
+        for row in rows:writer.writerow({'position':row['position'],**json.loads(row['eligibility_snapshot'] or '{}')})
+        safe=re.sub(r'[^A-Za-z0-9_-]+','-',str(cohort['name'] or 'cohort')).strip('-') or 'cohort'
+        return Response('\ufeff'+output.getvalue(),media_type='text/csv; charset=utf-8',
+            headers={'Content-Disposition':f'attachment; filename="{safe}-100-company-cohort.csv"'})
 
     @app.post('/api/admin/pilot-cohorts/{ident}/package')
     async def generate_pilot_package(ident:str,request:Request):

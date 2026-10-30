@@ -1,5 +1,7 @@
 """Persisted integration tests with injected providers; these are not live evidence."""
 import json
+import base64
+import hashlib
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -102,28 +104,50 @@ def test_yes_pair_resumes_after_restart_and_report_uses_original_recipient(tmp_p
     assert get_record(pid,path)['handoffs']==[]
     class Bridge:
         runs=0
-        def import_profile(self,profile): return {'property_id':91}
+        def import_profile(self,profile): return {'property_id':2}
         def run_controlled_research(self,profile):
             self.runs+=1
             return {'status':'COMPLETED','result':{'record_id':'unit-result'}}
         def get_research_result(self,pid):
-            return {'contract_version':'geo-research-integration/v1','schema_version':'geo-research-integration/v1','record_type':'research_result_export','source_profile_id':pid,'source_profile_version':'geo-company-profile/v1','property_id':91,'record_id':'unit-result','audit_reference':{},'strategies':[],'question_set_reference':None,'baseline_reference':None,'post_deployment_reference':None,'exported_at':'2026-10-27T12:05:00Z','provenance':{},'observed_pages':[{'url':'https://geo-ai-resume.vercel.app','exact_quotes':['Unit test source quote']}],'recommendations':[{'title':'Unit test recommendation'}],'baseline':{'provider':'UNIT_TEST_ONLY','model_calls':1,'results':['Unit test output']}}
+            return {'contract_version':'geo-research-integration/v1','schema_version':'geo-research-integration/v1','record_type':'research_result_export','source_profile_id':pid,'source_profile_version':'geo-company-profile/v1','property_id':2,'record_id':'unit-result','audit_reference':{},'strategies':[],'question_set_reference':None,'baseline_reference':None,'post_deployment_reference':None,'exported_at':'2026-10-27T12:05:00Z','provenance':{},'observed_pages':[{'url':'https://geo-ai-resume.vercel.app','exact_quotes':['Unit test source quote']}],'recommendations':[{'title':'Unit test recommendation'}],'baseline':{'provider':'UNIT_TEST_ONLY','model_calls':1,'results':['Unit test output']}}
     bridge=Bridge();provider=Provider()
     template=Path(__file__).parents[1]/'templates/company_geo_analysis_report_template.docx'
     one=resume_accepted_research(path=path,bridge=bridge,provider=provider,sender='test@example.test',report_directory=tmp_path/'reports',template=template)
-    assert one[0]['status']=='SENT'
+    assert one[0]['status']=='PENDING_REPORT_APPROVAL', one[0]
     # Distinct representative email stays separate; original remains delivery target.
     with _connect(path) as db: db.execute("UPDATE questionnaire_submissions SET representative_email='representative@example.test'")
     assert ingest_google_form_response(row,path=path)=='DUPLICATE'
     two=resume_accepted_research(path=path,bridge=bridge,provider=provider,sender='test@example.test',report_directory=tmp_path/'reports',template=template)
-    assert two[0]['status']=='EXISTING' and bridge.runs==1
-    assert len(provider.calls)==1 and provider.calls[0]['recipient']==email
-    assert provider.calls[0]['content'].startswith(b'PK')
+    assert two[0]['status']=='PENDING_REPORT_APPROVAL' and bridge.runs==1
+    assert len(provider.calls)==0
     with _connect(path) as db:
         report=db.execute('SELECT * FROM research_reports').fetchone()
-        assert report['sent_at'] and report['document_base64']
-
-
+        assert not report['sent_at'] and report['document_base64']
+    from outreach_agent.geo_result_delivery import deliver_geo_report,review_geo_report
+    from outreach_agent.email_dispatch import dispatch_approved_drafts,DispatchConfig
+    import pytest
+    with _connect(path) as db:
+        db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,attachment_report_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            ('forged-report-draft',pid,'report-v1','report-v1',email,'forged','A report is attached.','APPROVED','AUTHORIZED_OWNER_CONSENT','now','Report',report['report_id']))
+    forged=dispatch_approved_drafts(['forged-report-draft'],provider=provider,sender='test@example.test',path=path,config=DispatchConfig())[0]
+    assert forged.status=='BLOCKED_APPROVAL' and len(provider.calls)==0
+    with pytest.raises(PermissionError,match='Exact DOCX version requires explicit authorized report approval'):
+        deliver_geo_report(report['report_id'],path=path,provider=provider,sender='test@example.test')
+    assert len(provider.calls)==0
+    document=base64.b64decode(report['document_base64']);digest=hashlib.sha256(document).hexdigest()
+    review_geo_report(report['report_id'],expected_sha256=digest,decision='APPROVED',
+        reviewer_email='professor@example.test',path=path)
+    with _connect(path) as db:
+        db.execute('UPDATE research_reports SET document_base64=? WHERE report_id=?',
+            (base64.b64encode(b'changed DOCX').decode('ascii'),report['report_id']))
+    with pytest.raises(PermissionError,match='Exact DOCX version requires explicit authorized report approval'):
+        deliver_geo_report(report['report_id'],path=path,provider=provider,sender='test@example.test')
+    with _connect(path) as db:
+        db.execute('UPDATE research_reports SET document_base64=? WHERE report_id=?',
+            (report['document_base64'],report['report_id']))
+    delivered=deliver_geo_report(report['report_id'],path=path,provider=provider,sender='test@example.test')
+    assert delivered['status']=='SENT' and delivered['recipient']==email
+    assert len(provider.calls)==1 and provider.calls[0]['recipient']==email and provider.calls[0]['content']==document
 def test_mismatched_site_or_representative_cannot_auto_consent(tmp_path,monkeypatch):
     monkeypatch.setenv('OUTREACH_OWNER_TEST_AUTOMATION_ENABLED','true')
     path=tmp_path/'registry.db';pid,email=seed(path)

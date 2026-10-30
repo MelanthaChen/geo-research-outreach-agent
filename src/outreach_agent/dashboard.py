@@ -6,6 +6,7 @@ import argparse
 import base64
 import csv
 import hmac
+import hashlib
 import io
 import json
 import mimetypes
@@ -45,12 +46,12 @@ from outreach_agent.phase6h import PHASE6H_DB, dashboard_summary as phase6h_summ
 from outreach_agent.phase7_smb import OUT as PHASE7_SMB_EXPORT_DIR
 from outreach_agent.research_lifecycle import (
     REGISTRY_DB, approve_email_batch, create_questionnaire_invitation, get_invitation_reference, create_geo_handoff, export_records_csv,
-    get_record, ingest_reply, list_records, personalized_recruitment_draft, create_post_form_confirmation_draft,
+    get_record, ingest_reply, list_records, personalized_recruitment_draft, create_post_form_confirmation_draft, _connect,
     create_manual_invitation_draft, reconcile_manual_send, generate_invitation_batch, approve_invitation_batch,
     questionnaire_url, record_simulated_send_batch, submit_questionnaire, withdraw_consent,
 )
 from outreach_agent.geo_engine_handoff import review_questionnaire_submission
-from outreach_agent.geo_result_delivery import import_geo_result
+from outreach_agent.geo_result_delivery import import_geo_result, review_geo_report, deliver_geo_report
 from outreach_agent.sender_accounts import add_account, disconnect, list_accounts, set_default
 from outreach_agent.combined_screening import run_combined_analysis
 from outreach_agent.research_lifecycle import edit_email_draft
@@ -266,6 +267,28 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                 target = urlparse(str(REGISTRY_DB))
                 self._json({"commit": os.environ.get("RENDER_GIT_COMMIT", "local"), "database_host": target.hostname, "database_name": target.path.lstrip("/"), "mail_provider": os.environ.get("OUTREACH_MAIL_PROVIDER", "outlook_desktop"), "sheets_credentials_present": bool(os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64") or os.environ.get("GEO_RESEARCH_SERVICE_ACCOUNT_FILE")), "owner_automation": os.environ.get("OUTREACH_OWNER_TEST_AUTOMATION_ENABLED", "false")})
                 return
+            if parsed.path.startswith("/api/research/reports/"):
+                parts=[unquote(x) for x in parsed.path.split("/") if x]
+                if len(parts)==4 and parts[2]=='reports':
+                    report_id=parts[3]
+                    with _connect(REGISTRY_DB) as db:
+                        report=db.execute("SELECT report_id,status,document_base64 FROM research_reports WHERE report_id=?",(report_id,)).fetchone()
+                        if not report:self._json({"error":"report not found"},404);return
+                        if not report["document_base64"]:self._json({"error":"persisted DOCX is unavailable"},409);return
+                        document=base64.b64decode(report["document_base64"],validate=True)
+                        digest=hashlib.sha256(document).hexdigest()
+                    self.send_response(200);self.send_header("Content-Type","application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                    self.send_header("Content-Disposition",f'attachment; filename="{report_id}.docx"');self.send_header("X-Report-SHA256",digest)
+                    self.send_header("Cache-Control","no-store");self.send_header("Content-Length",str(len(document)));self.end_headers();self.wfile.write(document);return
+                if len(parts)==5 and parts[2]=='reports' and parts[4]=='review':
+                    report_id=parts[3]
+                    with _connect(REGISTRY_DB) as db:
+                        report=db.execute("SELECT status,document_base64 FROM research_reports WHERE report_id=?",(report_id,)).fetchone()
+                        if not report:self._json({"error":"report not found"},404);return
+                        digest=hashlib.sha256(base64.b64decode(report["document_base64"],validate=True)).hexdigest() if report["document_base64"] else None
+                        review=db.execute("SELECT decision,reviewer_email,reviewed_at,note FROM research_report_reviews WHERE report_id=? AND document_sha256=? ORDER BY reviewed_at DESC LIMIT 1",(report_id,digest or "")).fetchone()
+                    self._json({"report_id":report_id,"status":report["status"],"document_sha256":digest,
+                        "decision":review["decision"] if review else "PENDING_REVIEW","review":dict(review) if review else None});return
             if parsed.path == "/api/public/summary":
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
@@ -660,6 +683,25 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         return
                     self._json(result, 200 if result.get("status") == "EXISTING" else 201)
                     return
+                if parsed.path.startswith("/api/research/reports/"):
+                    parts=[unquote(x) for x in parsed.path.split("/") if x]
+                    current=self._browser_session()
+                    if not current:
+                        self._json({"error":"report review and delivery require an authenticated administrator session"},403);return
+                    if len(parts)==5 and parts[2]=='reports' and parts[4]=='review':
+                        try:
+                            result=review_geo_report(parts[3],expected_sha256=str(body.get('document_sha256') or ''),
+                                decision=str(body.get('decision') or ''),reviewer_email=current['email'],note=str(body.get('note') or ''),path=REGISTRY_DB)
+                            self._json(result)
+                        except (ValueError,PermissionError) as exc:self._json({"error":str(exc)},409)
+                        return
+                    if len(parts)==5 and parts[2]=='reports' and parts[4]=='deliver':
+                        try:
+                            result=deliver_geo_report(parts[3],path=REGISTRY_DB)
+                            self._json(result,200)
+                        except PermissionError as exc:self._json({"error":str(exc)},403)
+                        except (ValueError,RuntimeError) as exc:self._json({"error":str(exc)},409)
+                        return
                 if parsed.path == "/api/recruitment/draft":
                     draft_id = personalized_recruitment_draft(str(body["profile_id"]), recipient=str(body["recipient"]), questionnaire_url=str(body["questionnaire_url"]), path=REGISTRY_DB)
                     self._json({"draft_id": draft_id, "status": "PENDING_APPROVAL"}, 201)

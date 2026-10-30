@@ -216,11 +216,12 @@ class GraphReports:
         self.mailbox='/users/'+quote(self.sender,safe='')
         self.subject='Your GEO website research report'
         self.body='Thank you for participating in the GEO research study. Your evidence-based website optimization report is attached. The report describes the observed findings, recommendations and limitations.\n\nBest regards\nGEO Research Outreach'
-    def configure_message(self,subject,body,sender=None):
+        self.reply_to=None
+    def configure_message(self,subject,body,sender=None,*,reply_to=None,sender_name=None):
         if sender and sender.lower()!=self.sender.lower():
             raise ConfigurationBlocked('Configured report sender does not match the authorized mailbox')
         if not subject.strip() or not body.strip():raise ConfigurationBlocked('Configured report email template is empty')
-        self.subject=subject.strip();self.body=body.strip()
+        self.subject=subject.strip();self.body=body.strip();self.reply_to=reply_to or None
     def reconcile(self,key):
         value=key.replace("'","''")
         r=self.client.get(self.mailbox+'/messages',params={'$filter':f"singleValueExtendedProperties/Any(ep: ep/id eq '{GRAPH_PROPERTY}' and ep/value eq '{value}')",'$select':'id,isDraft,sentDateTime,internetMessageId,toRecipients'})
@@ -235,6 +236,8 @@ class GraphReports:
                  'toRecipients':[{'emailAddress':{'address':recipient}}],
                  'singleValueExtendedProperties':[{'id':GRAPH_PROPERTY,'value':key}],
                  'attachments':[{'@odata.type':'#microsoft.graph.fileAttachment','name':'GEO-research-report.docx','contentType':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','contentBytes':base64.b64encode(document).decode()}]}
+        if self.reply_to:
+            payload['replyTo']=[{'emailAddress':{'address':self.reply_to}}]
         try:r=self.client.post(self.mailbox+'/messages',json=payload)
         except httpx.TransportError as e:raise OutcomeUncertain('Graph draft creation outcome is uncertain') from e
         if r.status_code in {401,403}:raise ConfigurationBlocked('Report mailbox permission denied')

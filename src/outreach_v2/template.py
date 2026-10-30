@@ -11,12 +11,13 @@ _TEMPLATE_VARIABLE = re.compile(r'\{\{([a-z][a-z0-9_]*)\}\}')
 INVITATION_TEMPLATE_FIELDS = frozenset({
     'label','company_name','website','business_summary','distinctive_detail',
     'research_relevance','observation','form_url','reference','researcher_name',
-    'university_affiliation','reply_to'
+    'university_affiliation','reply_to','sender_name'
 })
 REQUIRED_INVITATION_BODY_FIELDS = frozenset({
     'company_name','business_summary','distinctive_detail','research_relevance',
     'form_url','reference','researcher_name','university_affiliation','reply_to'
 })
+REPORT_TEMPLATE_FIELDS = frozenset({'company_name','recipient','report_name','researcher_name','university_affiliation','reply_to','sender_name'})
 
 DEFAULT_INVITATION_SUBJECT='GEO research participation invitation - {{company_name}}'
 DEFAULT_INVITATION_BODY=('{{label}}Hello,\n\n'
@@ -27,7 +28,7 @@ DEFAULT_INVITATION_BODY=('{{label}}Hello,\n\n'
     'Please answer the research interest and research authorization questions separately. We will begin only after reviewing your responses and confirming that the study applies to your website.\n\n'
     'Best regards\n{{researcher_name}}\n{{university_affiliation}}\nReply to: {{reply_to}}')
 
-def validate_invitation_template(subject, body, *, sender, reply_to, researcher_name, university_affiliation):
+def validate_invitation_template(subject, body, *, sender, sender_name, reply_to, researcher_name, university_affiliation):
     """Fail closed on missing identity, unknown substitutions, and generic templates."""
     for label, value, limit in (('subject',subject,200),('body',body,20000)):
         if not isinstance(value,str) or not value.strip() or len(value)>limit:
@@ -47,6 +48,8 @@ def validate_invitation_template(subject, body, *, sender, reply_to, researcher_
         raise ValueError('Invitation body is missing required personalization or participation variables')
     if not EMAIL.fullmatch(str(sender or '').strip()) or not EMAIL.fullmatch(str(reply_to or '').strip()):
         raise ValueError('A valid invitation sender and reply-to address are required')
+    if not str(sender_name or '').strip() or len(str(sender_name))>120:
+        raise ValueError('A sender display name of 1 to 120 characters is required')
     if not str(researcher_name or '').strip() or not str(university_affiliation or '').strip():
         raise ValueError('Researcher identity and university affiliation are required')
     literal=re.sub(r'\{\{[a-z][a-z0-9_]*\}\}',' ',body).casefold()
@@ -62,6 +65,22 @@ def render_template(template, values):
     for name in variables:
         template=template.replace('{{'+name+'}}',str(values[name]))
     return template
+
+def validate_report_template(subject, body, *, sender='', reply_to='', sender_name=''):
+    for label,value,limit in (('subject',subject,200),('body',body,20000)):
+        if not isinstance(value,str) or not value.strip() or len(value)>limit:
+            raise ValueError('Report '+label+' is empty or exceeds limits')
+        residue=re.sub(r'\{\{[a-z][a-z0-9_]*\}\}','',value)
+        if '{{' in residue or '}}' in residue:
+            raise ValueError('Report template contains malformed variables')
+        if set(_TEMPLATE_VARIABLE.findall(value))-REPORT_TEMPLATE_FIELDS:
+            raise ValueError('Report template contains unsupported variables')
+    if sender and not EMAIL.fullmatch(str(sender).strip()):
+        raise ValueError('Report sender address is invalid')
+    if reply_to and not EMAIL.fullmatch(str(reply_to).strip()):
+        raise ValueError('Report reply-to address is invalid')
+    if sender_name and len(str(sender_name))>120:
+        raise ValueError('Report sender display name is too long')
 
 def host(url):
     try:
@@ -115,6 +134,7 @@ def render(name, website, p, form_url, reference, record=None, identity=None, te
     affiliation=(identity.get('university_affiliation') or template_config.get('university_affiliation') or os.getenv('OUTREACH_UNIVERSITY_AFFILIATION') or '').strip()
     reply_to=(identity.get('reply_to') or template_config.get('reply_to') or os.getenv('OUTREACH_REPLY_TO') or '').strip()
     sender=(identity.get('sender') or template_config.get('sender') or os.getenv('OUTREACH_INVITATION_SENDER') or reply_to).strip()
+    sender_name=(identity.get('sender_name') or template_config.get('sender_name') or os.getenv('OUTREACH_INVITATION_SENDER_NAME') or researcher).strip()
     if not researcher or not affiliation or not EMAIL.fullmatch(reply_to) or not EMAIL.fullmatch(sender):
         raise ValueError('Researcher identity, university affiliation, sender, and valid reply-to address must be configured')
     intro=str(p.get('introduction') or '')
@@ -131,7 +151,7 @@ def render(name, website, p, form_url, reference, record=None, identity=None, te
     subject_template=template_config.get('subject') or DEFAULT_INVITATION_SUBJECT
     body_template=template_config.get('body') or DEFAULT_INVITATION_BODY
     validate_invitation_template(subject_template,body_template,sender=sender,reply_to=reply_to,
-        researcher_name=researcher,university_affiliation=affiliation)
+        sender_name=sender_name,researcher_name=researcher,university_affiliation=affiliation)
     values={
         'label':label,
         'company_name':str(name),'website':str(website),
@@ -141,6 +161,7 @@ def render(name, website, p, form_url, reference, record=None, identity=None, te
         'observation':observation,
         'form_url':str(form_url),'reference':str(reference),
         'researcher_name':researcher,'university_affiliation':affiliation,'reply_to':reply_to,
+        'sender_name':sender_name,
     }
     body=render_template(body_template,values)
     subject=render_template(subject_template,values)

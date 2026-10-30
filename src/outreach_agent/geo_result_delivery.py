@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import base64
 import secrets
+import hashlib
+import hmac
 from pathlib import Path
 
 
@@ -130,6 +132,30 @@ def persist_geo_result_preview(
         return {"status": "CREATED", "report_status": "READY" if complete else "INCOMPLETE", "report_id": report_id, "report_path": str(output), "delivery_status": "NOT_SENT"}
 
 
+def review_geo_report(report_id: str, *, expected_sha256: str, decision: str, reviewer_email: str,
+                      note: str = "", path) -> dict[str, Any]:
+    """Record an immutable decision for the exact persisted DOCX bytes."""
+    import uuid
+    if decision not in {"APPROVED", "REJECTED"}:
+        raise ValueError("Report decision must be APPROVED or REJECTED")
+    if not reviewer_email or "@" not in reviewer_email:
+        raise ValueError("An authenticated reviewer identity is required")
+    init_registry(path)
+    with _connect(path) as db:
+        report=db.execute("SELECT report_id,status,document_base64 FROM research_reports WHERE report_id=?",(report_id,)).fetchone()
+        if not report:raise ValueError("report not found")
+        if report["status"]!="READY" or not report["document_base64"]:raise ValueError("only a complete persisted DOCX can be reviewed")
+        document=base64.b64decode(report["document_base64"],validate=True)
+        actual=hashlib.sha256(document).hexdigest()
+        if not hmac.compare_digest(actual,str(expected_sha256 or "")):
+            raise ValueError("The DOCX changed since it was opened; reload and review the current version")
+        review_id="report-review-"+uuid.uuid4().hex
+        reviewed_at=now()
+        db.execute("INSERT INTO research_report_reviews(review_id,report_id,document_sha256,decision,reviewer_email,reviewed_at,note) VALUES(?,?,?,?,?,?,?)",
+            (review_id,report_id,actual,decision,reviewer_email.strip().lower(),reviewed_at,str(note or "")[:1000] or None))
+        return {"review_id":review_id,"report_id":report_id,"document_sha256":actual,"decision":decision,"reviewer_email":reviewer_email.strip().lower(),"reviewed_at":reviewed_at}
+
+
 def report_email_preview(result: dict[str, Any], *, recipient: str) -> dict[str, str]:
     """Build a final-report preview without persisting a send or sending mail."""
     if not recipient or "@" not in recipient:
@@ -165,10 +191,20 @@ def deliver_geo_report(report_id: str, *, path, provider=None, sender=None, conf
             return {"status": "EXISTING", "report_id": report_id, "recipient": recipient}
         if report["status"] != "READY" or not report["document_base64"]:
             raise ValueError("GEO result is incomplete or its durable document is missing")
+        document=base64.b64decode(report["document_base64"],validate=True)
+        document_hash=hashlib.sha256(document).hexdigest()
+        review=db.execute("SELECT decision,reviewer_email FROM research_report_reviews WHERE report_id=? AND document_sha256=? ORDER BY reviewed_at DESC LIMIT 1",
+            (report_id,document_hash)).fetchone()
+        if not review or review["decision"]!="APPROVED":
+            raise PermissionError("Exact DOCX version requires explicit authorized report approval before delivery")
+        if not hmac.compare_digest(hashlib.sha256(document).hexdigest(),document_hash):
+            raise PermissionError("DOCX integrity check failed; delivery is blocked")
         draft_id = "draft-report-" + _hash(report_id)[:20]
         subject = f"GEO research report - {record['name']}"
         body = f"Hello,\n\nYour GEO research report for {record['official_website']} is attached. Please see its evidence, methodology and limitations.\n\nInvitation reference: {submission['invitation_reference']}\n\nGEO Research Outreach"
-        db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,attachment_report_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(draft_id) DO NOTHING", (draft_id, record["profile_id"], "report-v1", "report-v1", recipient, _hash(body), body, "APPROVED", "AUTHORIZED_OWNER_CONSENT", now(), subject, report_id))
+        # A prior draft is reusable only if it is tied to the approved document
+        # digest. The immutable review table, not consent, authorizes delivery.
+        db.execute("INSERT INTO email_drafts(draft_id,profile_id,draft_version,template_version,recipient,preview_hash,body,approval_status,approved_by,approved_at,subject,attachment_report_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(draft_id) DO NOTHING", (draft_id, record["profile_id"], "report-v1", "report-v1", recipient, _hash(document_hash+"\0"+subject+"\0"+body), body, "APPROVED", review["reviewer_email"], now(), subject, report_id))
         db.execute("UPDATE research_reports SET delivery_draft_id=?,delivery_recipient=? WHERE report_id=?", (draft_id, recipient, report_id))
     try:
         if provider is None:
@@ -211,7 +247,8 @@ def resume_accepted_research(*, path, bridge=None, report_directory=Path("report
                 envelope = active_bridge.get_research_result(submission["profile_id"])
                 result = envelope.get("result", envelope)
                 report = import_geo_result(result, path=path, report_directory=report_directory, template=template)
-            outcomes.append(deliver_geo_report(report["report_id"], path=path, provider=provider, sender=sender, config=config))
+            outcomes.append({"profile_id":submission["profile_id"],"report_id":report["report_id"],
+                "status":"PENDING_REPORT_APPROVAL","delivery_status":"NOT_SENT"})
         except Exception as exc:
             outcomes.append({"profile_id": submission["profile_id"], "status": "BLOCKED", "error": str(exc)})
     return outcomes

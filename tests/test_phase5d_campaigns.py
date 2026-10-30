@@ -482,6 +482,8 @@ def test_dashboard_test_copy_and_seed_defaults_preserve_existing_campaigns(tmp_p
 
 
 def test_real_cohort_and_frozen_77_database_hashes_survive_campaign_processing(tmp_path):
+    if not FROZEN.is_file() or not EXPERIMENTAL.is_file():
+        pytest.skip("archived cohort snapshots unavailable")
     frozen_before, cohort_before = sha(FROZEN), sha(EXPERIMENTAL)
     data = load_dashboard_data()
     eligible_ids = [cid for cid, detail in data["details"].items()

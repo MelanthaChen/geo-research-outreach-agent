@@ -40,7 +40,8 @@ def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https:/
         from outreach_v2.quality import quality_reasons
         errors=quality_reasons(p) if personalization else ['INSUFFICIENT_EVIDENCE']
         c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',personalization_quality_status='PASS' if not errors else 'FAIL',personalization_quality_errors=dump(errors),fixture=fixture,personalization_version=1 if personalization else 0,personalization_analysis_version='semantic-openai-v1' if personalization else None,personalization_fingerprint='unit-test-fingerprint' if personalization else None,created_at=now(),updated_at=now()))
-        c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
+        c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,
+            evidence='Public business email listed on the verified official website',verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
     return ident
 
 def invite(db,ids=['a'],key='stable-request-key-123'):
@@ -264,7 +265,28 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==7
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==8
+
+def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
+    path=tmp_path/'v6-populated.db'
+    with sqlite3.connect(path) as c:
+        c.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL)')
+        c.executemany('INSERT INTO schema_migrations VALUES(?,?,?)',[(i,f'v{i}','2026-01-01') for i in range(1,7)])
+        c.execute('CREATE TABLE email_templates (id TEXT PRIMARY KEY,version INTEGER NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,sender TEXT,active BOOLEAN NOT NULL,created_by TEXT,created_at TEXT NOT NULL)')
+        c.execute("INSERT INTO email_templates VALUES('report-v1',1,'Report','Existing report template','reports@example.org',1,'admin','2026-01-01')")
+        c.execute('CREATE TABLE invitations (id TEXT PRIMARY KEY,reference TEXT,recipient TEXT,company_name TEXT,body TEXT)')
+        c.execute("INSERT INTO invitations VALUES('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')")
+    db=Database('sqlite:///'+str(path));db.initialize()
+    with db.engine.connect() as c:
+        inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
+        template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==8
+        assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
+    assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
+    assert inv.sender_email is None and inv.sender_name is None
+    assert tuple(template[:6])==('report-v1',1,'Report','Existing report template','reports@example.org',1)
+    assert template.template_kind=='REPORT' and template.sender_name is None
+    db.engine.dispose()
 
 def test_conflicting_submission_blocks_queued_job(db):
     candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
@@ -412,7 +434,7 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
         report=dict(c.execute(select(reports).where(reports.c.job_id==leased['id'])).mappings().one())
     class Mail:
         def __init__(self):self.calls=[]
-        def configure_message(self,subject,body,sender):self.calls.append(('configure',subject,body,sender))
+        def configure_message(self,subject,body,sender,**kwargs):self.calls.append(('configure',subject,body,sender,kwargs))
         def reconcile(self,key):self.calls.append(('reconcile',key));return None
         def create(self,key,recipient,document):self.calls.append(('create',recipient,document));return {'id':'draft-1'}
         def send(self,message_id):self.calls.append(('send',message_id));return {'status':'ACCEPTED'}
@@ -424,32 +446,42 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
     with db.transaction() as c:
         c.execute(email_templates.insert().values(id='mail-template-test',version=1,subject='Approved report notice',
-            body='Your attached report is ready.',sender='reports@example.org',active=True,
+            body='Your {{report_name}} for {{company_name}} is ready. Reply to {{reply_to}}.',sender='reports@example.org',sender_name='Yuxuan Chen',reply_to='reports-reply@example.org',active=True,
             created_by='chen.yuxuan9@northeastern.edu',created_at=now()))
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
     assert login.status_code==200 and login.json()['role']=='ADMIN'
-    csrf=login.json()['csrf'];headers={'X-CSRF-Token':csrf}
-    stale=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+    from outreach_v2.db import admin_users
+    approver_password='local-approver-password-strong'
+    with db.transaction() as c:c.execute(admin_users.insert().values(id='report-approver',email='approver@example.org',
+        password_hash=PasswordHasher().hash(approver_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
+    approver=TestClient(create_app(db));approver_login=approver.post('/api/auth/login',json={
+        'email':'approver@example.org','password':approver_password})
+    assert approver_login.status_code==200 and approver_login.json()['role']=='APPROVER'
+    approver_headers={'X-CSRF-Token':approver_login.json()['csrf']}
+    assert approver.get('/api/admin/users').status_code==403
+    assert approver.post('/api/admin/invites',headers=approver_headers,json={'email':'new@example.org','role':'APPROVER'}).status_code==403
+    stale=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'APPROVED','document_sha256':'0'*64})
     assert stale.status_code==422
-    approved=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+    approved=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'APPROVED','document_sha256':report['sha256']})
     assert approved.status_code==200 and approved.json()['status']=='APPROVED'
-    changes=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+    changes=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'CHANGES_REQUESTED','document_sha256':report['sha256'],'note':'Clarify one finding.'})
     assert changes.status_code==200
     with pytest.raises(ConfigurationBlocked,match='Exact DOCX version awaits approval'):
         delivery_step(db,leased,forbidden_mail_factory)
     assert count(db,deliveries)==0
-    reapproved=client.post(f"/api/reports/{report['id']}/review",headers=headers,
+    reapproved=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'APPROVED','document_sha256':report['sha256']})
     assert reapproved.status_code==200
     delivery_step(db,leased,lambda:mail)
     assert [call[0] for call in mail.calls]==['configure','reconcile','create','send']
-    assert mail.calls[0]==('configure','Approved report notice','Your attached report is ready.','reports@example.org')
+    assert mail.calls[0][:4]==('configure','Approved report notice','Your GEO research report for GeoAIResume is ready. Reply to reports-reply@example.org.','reports@example.org')
+    assert mail.calls[0][4]=={'reply_to':'reports-reply@example.org','sender_name':'Yuxuan Chen'}
     assert mail.calls[2][2]==report['document']
     with db.transaction() as c:
         current=dict(c.execute(select(reports).where(reports.c.id==report['id'])).mappings().one())
@@ -484,7 +516,7 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     from outreach_v2.app import create_app
     for i in range(100):
         candidate(db,ident=f'pilot-{i:03}',email=f'contact{i}@pilot-example.org',
-            website=f'https://company-{i:03}.pilot-example.org',name=f'Pilot Company {i:03}',fixture=False)
+            website=f'https://company-{i:03}.pilot-example.org',name=f'Pilot Company {i:03}',fixture=False,personalization=False)
     candidate(db,ident='pilot-duplicate-domain',email='duplicate@pilot-example.org',
         website='https://company-000.pilot-example.org',name='Duplicate Domain',fixture=False)
     candidate(db,ident='pilot-duplicate-recipient',email='contact0@pilot-example.org',
@@ -505,9 +537,15 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert first.status_code==second.status_code==200
     question_rows=client.get('/api/admin/questionnaires').json()['rows']
     assert len(question_rows)==2 and [r['active'] for r in question_rows]==[True,False]
-    saved=client.post('/api/admin/email-templates',headers=headers,json={'subject':'Research report',
-        'body':'Your report is ready.','sender':'reports@example.org'})
-    assert saved.status_code==200 and saved.json()['sender_configured'] is True
+    saved=client.post('/api/admin/email-templates',headers=headers,json={'kind':'REPORT','subject':'{{company_name}} research report',
+        'body':'Hello {{company_name}}, the {{report_name}} is ready. Reply to {{reply_to}}.',
+        'sender':'reports@example.org','sender_name':'Yuxuan Chen','reply_to':'reply@northeastern.edu',
+        'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'})
+    assert saved.status_code==200 and saved.json()['sender_configured'] is True and saved.json()['active'] is False
+    report_preview=client.post(f"/api/admin/email-templates/{saved.json()['id']}/preview",headers=headers,json={'company_name':'Sample Company'})
+    assert report_preview.status_code==200 and report_preview.json()['status']=='REVIEW_PREVIEW_NOT_SENT'
+    assert report_preview.json()['subject']=='Sample Company research report' and report_preview.json()['sent'] is False
+    assert client.post(f"/api/admin/email-templates/{saved.json()['id']}/activate",headers=headers,json={}).status_code==200
     cohort=client.post('/api/admin/pilot-cohorts',headers=headers,json={'name':'Cohort 1'})
     assert cohort.status_code==200 and cohort.json()['member_count']==100
     assert cohort.json()['invitations_created']==0 and count(db,invitations)==0
@@ -519,36 +557,15 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert 'pilot-duplicate-domain' not in {m['id'] for m in selected_members}
     assert 'pilot-duplicate-recipient' not in {m['id'] for m in selected_members}
     assert 'pilot-fixture' not in {m['id'] for m in selected_members}
-    first_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
-    second_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
-    assert first_package.status_code==second_package.status_code==200, first_package.text
-    batch_id=first_package.json()['batch_id']
-    assert first_package.json()['review_status']=='PENDING_REVIEW' and first_package.json()['download_available'] is False
-    assert batch_id==second_package.json()['batch_id']
-    assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
-    review_data=client.get(f'/api/admin/pilot-cohorts/{cohort_id}/review')
-    assert review_data.status_code==200 and review_data.json()['actual_recipients']==100
-    first_material=review_data.json()['invitations'][0]
-    assert {'recipient','subject','body','evidence','personalization_quality_status'}<=set(first_material)
-    assert review_data.json()['status']=='PENDING_REVIEW'
-    from outreach_v2.db import admin_users
-    reviewer_password='local-reviewer-password-strong'
-    with db.transaction() as c:c.execute(admin_users.insert().values(id='reviewer-1',email='reviewer@example.org',
-        password_hash=PasswordHasher().hash(reviewer_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
-    reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={'email':'reviewer@example.org','password':reviewer_password})
-    assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
-    reviewer_headers={'X-CSRF-Token':review_login.json()['csrf']}
-    assert reviewer.post('/api/batches',headers=reviewer_headers,json={'ids':['pilot-000']}).status_code==403
-    assert reviewer.post('/api/batches/missing/send-record',headers=reviewer_headers,json={'evidence':'not sent'}).status_code==403
-    approved=reviewer.post(f'/api/admin/pilot-cohorts/{cohort_id}/approve',headers={'X-CSRF-Token':review_login.json()['csrf']},
-        json={'package_sha256':review_data.json()['package_sha256'],'confirm_reviewed':True})
-    assert approved.status_code==200 and approved.json()['sent'] is False and approved.json()['send_status']=='READY_TO_SEND'
-    manifest=json.loads(zipfile.ZipFile(io.BytesIO(client.get(f'/api/batches/{batch_id}/download').content)).read('manifest.json'))
-    assert manifest['count']==100 and manifest['excluded']==[]
-    with db.transaction() as c:
-        approved_batch=c.execute(select(batches).where(batches.c.id==batch_id)).mappings().one()
-    assert approved_batch['pilot_review_status']=='APPROVED' and approved_batch['pilot_review_sha256']==review_data.json()['package_sha256']
-    assert count(db,invitations)==100 and count(db,submissions)==count(db,jobs)==0
+    snapshot=selected_members[0]['eligibility_snapshot']
+    assert snapshot['criteria_version']=='verified-company-cohort-v2'
+    assert snapshot['contact_verification']=='VERIFIED' and snapshot['contact_source_url'].startswith(snapshot['website'])
+    assert snapshot['personalization_status']=='PENDING' and snapshot['source_personalization_status']=='INCOMPLETE' and snapshot['review_status']=='PENDING'
+    exported=client.get(f'/api/admin/pilot-cohorts/{cohort_id}/export.csv')
+    assert exported.status_code==200 and 'business_email' in exported.text and 'contact_evidence' in exported.text
+    blocked_package=client.post(f'/api/admin/pilot-cohorts/{cohort_id}/package',headers=headers,json={})
+    assert blocked_package.status_code==422
+    assert count(db,invitations)==0 and count(db,batches)==0 and count(db,submissions)==count(db,jobs)==0
     candidate(db,ident='questionnaire-check',email='check@external-example.org',website='https://check.external-example.org',
         name='Questionnaire Check',fixture=False)
     package=invite(db,['questionnaire-check'],key='questionnaire-versioned-package-123')
@@ -574,16 +591,22 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
             '{{research_relevance}} Questionnaire: {{form_url}} Reference: {{reference}} '
             'Please answer the research interest and research authorization questions separately. '
             '{{researcher_name}}, {{university_affiliation}}. Reply to {{reply_to}}.'),
-        'sender':'researcher@northeastern.edu','reply_to':'reply@northeastern.edu',
+        'sender':'researcher@northeastern.edu','sender_name':'Yuxuan Chen','reply_to':'reply@northeastern.edu',
         'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'}
     missing=client.post('/api/admin/email-templates',headers=headers,json={**template,'body':'Hello {{company_name}}'})
     assert missing.status_code==422
     first=client.post('/api/admin/email-templates',headers=headers,json=template)
     second=client.post('/api/admin/email-templates',headers=headers,json=template)
     assert first.status_code==second.status_code==200
+    assert first.json()['active'] is False and second.json()['active'] is False
+    preview=client.post(f"/api/admin/email-templates/{second.json()['id']}/preview",headers=headers,json={'company_name':'Preview Company'})
+    assert preview.status_code==200 and preview.json()['status']=='REVIEW_PREVIEW_NOT_SENT'
+    assert preview.json()['reference']=='PREVIEW-NOT-SENDABLE' and preview.json()['sent'] is False
+    activated=client.post(f"/api/admin/email-templates/{second.json()['id']}/activate",headers=headers,json={})
+    assert activated.status_code==200 and activated.json()['active'] is True
     versions=client.get('/api/admin/email-templates').json()['rows']
     invitation_versions=[row for row in versions if row['template_kind']=='INVITATION']
-    assert len(invitation_versions)==2 and [row['active'] for row in invitation_versions]==[True,False]
+    assert len(invitation_versions)==2 and invitation_versions[0]['active'] is True and invitation_versions[1]['active'] is False
     assert all(row['sender']=='researcher@northeastern.edu' and row['reply_to']=='reply@northeastern.edu' for row in invitation_versions)
     candidate(db,ident='templated',email='contact@templated.example',website='https://templated.example',
         name='Templated Company',fixture=False)
@@ -598,6 +621,30 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     rows=list(csv.DictReader(io.StringIO(package.read('invitations.csv').decode('utf-8-sig'))))
     assert rows[0]['bulk_subject']==BULK_SUBJECT
     assert rows[0]['sender_email']=='researcher@northeastern.edu' and rows[0]['reply_to']=='reply@northeastern.edu'
+    assert rows[0]['sender_name']=='Yuxuan Chen'
+    from outreach_v2.db import admin_users
+    reviewer_password='local-approver-password-strong'
+    with db.transaction() as c:c.execute(admin_users.insert().values(id='template-approver',email='approver@example.org',
+        password_hash=PasswordHasher().hash(reviewer_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
+    reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={
+        'email':'approver@example.org','password':reviewer_password})
+    assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
+    reviewer_headers={'X-CSRF-Token':review_login.json()['csrf']}
+    batch_review=reviewer.get(f"/api/batches/{batch['id']}/review")
+    assert batch_review.status_code==200 and batch_review.json()['status']=='PENDING_REVIEW'
+    batch_approved=reviewer.post(f"/api/batches/{batch['id']}/approve",headers=reviewer_headers,
+        json={'package_sha256':batch_review.json()['package_sha256'],'confirm_reviewed':True})
+    assert batch_approved.status_code==200 and batch_approved.json()['sent'] is False
+    assert reviewer.get(f"/api/batches/{batch['id']}/download").status_code==200
+    assert reviewer.get('/api/admin/users').status_code==403
+    assert count(db,submissions)==count(db,jobs)==count(db,deliveries)==0
+    third=client.post('/api/admin/email-templates',headers=headers,json={**template,'subject':'Updated {{company_name}} invitation'})
+    assert third.status_code==200 and third.json()['active'] is False
+    assert client.post(f"/api/admin/email-templates/{third.json()['id']}/activate",headers=headers,json={}).status_code==200
+    with db.transaction() as c:
+        still_original=c.execute(select(invitations).where(invitations.c.candidate_id=='templated')).mappings().one()
+    assert still_original['template_version']==saved['template_version'] and still_original['subject']==saved['subject']
+    assert still_original['body']==saved['body'] and still_original['sender_name']=='Yuxuan Chen'
 
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)

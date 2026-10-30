@@ -67,6 +67,8 @@ def verification_csv(path: Path) -> Path:
 
 
 def test_dashboard_metrics_are_derived_from_existing_537_company_cohort():
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     before = sha256(EXPERIMENTAL_DB)
     data = load_dashboard_data()
     with sqlite3.connect(f"file:{EXPERIMENTAL_DB.resolve()}?mode=ro", uri=True) as connection:
@@ -94,6 +96,8 @@ def test_separate_hotel_metrics_are_read_only_and_distinguish_channels(tmp_path)
 
 
 def test_dashboard_data_loading_is_stable_and_read_only():
+    if not EXPERIMENTAL_DB.is_file() or not FROZEN_DB.is_file():
+        pytest.skip("archived dashboard snapshots unavailable")
     frozen_before = sha256(FROZEN_DB)
     experimental_before = sha256(EXPERIMENTAL_DB)
     first = load_dashboard_data()
@@ -121,6 +125,8 @@ def test_dashboard_data_loading_is_stable_and_read_only():
 
 
 def test_phase6a_snapshot_is_supported_as_read_only_dashboard_database(tmp_path):
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     database = tmp_path / "phase6a_experimental.db"
     database.write_bytes(EXPERIMENTAL_DB.read_bytes())
     before = sha256(database)
@@ -169,6 +175,8 @@ def test_draft_preview_uses_saved_recipient_and_marks_not_sent(tmp_path):
 
 
 def test_contact_form_dashboard_draft_uses_concise_form_cta_and_question_contact_only():
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     data = load_dashboard_data()
     detail = data["details"][105]
     channel = next(item for item in detail["contact_channels"] if item["channel_type"] == "CONTACT_FORM" and item["is_suitable_first_party"])
@@ -191,6 +199,8 @@ def test_missing_channel_explanation_and_invalid_channel_are_fail_closed(tmp_pat
 
 
 def test_simulation_has_no_write_route_and_no_human_approval_mutation():
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     data = load_dashboard_data()
     before = sha256(EXPERIMENTAL_DB)
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(data))
@@ -323,6 +333,8 @@ def test_company_export_handles_more_than_five_thousand_rows_without_truncation(
 
 
 def test_test_email_settings_and_exact_recipient_preview_are_available_without_oauth():
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     from outreach_agent.email_test_settings import (
         AUTHORIZED_TEST_RECIPIENTS, PREFERRED_SENDER, load_test_email_settings,
     )
@@ -357,6 +369,8 @@ def test_test_email_settings_and_exact_recipient_preview_are_available_without_o
 
 
 def test_test_email_backend_allowlist_and_missing_gmail_auth_fail_closed(tmp_path):
+    if not EXPERIMENTAL_DB.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {EXPERIMENTAL_DB.name}")
     from outreach_agent.email_test_settings import test_email_preview
     from outreach_agent.gmail_integration import EmailEventStore
 

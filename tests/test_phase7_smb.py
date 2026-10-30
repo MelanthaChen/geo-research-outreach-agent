@@ -99,6 +99,10 @@ def test_hotel_domain_overlap_is_a_review_lead_not_a_merged_company(tmp_path):
 
 
 def test_saved_phase7_pool_reconciles_to_existing_strict_contactable_total():
+    from outreach_agent.phase7_smb import PHASE7_DB
+    import pytest
+    if not PHASE7_DB.is_file():
+        pytest.skip(f"archived phase 7 cohort snapshot unavailable: {PHASE7_DB.name}")
     summary = phase7_smb_summary()
     assert summary["phase7_company_records"] == 57664
     assert summary["unique_candidate_ids"] == 57664

@@ -9,7 +9,7 @@ from openpyxl import Workbook
 
 BASE=('invitation_id','company_id','company_name','recipient_email','Email Address','email_subject',
       'bulk_subject','email_body','invitation_reference','questionnaire_url','business_description','company_strength',
-      'sender_email','reply_to','researcher_name','university_affiliation')
+      'sender_name','sender_email','reply_to','researcher_name','university_affiliation')
 
 def field(paragraph,name):
     element=OxmlElement('w:fldSimple');element.set(qn('w:instr'),f' MERGEFIELD {name} \\* MERGEFORMAT ')
@@ -28,7 +28,7 @@ def build_package(invitations,excluded,bulk_subject):
     for inv in invitations:
         p=json.loads(inv['personalization']);row=dict(zip(BASE,[inv['id'],inv['candidate_id'],inv['company_name'],inv['recipient'],inv['recipient'],
             inv['subject'],bulk_subject,inv['body'],inv['reference'],inv['form_url'],p['business_description'],p['company_strength'],
-            inv.get('sender_email'),inv.get('reply_to'),inv.get('researcher_name'),inv.get('university_affiliation')]))
+            inv.get('sender_name'),inv.get('sender_email'),inv.get('reply_to'),inv.get('researcher_name'),inv.get('university_affiliation')]))
         for i,value in enumerate(inv['body'].split('\n\n'),1):row[f'body_paragraph_{i:02}']=value
         if any(len(str(v))>32767 for v in row.values()):raise ValueError('Invitation exceeds Excel cell limit')
         rows.append(row)
@@ -63,5 +63,5 @@ def build_package(invitations,excluded,bulk_subject):
         z.writestr('invitation-mail-merge.docx',docx.getvalue());z.writestr('invitations.xlsx',xlsx.getvalue())
         z.writestr('invitations.csv',csv_buffer.getvalue().encode('utf-8-sig'));z.writestr('personalized-previews.docx',rendered.getvalue())
         z.writestr('manifest.json',json.dumps(manifest,indent=2,ensure_ascii=False))
-        z.writestr('READ-ME.txt','Word for Mac + Outlook Desktop\n\nOpen invitation-mail-merge.docx. On Mailings choose Start Mail Merge > E-mail Messages, then Select Recipients > Use an Existing List. Select invitations.xlsx (Invitations sheet), or invitations.csv (UTF-8). Preview every record.\n\nFinish & Merge > Merge to E-Mail. To: Email Address (or recipient_email). Subject: '+bulk_subject+'. Use HTML and all records. Confirm the sending account is the authorized researcher mailbox for this study before sending.\n\nExport does not prove sending or receipt. Re-download this saved batch if interrupted; do not generate a new invitation. Original V1 subjects are retained in the data and previews; the shared bulk subject was authorized for this workflow.\n')
+        z.writestr('READ-ME.txt','Word for Mac + Outlook Desktop\n\nOpen invitation-mail-merge.docx. On Mailings choose Start Mail Merge > E-mail Messages, then Select Recipients > Use an Existing List. Select invitations.xlsx (Invitations sheet), or invitations.csv (UTF-8). Preview every record.\n\nFinish & Merge > Merge to E-Mail. To: Email Address (or recipient_email). Subject: '+bulk_subject+'. Use HTML and all records. Confirm that the selected Outlook account is the authorized researcher mailbox; its configured mailbox profile controls the actual From display name. The sender_name column is the approved study identity for review and must match that account.\n\nExport does not prove sending or receipt. Re-download this saved batch if interrupted; do not generate a new invitation. Original V1 subjects are retained in the data and previews; the shared bulk subject was authorized for this workflow.\n')
     return output.getvalue()

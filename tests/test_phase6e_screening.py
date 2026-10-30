@@ -40,6 +40,10 @@ def test_conservative_category_rules_keep_institutions_uncertain_and_flag_chains
 
 
 def test_full_screen_list_export_and_counts_are_stable(tmp_path):
+    from outreach_agent.candidate_pool import CANDIDATE_DB
+    if not CANDIDATE_DB.is_file():
+        import pytest
+        pytest.skip(f"archived screening snapshot unavailable: {CANDIDATE_DB.name}")
     source=tmp_path/"source.db"; working=tmp_path/"working.db"; _source_db(source)
     create_working_copy(source,working)
     result=screen_all(working)
@@ -61,6 +65,10 @@ def test_full_screen_list_export_and_counts_are_stable(tmp_path):
 
 
 def test_deterministic_calibration_sample(tmp_path):
+    from outreach_agent.candidate_pool import CANDIDATE_DB
+    if not CANDIDATE_DB.is_file():
+        import pytest
+        pytest.skip(f"archived screening snapshot unavailable: {CANDIDATE_DB.name}")
     source=tmp_path/"source.db"; working=tmp_path/"working.db"; _source_db(source)
     create_working_copy(source,working); screen_all(working)
     assert [x["candidate_id"] for x in stratified_sample(working,per_category=1)] == [x["candidate_id"] for x in stratified_sample(working,per_category=1)]

@@ -230,6 +230,11 @@ def _initialize_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
           UNIQUE(profile_id, source_profile_version)
         );
+        CREATE TABLE IF NOT EXISTS research_report_reviews (
+          review_id TEXT PRIMARY KEY, report_id TEXT NOT NULL, document_sha256 TEXT NOT NULL,
+          decision TEXT NOT NULL, reviewer_email TEXT NOT NULL, reviewed_at TEXT NOT NULL, note TEXT
+        );
+        CREATE INDEX IF NOT EXISTS report_review_hash_idx ON research_report_reviews(report_id,document_sha256,reviewed_at);
         CREATE TABLE IF NOT EXISTS email_events (
           event_id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, event_type TEXT NOT NULL,
           provider TEXT NOT NULL, provider_enabled INTEGER NOT NULL, message_id TEXT, error TEXT, created_at TEXT NOT NULL,

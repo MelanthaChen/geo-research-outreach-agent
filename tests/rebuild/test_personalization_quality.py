@@ -233,7 +233,7 @@ def test_v5_upgrade_assesses_existing_ready_content_without_overwriting_it(tmp_p
     db=Database('sqlite:///'+str(path));db.initialize()
     with db.engine.connect() as c:
         result=c.exec_driver_sql('SELECT personalization,personalization_status,personalization_quality_status,personalization_quality_errors FROM candidates WHERE id=?',('old-ready',)).one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==7
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==8
     assert result.personalization==raw and result.personalization_status=='READY'
     assert result.personalization_quality_status=='FAIL' and 'GENERIC_STRENGTH' in result.personalization_quality_errors
     db.engine.dispose()

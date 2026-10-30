@@ -20,6 +20,8 @@ def digest(path: Path) -> str:
 
 def test_offline_report_and_validate_use_separate_537_snapshot(monkeypatch, tmp_path):
     baseline = ROOT / "data/phase4f_experimental.db"
+    if not baseline.is_file() or not (ROOT / "data/phase3c1_validation_77.db").is_file():
+        pytest.skip("archived 537-company and frozen 77-company snapshots unavailable")
     phase6a_copy = tmp_path / "phase6a_experimental.db"
     shutil.copy2(baseline, phase6a_copy)
     frozen_before = digest(ROOT / "data/phase3c1_validation_77.db")

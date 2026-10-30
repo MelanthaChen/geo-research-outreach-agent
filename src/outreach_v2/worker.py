@@ -115,7 +115,16 @@ def delivery_step(db,job,mail_factory):
             raise ConfigurationBlocked('DOCX approval is no longer attributable to an active administrator')
     mail=mail_factory()  # Authorization is required before any provider action.
     if template and hasattr(mail,'configure_message'):
-        mail.configure_message(template['subject'],template['body'],template['sender'])
+        from .template import render_template
+        with db.transaction() as c:
+            context(c,job)
+        values={'company_name':inv['company_name'],'recipient':inv['recipient'],'report_name':'GEO research report',
+            'researcher_name':template['researcher_name'] or os.environ.get('OUTREACH_RESEARCHER_NAME',''),
+            'university_affiliation':template['university_affiliation'] or os.environ.get('OUTREACH_UNIVERSITY_AFFILIATION',''),
+            'reply_to':template['reply_to'] or os.environ.get('OUTREACH_REPLY_TO',''),
+            'sender_name':template.get('sender_name') or os.environ.get('OUTREACH_RESEARCHER_NAME','')}
+        mail.configure_message(render_template(template['subject'],values),render_template(template['body'],values),
+            template['sender'],reply_to=template['reply_to'],sender_name=template.get('sender_name'))
     key='outreach-report:'+report['id']
     with db.transaction(serialized=True) as c:
         context(c,job)

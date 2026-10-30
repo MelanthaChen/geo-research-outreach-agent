@@ -125,19 +125,42 @@ def eligible_recipient(c,row):
     return (next(iter(emails)) if len(emails)==1 else None),reasons
 
 def select_pilot_cohort(c, limit=100):
-    """Select distinct, currently invitation-ready companies with industry spread."""
+    """Select a fixed research-preparation cohort before personalization.
+
+    A cohort member is a verified, eligible company with one independently
+    first-party, verified business email and preserved source provenance. This
+    deliberately does not require personalization or create invitations.
+    """
     if limit != 100: raise ValueError('The professor pilot cohort is fixed at 100 companies')
     rows=c.execute(select(candidates).where(candidates.c.kind=='company',candidates.c.fixture.is_(False),
-        readiness()).order_by(candidates.c.industry,candidates.c.id)).mappings().all()
+        candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+        candidates.c.suppressed.is_(False),candidates.c.name.is_not(None),candidates.c.website.is_not(None),
+        ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
+        .order_by(candidates.c.industry,candidates.c.id)).mappings().all()
     by_industry={}
-    seen_domains=set();seen_recipients=set()
     from .template import host
+    prior_invitations=c.execute(select(invitations.c.website,invitations.c.recipient)).all()
+    seen_domains={host(row.website) for row in prior_invitations if host(row.website)}
+    seen_recipients={(row.recipient or '').strip().casefold() for row in prior_invitations if row.recipient}
     for item in rows:
-        row=dict(item);recipient,reasons=eligible_recipient(c,row)
+        row=dict(item);recipient=None;matching=[]
+        for contact in c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings():
+            email=(contact['email'] or '').strip().lower()
+            if (not EMAIL.fullmatch(email) or contact['suppressed'] or contact['verification']!='VERIFIED'
+                or not same_site(row['website'],contact['source_url']) or not (contact['evidence'] or '').strip()
+                or c.scalar(select(suppressions.c.email).where(suppressions.c.email==email))):
+                continue
+            if any(term in (contact['purpose'] or '').casefold() for term in ('privacy','career','recruit','personal','legal','abuse')):
+                continue
+            matching.append(dict(contact))
+        if len(matching)==1:recipient=matching[0]['email'].strip().lower()
+        elif len(matching)>1:continue
         domain=host(row.get('website'))
-        if reasons or not recipient or not domain or domain in seen_domains or recipient.casefold() in seen_recipients:
+        if (not recipient or not domain or domain in seen_domains or recipient.casefold() in seen_recipients
+            or c.scalar(select(suppressions.c.email).where(suppressions.c.email==recipient))):
             continue
         key=(row.get('industry') or 'Unclassified').strip() or 'Unclassified'
+        row['_cohort_contact']=matching[0]
         by_industry.setdefault(key,[]).append((row,recipient,domain))
     # Round-robin industries so a long single-industry run cannot monopolize the cohort.
     selected=[]
@@ -156,6 +179,27 @@ def select_pilot_cohort(c, limit=100):
             if len(selected)>=limit:break
         industries=remaining
     return selected
+
+def cohort_member_snapshot(row):
+    """Stable, reviewable cohort evidence snapshot; does not mutate candidate."""
+    contact=row['_cohort_contact']
+    return {
+        'criteria_version':'verified-company-cohort-v2',
+        'candidate_id':row['id'],'company_name':row['name'],'business_description':row.get('description'),'industry':row.get('industry'),
+        'location':row.get('location'),'website':row['website'],'website_status':row['website_status'],
+        'qualification_status':row['qualification'],'suppressed':bool(row['suppressed']),
+        'outreach_eligibility':'COHORT_ELIGIBLE_NOT_INVITATION_READY',
+        'business_email':contact['email'],'contact_kind':contact.get('kind'),'contact_purpose':contact.get('purpose'),
+        'contact_verification':contact['verification'],
+        'contact_source_url':contact['source_url'],'contact_evidence':contact['evidence'],
+        'contact_source_ref':contact.get('source_ref'),'contact_source_checksum':contact.get('source_checksum'),
+        'candidate_source':row.get('source'),'candidate_source_ref':row.get('source_ref'),
+        'candidate_source_checksum':row.get('source_checksum'),
+        'personalization_status':('READY' if row.get('personalization_status')=='READY' and
+            row.get('personalization_analysis_version')=='semantic-openai-v1' and int(row.get('personalization_version') or 0)>0 else 'PENDING'),
+        'source_personalization_status':row.get('personalization_status') or 'INCOMPLETE',
+        'review_status':'PENDING','smb_size_evidence_status':'NOT_ESTABLISHED_IN_STORED_RECORD'
+    }
 
 OWNER_BINDINGS={
  'geo-ai-resume.vercel.app':{'recipient':'yuxuan.chen.1031@outlook.com','representative':'yuxuan.chen.1031@outlook.com'},
@@ -217,6 +261,7 @@ def generate(db,selection,key):
                       researcher_name=(invitation_template['researcher_name'] if invitation_template else __import__('os').getenv('OUTREACH_RESEARCHER_NAME')),
                       university_affiliation=(invitation_template['university_affiliation'] if invitation_template else __import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION')),
                       reply_to=(invitation_template['reply_to'] if invitation_template else __import__('os').getenv('OUTREACH_REPLY_TO')),
+                      sender_name=(invitation_template.get('sender_name') if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER_NAME') or __import__('os').getenv('OUTREACH_RESEARCHER_NAME'))),
                       sender_email=(invitation_template['sender'] if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER') or __import__('os').getenv('OUTREACH_REPLY_TO'))),
                       personalization=dump(p),generated_at=stamp,exported_at=stamp,
                       send_status='UNVERIFIED',consent_status='NOT_RECEIVED',authority=dump(authority))

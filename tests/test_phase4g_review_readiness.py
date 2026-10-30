@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import httpx
+import pytest
 
 from outreach_agent.config import WebsiteSettings
 from outreach_agent.models import Company, WebsiteSnapshot
@@ -75,6 +76,8 @@ def test_scale_projection_uses_linear_inputs_and_does_not_invent_review_time():
 
 def test_offline_exports_are_stable_unique_and_preserve_review_state(tmp_path):
     database = ROOT / "data" / "phase4f_experimental.db"
+    if not database.is_file():
+        pytest.skip(f"archived offline snapshot unavailable: {database.name}")
     def digest(path):
         return hashlib.sha256(path.read_bytes()).hexdigest()
     before = digest(database)

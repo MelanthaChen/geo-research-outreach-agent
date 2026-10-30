@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 import secrets
+import base64
+import hashlib
 
-from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, init_registry, now, approve_email_batch
+from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, _hash, init_registry, now, approve_email_batch
 
 
 class EmailProviderError(RuntimeError):
@@ -163,6 +165,24 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
                 outcomes.append(DispatchOutcome(draft_id, "DUPLICATE", prior["event_id"], prior["message_id"], prior["error"])); continue
             if draft["approval_status"] != "APPROVED":
                 outcomes.append(DispatchOutcome(draft_id, "BLOCKED_APPROVAL", error="human approval is required")); continue
+            approved_report_bytes=None
+            if draft["attachment_report_id"]:
+                report=db.execute("SELECT report_id,profile_id,source_profile_version,status,document_base64 FROM research_reports WHERE report_id=?",
+                    (draft["attachment_report_id"],)).fetchone()
+                if not report or report["status"]!='READY' or not report["document_base64"]:
+                    outcomes.append(DispatchOutcome(draft_id,"BLOCKED_APPROVAL",error="approved DOCX artifact is unavailable or incomplete"));continue
+                try:approved_report_bytes=base64.b64decode(report["document_base64"],validate=True)
+                except Exception:
+                    outcomes.append(DispatchOutcome(draft_id,"BLOCKED_APPROVAL",error="stored DOCX artifact is invalid"));continue
+                report_hash=hashlib.sha256(approved_report_bytes).hexdigest()
+                review=db.execute("SELECT decision FROM research_report_reviews WHERE report_id=? AND document_sha256=? ORDER BY reviewed_at DESC LIMIT 1",
+                    (report["report_id"],report_hash)).fetchone()
+                expected_content_key=_hash(report_hash+"\0"+str(draft["subject"] or "")+"\0"+str(draft["body"] or ""))
+                original=db.execute("SELECT s.invitation_recipient_email FROM geo_handoffs h JOIN questionnaire_submissions s ON s.submission_id=h.consent_submission_id WHERE h.profile_id=? AND h.profile_version=?",
+                    (report["profile_id"],report["source_profile_version"])).fetchone()
+                if (not review or review["decision"]!="APPROVED" or draft["preview_hash"]!=expected_content_key
+                    or not original or str(original["invitation_recipient_email"] or "").casefold()!=str(draft["recipient"] or "").casefold()):
+                    outcomes.append(DispatchOutcome(draft_id,"BLOCKED_APPROVAL",error="exact DOCX approval, content binding, or original recipient check failed"));continue
             if not provider.enabled:
                 outcomes.append(DispatchOutcome(draft_id, "BLOCKED_PROVIDER", error="provider is disabled")); continue
             recipient = str(draft["recipient"]).casefold()
@@ -184,11 +204,7 @@ def dispatch_approved_drafts(draft_ids: list[str], *, provider: EmailProvider, s
                     break
                 try:
                     if draft["attachment_report_id"]:
-                        report = db.execute("SELECT document_base64 FROM research_reports WHERE report_id=?", (draft["attachment_report_id"],)).fetchone()
-                        if not report or not report["document_base64"]:
-                            raise EmailProviderError("persisted report document is missing")
-                        import base64
-                        result = provider.send_document(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"], filename=draft["attachment_report_id"] + ".docx", content=base64.b64decode(report["document_base64"]))
+                        result = provider.send_document(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"], filename=draft["attachment_report_id"] + ".docx", content=approved_report_bytes)
                     else:
                         result = provider.send(sender=sender, recipient=draft["recipient"], subject=draft["subject"], body=draft["body"])
                 except EmailProviderError as exc:

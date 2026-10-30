@@ -36,6 +36,12 @@ services:
         value: "0"
       - key: OUTREACH_AI_PERSONALIZATION_REPROCESS_ENABLED
         value: "false"
+      - key: OUTREACH_AI_PERSONALIZATION_REPROCESS_CANDIDATE_IDS
+        value: ""
+      - key: OUTREACH_AI_PERSONALIZATION_COHORT_CANDIDATE_IDS
+        value: ""
+      - key: OUTREACH_AI_PERSONALIZATION_SCHEDULED_ENABLED
+        value: "false"
       - key: OUTREACH_DASHBOARD_TOKEN
         generateValue: true
       - key: OUTREACH_ADMIN_EMAIL

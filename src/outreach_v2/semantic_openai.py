@@ -128,6 +128,23 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str) -
     excerpt = str(item.get("evidence_excerpt") or item.get("statement") or "")
     if any(word in raw for word in ("TESTIMONIAL", "CUSTOMER", "PARTNER", "THIRD_PARTY", "PARTICIPANT")):
         return "CUSTOMER_OR_TESTIMONIAL" if "TESTIMONIAL" in raw or "CUSTOMER" in raw else "THIRD_PARTY_OR_PARTNER"
+    # Service and product pages often embed customer reviews. Classify these
+    # before the URL-path rule below, or a quote about a patient's experience
+    # could be sent to the model as if it were the business's own service claim.
+    quoted_copy = excerpt.lstrip().startswith(("\u201c", "\u2018", '"'))
+    quoted_review = quoted_copy and (
+        re.search(r"\b(?:I|my|we|our)\b", excerpt, re.I) is not None
+        or re.search(r"\b(?:great|excellent|friendly|comfortable|recommend|happy|wonderful|professional)\b", excerpt, re.I) is not None
+    )
+    if quoted_review or re.search(r"\b(?:customer testimonials?|patient reviews?|guest reviews?|what customers say|what patients say)\b", raw, re.I):
+        return "CUSTOMER_OR_TESTIMONIAL"
+    if quoted_copy:
+        # A standalone quotation with no reliable speaker metadata is
+        # ambiguous. Exclude it instead of attributing it to the company.
+        return "AMBIGUOUS"
+    if (re.search(r"\b(?:podcast|episode|interview|show)\b", excerpt, re.I)
+            and re.search(r"\b(?:sits down with|joins?|appears?|featured|interviewed|guest)\b", excerpt, re.I)):
+        return "EVENT_OR_PARTICIPANT"
     path = urlparse(str(urls[0])).path.casefold()
     if "event" in path:
         # Event pages mix the host organization's programming with guest and

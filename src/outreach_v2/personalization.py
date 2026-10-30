@@ -22,6 +22,8 @@ from .template import same_site, validate
 from .quality import CODE_MARKERS
 
 MAX_PAGE_BYTES = 512_000
+MAX_PILOT_CANDIDATES = 5
+MAX_PILOT_SPEND_USD = '0.25'
 # A fourth same-site page gives evidence-limited companies another grounded
 # source opportunity while preserving the strict per-page size and time bounds.
 MAX_PAGES_PER_CANDIDATE = 4
@@ -625,7 +627,8 @@ def _analysis_fingerprint(selection):
 
 
 def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_seconds=240,
-             selected_candidate_ids=None, backend_factory=None, token_count=None):
+             authorized_candidate_ids=None, selected_candidate_ids=None,
+             backend_factory=None, token_count=None):
     """Run the real semantic pipeline; paid execution is disabled unless explicitly configured.
 
     Candidate websites are fetched and attributed before an OpenAI request is possible.
@@ -640,8 +643,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     from .quality import quality_decisions, quality_reasons
     from .template import validate
 
-    if not 1 <= limit <= 10:
-        raise ValueError('AI personalization requests are limited to 1–10 candidates per run')
+    if not 1 <= limit <= MAX_PILOT_CANDIDATES:
+        raise ValueError('The authorized personalization pilot is limited to 1–5 candidates per run')
     if concurrency != 1:
         raise ValueError('Paid semantic requests must run sequentially; concurrency must be 1')
     if not 1 <= time_budget_seconds <= 300:
@@ -650,7 +653,17 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
         return {'status': 'DISABLED', 'disabled': True, 'attempted': 0, 'completed': 0,
                 'incomplete': 0, 'skipped_existing_attempt': 0, 'remaining_backlog': None,
                 'reason': 'OUTREACH_AI_PERSONALIZATION_ENABLED is not true; no model calls were made.'}
-    selected_ids = tuple(dict.fromkeys(str(x) for x in (selected_candidate_ids or ()) if x))
+    authorized_ids = tuple(dict.fromkeys(str(x).strip() for x in (authorized_candidate_ids or ()) if str(x).strip()))
+    selected_ids = tuple(dict.fromkeys(str(x).strip() for x in (selected_candidate_ids or ()) if str(x).strip()))
+    if not authorized_ids:
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
+                'reason':'No explicit authorized candidate cohort is configured; automatic database-wide selection is disabled.'}
+    if len(authorized_ids)>MAX_PILOT_CANDIDATES or len(authorized_ids)>limit:
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
+                'reason':'Authorized candidate cohort exceeds the five-company pilot/run limit.'}
+    if not set(selected_ids).issubset(set(authorized_ids)):
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
+                'reason':'Historical reprocessing IDs must be within the exact authorized candidate cohort.'}
     operation_id=os.environ.get('OUTREACH_AI_PERSONALIZATION_OPERATION_ID','initial').strip()
     if not operation_id or len(operation_id)>128:
         raise ValueError('AI personalization operation ID must contain 1–128 characters')
@@ -664,13 +677,16 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     run_budget = _money_env('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD')
     cumulative_budget = _money_env('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD')
     per_candidate_cap = _money_env('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD')
-    if not (Decimal('0') < run_budget and Decimal('0') < cumulative_budget and
+    if not (Decimal('0') < run_budget <= Decimal(MAX_PILOT_SPEND_USD) and
+            Decimal('0') < cumulative_budget <= Decimal(MAX_PILOT_SPEND_USD) and
             Decimal('0') < per_candidate_cap <= Decimal(str(MAX_ESTIMATED_USD))):
         return {'status': 'BLOCKED_CONFIGURATION', 'disabled': True, 'attempted': 0,
-                'reason': 'Positive run, cumulative, and per-candidate budgets within the fixed $0.05 request cap are required.'}
-    limit = min(limit, int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit))))
-    if not 1 <= limit <= 10:
-        raise ValueError('Configured AI personalization candidate count must be between 1 and 10')
+                'reason': 'Run and cumulative budgets must be positive and no greater than the authorized $0.25 pilot ceiling; per-candidate cap must remain within $0.05.'}
+    configured_limit = int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit)))
+    if not 1 <= configured_limit <= MAX_PILOT_CANDIDATES:
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
+                'reason':'Configured personalization run limit must remain within the five-company pilot ceiling.'}
+    limit = min(limit, configured_limit)
     if backend_factory is None:
         backend_factory = OpenAIResponsesBackend
     # Credential presence is checked before claiming candidates or fetching pages.
@@ -706,14 +722,12 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             events.c.event.in_(['PERSONALIZATION_READY','PERSONALIZATION_INCOMPLETE']),
             events.c.created_at>=domain_cooldown)).scalars())
         recent={_domain_key(x) for x in recent if x}
-        q=select(candidates).where(eligible).order_by(
+        q=select(candidates).where(eligible, candidates.c.id.in_(authorized_ids)).order_by(
             candidates.c.personalization_at.asc().nulls_first(), candidates.c.id).limit(min(1000,limit*20))
-        if selected_ids: q=q.where(candidates.c.id.in_(selected_ids))
         if db.postgres: q=q.with_for_update(skip_locked=True)
         for item in c.execute(q).mappings():
             row=dict(item); domain=_domain_key(row.get('domain'))
             if domain in domains or (domain in recent and row['id'] not in selected_ids): continue
-            if selected_ids and row['id'] not in selected_ids and len(claimed) >= max(0,limit-len(selected_ids)): continue
             updated=c.execute(candidates.update().where(candidates.c.id==row['id'],eligible).values(
                 personalization_lease_token=lease_token,personalization_lease_until=lease_until))
             if updated.rowcount==1:
@@ -786,6 +800,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 detail=_safe_json({'classification':'TRANSIENT_HTTP','error':reason[:200]}),created_at=at))
 
     for index,row in enumerate(claimed):
+        if row['id'] not in authorized_ids:
+            raise RuntimeError('Cohort isolation invariant failed before personalization')
         if time.monotonic()>=deadline:
             result['budget_stopped']=True
             break

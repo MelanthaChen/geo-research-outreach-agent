@@ -628,8 +628,71 @@ def test_semantic_personalization_is_disabled_by_default_and_performs_no_fetch_o
     assert called==[]
     assert row['personalization_status']=='INCOMPLETE' and row['personalization']=='{}'
     assert c_count(db,personalization_runs)==0
-    with pytest.raises(ValueError,match='1–10'):
+    with pytest.raises(ValueError,match='1–5'):
         backfill(db,limit=101,fetcher=lambda url: called.append(url))
+
+
+def test_semantic_backfill_fails_closed_without_exact_authorized_cohort(db, monkeypatch):
+    from outreach_v2.db import personalization_runs, personalization_attempts
+    from outreach_v2.personalization import backfill
+    candidate(db,ident='unapproved-a',email='a@example.com',website='https://a.example',name='A',personalization=False,fixture=False)
+    candidate(db,ident='unapproved-b',email='b@example.com',website='https://b.example',name='B',personalization=False,fixture=False)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    called=[]
+    result=backfill(db,limit=5,fetcher=lambda url:called.append(url))
+    assert result['status']=='BLOCKED_CONFIGURATION' and result['attempted']==0
+    assert called==[]
+    assert count(db,personalization_runs)==0 and count(db,personalization_attempts)==0
+
+
+def test_semantic_backfill_never_expands_explicit_cohort_across_repeated_runs(db, monkeypatch):
+    from outreach_v2.db import personalization_runs, personalization_attempts
+    from outreach_v2.personalization import backfill
+    candidate(db,ident='approved-a',email='a@example.com',website='https://a.example',name='A',personalization=False,fixture=False)
+    candidate(db,ident='outside-b',email='b@example.com',website='https://b.example',name='B',personalization=False,fixture=False)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.25')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','5')
+    visited=[]
+    def denied(url):
+        visited.append(url)
+        raise ValueError('robots disallowed')
+    class Backend:
+        calls=0
+        def analyze_once(self,*args,**kwargs):
+            self.calls+=1
+            raise AssertionError('evidence failure must not call the model')
+    backend=Backend()
+    factory_calls=[]
+    def backend_factory():
+        factory_calls.append(True)
+        return backend
+    for expected_attempts in (1,0):
+        result=backfill(db,limit=5,fetcher=denied,authorized_candidate_ids=['approved-a'],
+            backend_factory=backend_factory,token_count=lambda _:1000,time_budget_seconds=30)
+        assert result['attempted']==expected_attempts
+    assert visited and set(visited)=={'https://a.example'}
+    assert backend.calls==0 and len(factory_calls)==2
+    with db.transaction() as c:
+        rows=c.execute(select(candidates.c.id,candidates.c.personalization_attempts)).all()
+    assert {row.id for row in rows}=={'approved-a','outside-b'}
+    assert next(row.personalization_attempts for row in rows if row.id=='outside-b')==0
+    assert count(db,personalization_runs)==2 and count(db,personalization_attempts)==0
+
+
+def test_semantic_backfill_rejects_budget_above_authorized_pilot_cap(db, monkeypatch):
+    from outreach_v2.personalization import backfill
+    candidate(db,ident='over-budget',email='budget@example.com',website='https://budget.example',name='Budget',personalization=False,fixture=False)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.26')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    result=backfill(db,limit=1,authorized_candidate_ids=['over-budget'],backend_factory=lambda:pytest.fail('backend must not be constructed'))
+    assert result['status']=='BLOCKED_CONFIGURATION' and result['attempted']==0
+    from outreach_v2.db import personalization_runs,personalization_attempts
+    assert count(db,personalization_runs)==0 and count(db,personalization_attempts)==0
 
 
 def test_semantic_backfill_stops_before_call_when_run_budget_is_too_small(db, monkeypatch):
@@ -642,7 +705,7 @@ def test_semantic_backfill_stops_before_call_when_run_budget_is_too_small(db, mo
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MODEL','gpt-5.4-mini-2026-03-17')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.01')
-    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','1.00')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
     monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
@@ -650,7 +713,7 @@ def test_semantic_backfill_stops_before_call_when_run_budget_is_too_small(db, mo
         calls=0
         def analyze_once(self,*args,**kwargs): self.calls+=1; raise AssertionError('network call is prohibited in this test')
     backend=Backend()
-    result=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=lambda _:1000)
+    result=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['budget-stop'],backend_factory=lambda:backend,token_count=lambda _:1000)
     assert result['status']=='BUDGET_STOPPED' and result['budget_stopped'] is True
     assert backend.calls==0 and count(db,personalization_attempts)==0
 
@@ -674,7 +737,7 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MODEL','gpt-5.4-mini-2026-03-17')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.20')
-    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','1.00')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
     monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
@@ -695,14 +758,14 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
                 'estimated_cost_usd':0.00255,'preflight':{'worst_case_usd':0.03825},
                 'structured_output':response(),'rejected_claims':[],'raw_response':{'id':'req-test'}}
     backend=Backend(); counter=lambda _text:1000
-    first=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
+    first=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
     assert first['attempted']==1 and first['incomplete']==1 and backend.calls==1
     with db.transaction() as c:
         attempt=c.execute(select(personalization_attempts)).mappings().one()
         assert attempt['status']=='COMPLETED' and attempt['provider_response']
         c.exec_driver_sql("UPDATE events SET created_at='2000-01-01T00:00:00+00:00' WHERE entity_id='lagoon-ai'")
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_REPROCESS_ENABLED','true')
-    second=backfill(db,limit=1,fetcher=lambda url:None,backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30,selected_candidate_ids=['lagoon-ai'])
+    second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30,selected_candidate_ids=['lagoon-ai'])
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='lagoon-ai')).mappings().one()
         versions=c.execute(select(personalization_versions).where(personalization_versions.c.candidate_id=='lagoon-ai')).mappings().all()

@@ -187,7 +187,19 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
         # Existing scheduled worker doubles as a bounded, pre-consent V1
         # personalization checkpoint. This path never contacts the GEO Engine.
         from .personalization import backfill
-        personalization_backfill=backfill(db,limit=min(10,int(__import__('os').getenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','5'))),concurrency=1,time_budget_seconds=25,selected_candidate_ids=[x.strip() for x in __import__('os').getenv('OUTREACH_AI_PERSONALIZATION_REPROCESS_CANDIDATE_IDS','').split(',') if x.strip()])
+        env=__import__('os').environ
+        # Paid work is never performed by the recurring full worker. A pilot
+        # must use the dedicated personalization-only command and an exact ID
+        # allowlist; an empty allowlist always fails closed in backfill().
+        if env.get('OUTREACH_AI_PERSONALIZATION_SCHEDULED_ENABLED','false').strip().casefold() in {'1','true','yes','on'}:
+            personalization_backfill=backfill(db,
+                limit=min(5,int(env.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','5'))),
+                concurrency=1,time_budget_seconds=25,
+                authorized_candidate_ids=[x.strip() for x in env.get('OUTREACH_AI_PERSONALIZATION_COHORT_CANDIDATE_IDS','').split(',') if x.strip()],
+                selected_candidate_ids=[x.strip() for x in env.get('OUTREACH_AI_PERSONALIZATION_REPROCESS_CANDIDATE_IDS','').split(',') if x.strip()])
+        else:
+            personalization_backfill={'status':'DISABLED','disabled':True,'attempted':0,
+                'reason':'Personalization is isolated from the recurring full worker.'}
         processed+=personalization_backfill['attempted']
     except Exception:
         personalization_error='Bounded candidate batch failed; claimed candidates remain recoverable'

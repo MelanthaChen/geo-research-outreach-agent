@@ -93,6 +93,51 @@ def test_evidence_filter_deduplicates_and_excludes_events_and_third_parties():
     assert selected.excluded_counts["THIRD_PARTY_OR_PARTNER"] == 1
 
 
+def test_quoted_first_person_review_on_service_page_is_not_company_evidence():
+    source = profile()
+    service_url = "https://www.lagoonny.com/services/dentistry"
+    for fact_id, excerpt in (
+        ("patient-review", "“I had a cracked tooth and the staff were friendly.”"),
+        ("patient-review-no-pronoun", "“Great dentist and assistant; the replacement was comfortable.”"),
+    ):
+        source["evidence_profile"]["facts"].append({
+            "id": fact_id, "statement": excerpt, "evidence_excerpt": excerpt,
+            "source_content": "Reviews: " + excerpt, "source_urls": [service_url],
+            "source_title": "Dental Services", "section_heading": "Dental Services",
+            "assertion_type": "FIRST_PARTY_PAGE_CLAIM", "attribution": "COMPANY_STATED",
+        })
+    source["evidence_profile"]["facts"].append({
+        "id": "unattributed-quote", "statement": "“Care made personal.”",
+        "evidence_excerpt": "“Care made personal.”", "source_content": "“Care made personal.”",
+        "source_urls": [service_url], "source_title": "Dental Services",
+        "section_heading": "Dental Services", "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+        "attribution": "COMPANY_STATED",
+    })
+    source["evidence_profile"]["facts"].append({
+        "id": "podcast-appearance",
+        "statement": "In this exclusive episode, the founder sits down with a podcast host.",
+        "evidence_excerpt": "In this exclusive episode, the founder sits down with a podcast host.",
+        "source_content": "In this exclusive episode, the founder sits down with a podcast host.",
+        "source_urls": ["https://www.lagoonny.com/about"], "source_title": "About",
+        "section_heading": "About", "assertion_type": "FIRST_PARTY_PAGE_CLAIM",
+        "attribution": "COMPANY_STATED",
+    })
+    selected = select_evidence(source, company_name="Lagoon New York",
+                               website="https://www.lagoonny.com/")
+    assert selected.classifications["patient-review"] == "CUSTOMER_OR_TESTIMONIAL"
+    assert selected.classifications["patient-review-no-pronoun"] == "CUSTOMER_OR_TESTIMONIAL"
+    assert selected.classifications["unattributed-quote"] == "AMBIGUOUS"
+    assert selected.classifications["podcast-appearance"] == "EVENT_OR_PARTICIPANT"
+    selected_ids = {item["id"] for item in selected.facts}
+    assert not selected_ids.intersection({
+        "patient-review", "patient-review-no-pronoun", "unattributed-quote", "podcast-appearance"})
+    assert selected.excluded_reasons["patient-review"] == (
+        "NON_TARGET_ATTRIBUTION:CUSTOMER_OR_TESTIMONIAL")
+    assert selected.excluded_reasons["unattributed-quote"] == "NON_TARGET_ATTRIBUTION:AMBIGUOUS"
+    assert selected.excluded_reasons["podcast-appearance"] == (
+        "NON_TARGET_ATTRIBUTION:EVENT_OR_PARTICIPANT")
+
+
 def test_preflight_counts_entire_request_and_enforces_caps_and_price():
     evidence = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/").to_input()
     captured = []

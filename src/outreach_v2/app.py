@@ -258,7 +258,7 @@ def create_app(database=None):
     @app.post('/api/admin/invites/accept')
     async def accept_admin_invite(request:Request):
         body=await request.json();token=str(body.get('token') or '');password=str(body.get('password') or '')
-        if len(password)<14 or len(password)>1024:raise ValueError('Password must contain 14 to 1024 characters')
+        if len(password)<12 or len(password)>1024:raise ValueError('Password must contain 12 to 1024 characters')
         with db.transaction(serialized=True) as c:
             invite=c.execute(select(admin_invites).where(admin_invites.c.token_hash==auth.digest(token),
                 admin_invites.c.accepted_at.is_(None),admin_invites.c.expires_at>now())).mappings().first()

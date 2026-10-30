@@ -6,9 +6,17 @@ import urllib.request
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 
+import pytest
+
 from outreach_agent.admin_auth import hash_password, init_auth_store
 from outreach_agent import dashboard as dashboard_module
 
+
+def test_administrator_password_minimum_is_12_and_hash_remains_argon2id():
+    with pytest.raises(ValueError, match="at least 12 characters"):
+        hash_password("lower12char")
+    encoded = hash_password("lower12char!")
+    assert encoded.startswith("$argon2id$")
 
 def _server(tmp_path, monkeypatch):
     registry = tmp_path / "registry.db"

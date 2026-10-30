@@ -78,8 +78,8 @@ def password_hash_configured() -> bool:
 
 
 def hash_password(password: str) -> str:
-    if len(password) < 14:
-        raise ValueError("administrator password must be at least 14 characters")
+    if len(password) < 12:
+        raise ValueError("administrator password must be at least 12 characters")
     return _PASSWORD_HASHER.hash(password)
 
 

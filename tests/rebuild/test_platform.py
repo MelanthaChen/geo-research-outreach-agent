@@ -502,13 +502,17 @@ def test_admin_invites_are_one_time_and_role_scoped(db,monkeypatch):
     invite_result=client.post('/api/admin/invites',headers=headers,json={'email':'reviewer@example.org','role':'APPROVER'})
     assert invite_result.status_code==200 and invite_result.json()['delivery']=='MANUAL_HANDOFF_REQUIRED'
     token=invite_result.json()['token']
-    accepted=client.post('/api/admin/invites/accept',json={'token':token,'password':'local-only-strong-password'})
+    too_short=client.post('/api/admin/invites/accept',json={'token':token,'password':'lower12char'})
+    assert too_short.status_code==422 and too_short.json()['error']=='Password must contain 12 to 1024 characters'
+    accepted=client.post('/api/admin/invites/accept',json={'token':token,'password':'lower12char!'})
     assert accepted.status_code==200 and accepted.json()['role']=='APPROVER'
-    assert client.post('/api/admin/invites/accept',json={'token':token,'password':'local-only-strong-password'}).status_code==403
+    assert client.post('/api/admin/invites/accept',json={'token':token,'password':'lower12char!'}).status_code==403
     reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={
-        'email':'reviewer@example.org','password':'local-only-strong-password'})
+        'email':'reviewer@example.org','password':'lower12char!'})
     assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
     assert reviewer.get('/api/admin/users').status_code==403
+    frontend=(Path(__file__).parents[2]/'src/outreach_v2/static/app.js').read_text()
+    assert 'unique password of at least 12 characters' in frontend
 
 def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_exact_100_person_pilot(db,monkeypatch):
     from argon2 import PasswordHasher

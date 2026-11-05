@@ -70,9 +70,12 @@ jobs = table('jobs', col('id', String, primary_key=True),
     col('attempts', Integer, default=0), col('next_attempt_at'), col('lease_until'), col('lease_token'),
     col('error'), col('created_at'), col('started_at'), col('completed_at'), col('updated_at'))
 reports = table('reports', col('id', String, primary_key=True),
-    Column('job_id', String, ForeignKey(f'{SCHEMA}.jobs.id'), unique=True, nullable=False),
+    Column('job_id', String, ForeignKey(f'{SCHEMA}.jobs.id'), nullable=False),
     col('recipient', String, nullable=False), col('result_id', String, unique=True), col('document', LargeBinary),
-    col('sha256'), col('created_at'))
+    col('sha256'), col('created_at'), col('is_active', Boolean, nullable=False, default=True, server_default='TRUE'),
+    col('superseded_at'), col('superseded_by', String))
+Index('uq_reports_active_job', reports.c.job_id, unique=True,
+    postgresql_where=reports.c.is_active.is_(True), sqlite_where=reports.c.is_active.is_(True))
 deliveries = table('deliveries', col('id', String, primary_key=True),
     Column('report_id', String, ForeignKey(f'{SCHEMA}.reports.id'), unique=True, nullable=False),
     col('recipient', nullable=False), col('provider'), col('idempotency_key', String, unique=True),
@@ -167,6 +170,12 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
 }), (8, 'invitation-sender-display-name', {
     'email_templates': {'sender_name': 'TEXT'},
     'invitations': {'sender_name': 'TEXT'}
+}), (9, 'versioned-report-artifacts', {
+    'reports': {
+        'is_active': 'BOOLEAN NOT NULL DEFAULT TRUE',
+        'superseded_at': 'TEXT',
+        'superseded_by': 'TEXT'
+    }
 })]
 
 class Database:
@@ -185,7 +194,7 @@ class Database:
                 dbapi.execute('PRAGMA foreign_keys=ON')
                 dbapi.execute('PRAGMA journal_mode=WAL')
     def initialize(self):
-        with self.engine.begin() as c:
+        with self._initialization_connection() as c:
             if self.postgres:
                 c.execute(text(f'CREATE SCHEMA IF NOT EXISTS {SCHEMA}'))
             metadata.create_all(c)
@@ -200,6 +209,39 @@ class Database:
                         if column_name not in existing:
                             schema = f'{SCHEMA}.' if self.postgres else ''
                             c.execute(text(f'ALTER TABLE {schema}{table_name} ADD COLUMN {column_name} {sql_type}'))
+                if version == 9:
+                    if self.postgres:
+                        constraints = inspect(c).get_unique_constraints('reports', schema=SCHEMA)
+                        for constraint in constraints:
+                            if constraint.get('column_names') == ['job_id']:
+                                quote = self.engine.dialect.identifier_preparer.quote
+                                c.execute(text(f'ALTER TABLE {SCHEMA}.reports DROP CONSTRAINT {quote(constraint["name"])}'))
+                        c.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {SCHEMA}.uq_reports_active_job '
+                                       f'ON {SCHEMA}.reports (job_id) WHERE is_active IS TRUE'))
+                    else:
+                        unique = inspect(c).get_unique_constraints('reports')
+                        if any(item.get('column_names') == ['job_id'] for item in unique):
+                            c.execute(text('''CREATE TABLE reports_v9_new (
+                                id VARCHAR NOT NULL PRIMARY KEY,
+                                job_id VARCHAR NOT NULL REFERENCES jobs(id),
+                                recipient VARCHAR NOT NULL,
+                                result_id VARCHAR UNIQUE,
+                                document BLOB,
+                                sha256 TEXT,
+                                created_at TEXT,
+                                approval_required BOOLEAN NOT NULL DEFAULT 1,
+                                is_active BOOLEAN NOT NULL DEFAULT 1,
+                                superseded_at TEXT,
+                                superseded_by VARCHAR
+                            )'''))
+                            c.execute(text('''INSERT INTO reports_v9_new
+                                (id,job_id,recipient,result_id,document,sha256,created_at,approval_required,is_active,superseded_at,superseded_by)
+                                SELECT id,job_id,recipient,result_id,document,sha256,created_at,approval_required,is_active,superseded_at,superseded_by
+                                FROM reports'''))
+                            c.execute(text('DROP TABLE reports'))
+                            c.execute(text('ALTER TABLE reports_v9_new RENAME TO reports'))
+                        c.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_active_job '
+                                       'ON reports (job_id) WHERE is_active = 1'))
                 if version == 5:
                     # The release migration assesses existing READY records
                     # without changing their personalization or invitation history.
@@ -221,6 +263,22 @@ class Database:
                             personalization_quality_status='PASS' if not failures else 'FAIL',
                             personalization_quality_errors=json.dumps(failures,separators=(',',':'))))
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
+
+    @contextmanager
+    def _initialization_connection(self):
+        if self.postgres:
+            with self.engine.begin() as connection:
+                yield connection
+            return
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql('PRAGMA foreign_keys=OFF')
+            connection.commit()
+            try:
+                with connection.begin():
+                    yield connection
+            finally:
+                connection.exec_driver_sql('PRAGMA foreign_keys=ON')
+                connection.commit()
     @contextmanager
     def transaction(self, *, serialized=False):
         with self.engine.connect() as c:

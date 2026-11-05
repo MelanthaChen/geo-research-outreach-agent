@@ -1,6 +1,8 @@
 """One durable scheduler tick. No browser timer or web-process background loop."""
 from __future__ import annotations
 import hashlib,hmac,json,os,tempfile,uuid
+import re,zipfile
+from io import BytesIO
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from sqlalchemy import select,or_,and_
@@ -55,6 +57,48 @@ def validate_result(result,inv,job):
         raise ValueError('Result is not completed evidence-based model research')
     if not baseline.get('model') or not baseline.get('response_archive'):raise ValueError('Result lacks real model execution provenance')
 
+_SIMULATION_MARKERS = (b'TEST-ONLY', b'TEST ONLY', b'NO-ENGINE-RESULT', b'NO ENGINE RESULT',
+                       b'SIMULATED PREVIEW', b'SIMULATED RESULT', b'FIXTURE-GENERATED')
+
+def _document_has_simulation_marker(document):
+    if not document or not zipfile.is_zipfile(BytesIO(document)):
+        return True
+    try:
+        with zipfile.ZipFile(BytesIO(document)) as archive:
+            xml = archive.read('word/document.xml')
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return True
+    normalized = re.sub(rb'\s+', b' ', xml).upper()
+    return any(marker in normalized for marker in _SIMULATION_MARKERS)
+
+def _test_only_result(result):
+    baseline=result.get('baseline') or {}
+    result_id=str(result.get('record_id') or '').upper()
+    provider=str(baseline.get('provider') or '').casefold()
+    return (any(marker.decode('ascii') in result_id for marker in _SIMULATION_MARKERS)
+            or bool(result.get('test_only') or result.get('simulated') or result.get('fixture_generated'))
+            or provider in {'mock','controlled_fixture','fixture','simulated','test'})
+
+def _valid_report_artifact(report, expected_result_id):
+    document=report.get('document') or b''
+    digest=hashlib.sha256(document).hexdigest()
+    return (report.get('result_id')==expected_result_id
+            and bool(document)
+            and bool(report.get('sha256'))
+            and hmac.compare_digest(digest,str(report.get('sha256')))
+            and not _document_has_simulation_marker(document)
+            and 'TEST-ONLY' not in str(report.get('result_id') or '').upper()
+            and 'NO-ENGINE-RESULT' not in str(report.get('result_id') or '').upper())
+
+def _genuine_job_result(job, inv):
+    if job.get('status')!='COMPLETED' or job.get('stage') not in {'REPORT','DELIVERY'} or not job.get('result_id'):
+        raise ConfigurationBlocked('A completed genuine research result is required before report generation')
+    result=parse(job.get('result'))
+    validate_result(result,inv,job)
+    if result.get('record_id')!=job.get('result_id') or _test_only_result(result):
+        raise ConfigurationBlocked('Research result identity or provenance is not genuine')
+    return result
+
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
     allowed_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
@@ -93,9 +137,25 @@ def research_step(db,job,engine_factory):
 def report_step(db,job,renderer=None):
     with db.transaction() as c:
         inv,_=context(c,job)
-        existing=c.execute(select(reports).where(reports.c.job_id==job['id'])).mappings().first()
-    if not existing:
-        result=parse(job['result']);validate_result(result,inv,job)
+        current=c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one()
+        result=_genuine_job_result(dict(current),inv)
+        existing=c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().first()
+        version=c.execute(select(reports).where(reports.c.result_id==result['record_id'])).mappings().first()
+        if existing and existing['result_id']==result['record_id']:
+            if not _valid_report_artifact(dict(existing),result['record_id']):
+                raise ConfigurationBlocked('Matching report has invalid integrity or simulated provenance')
+            document=None
+        elif version:
+            if not _valid_report_artifact(dict(version),result['record_id']):
+                raise ConfigurationBlocked('Existing result version has invalid integrity or simulated provenance')
+            document=None
+        elif existing and not ('TEST-ONLY' in str(existing['result_id'] or '').upper()
+                               or 'NO-ENGINE-RESULT' in str(existing['result_id'] or '').upper()
+                               or _document_has_simulation_marker(existing['document'] or b'')):
+            raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
+        else:
+            document=False
+    if document is False:
         if renderer:document=renderer(result)
         else:
             from outreach_agent.reporting import generate_docx_report
@@ -103,19 +163,59 @@ def report_step(db,job,renderer=None):
             if not template.exists():raise ConfigurationBlocked('Existing report template is unavailable')
             with tempfile.TemporaryDirectory() as temp:
                 output=Path(temp)/'report.docx';generate_docx_report(result,output,template);document=output.read_bytes()
-        with db.transaction(serialized=True) as c:
-            context(c,job)
-            report_id='report-'+sha(job['id'])[:24]
-            db.upsert(c,reports,[dict(id=report_id,job_id=job['id'],recipient=inv['recipient'],result_id=result['record_id'],document=document,sha256=hashlib.sha256(document).hexdigest(),created_at=now())],update=False)
+    if document is not None and _document_has_simulation_marker(document):
+        raise ConfigurationBlocked('Generated DOCX is not a genuine research artifact')
+    new_sha=hashlib.sha256(document).hexdigest() if document is not None else None
+    new_id='report-'+sha(job['id']+':'+str(result['record_id']))[:24]
     with db.transaction(serialized=True) as c:
-        context(c,job);transition(c,job['id'],stage='DELIVERY',status='COMPLETED',error=None,next_attempt_at=now())
+        inv,_=context(c,job)
+        current=dict(c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one())
+        fresh_result=_genuine_job_result(current,inv)
+        if fresh_result['record_id']!=result['record_id']:
+            raise ConfigurationBlocked('Research result changed while the report was being rendered')
+        existing=c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().first()
+        version=c.execute(select(reports).where(reports.c.result_id==result['record_id'])).mappings().first()
+        if version:
+            version=dict(version)
+            if not _valid_report_artifact(version,result['record_id']):
+                raise ConfigurationBlocked('Existing result version has invalid integrity or simulated provenance')
+            if existing and existing['id']!=version['id']:
+                if not ('TEST-ONLY' in str(existing['result_id'] or '').upper()
+                        or 'NO-ENGINE-RESULT' in str(existing['result_id'] or '').upper()
+                        or _document_has_simulation_marker(existing['document'] or b'')):
+                    raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
+                c.execute(reports.update().where(reports.c.id==existing['id'],reports.c.is_active.is_(True)).values(
+                    is_active=False,superseded_at=now(),superseded_by=version['id']))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job['id'],event='REPORT_VERSION_SUPERSEDED',
+                    detail=dump({'old_report_id':existing['id'],'old_result_id':existing['result_id'],'old_sha256':existing['sha256'],
+                                 'new_report_id':version['id'],'new_result_id':result['record_id'],'new_sha256':version['sha256']}),created_at=now()))
+            if not version['is_active']:
+                c.execute(reports.update().where(reports.c.id==version['id']).values(is_active=True,superseded_at=None,superseded_by=None))
+        elif document is not None:
+            if existing:
+                old=dict(existing)
+                old_hash=hashlib.sha256(old['document'] or b'').hexdigest()
+                if not old['document'] or not old['sha256'] or not hmac.compare_digest(old_hash,str(old['sha256'])):
+                    raise ConfigurationBlocked('Existing preview integrity check failed; it cannot be safely superseded')
+                if not ('TEST-ONLY' in str(old['result_id'] or '').upper()
+                        or 'NO-ENGINE-RESULT' in str(old['result_id'] or '').upper()
+                        or _document_has_simulation_marker(old['document'] or b'')):
+                    raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
+                c.execute(reports.update().where(reports.c.id==old['id'],reports.c.is_active.is_(True)).values(
+                    is_active=False,superseded_at=now(),superseded_by=new_id))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job['id'],event='REPORT_VERSION_SUPERSEDED',
+                    detail=dump({'old_report_id':old['id'],'old_result_id':old['result_id'],'old_sha256':old['sha256'],
+                                 'new_report_id':new_id,'new_result_id':result['record_id'],'new_sha256':new_sha}),created_at=now()))
+            c.execute(reports.insert().values(id=new_id,job_id=job['id'],recipient=inv['recipient'],result_id=result['record_id'],
+                document=document,sha256=new_sha,created_at=now(),is_active=True))
+        transition(c,job['id'],stage='DELIVERY',status='COMPLETED',error=None,next_attempt_at=now())
 
 def report_delivery_enabled():
     return os.environ.get('OUTREACH_REPORT_DELIVERY_ENABLED','false').strip().lower()=='true'
 
 def delivery_step(db,job,mail_factory):
     with db.transaction() as c:
-        inv,_=context(c,job);report=dict(c.execute(select(reports).where(reports.c.job_id==job['id'])).mappings().one())
+        inv,_=context(c,job);report=dict(c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().one())
         template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
             email_templates.c.template_kind=='REPORT').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
         if report['recipient']!=inv['recipient']:raise ValueError('Report recipient does not match original invitation')

@@ -183,7 +183,8 @@ def create_app(database=None):
         with db.transaction() as c:
             query=select(*[x for x in jobs.c if x.name!='result'],invitations.c.company_name,invitations.c.recipient,
                 reports.c.id.label('report_id'),reports.c.sha256.label('report_sha256'),deliveries.c.status.label('delivery_status'),
-                deliveries.c.provider_message_id).join(invitations).outerjoin(reports).outerjoin(deliveries)
+                deliveries.c.provider_message_id).join(invitations).outerjoin(reports,
+                    (reports.c.job_id==jobs.c.id)&reports.c.is_active.is_(True)).outerjoin(deliveries,deliveries.c.report_id==reports.c.id)
             rows=[dict(r) for r in c.execute(query.order_by(jobs.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]
             for row in rows:
                 latest=c.execute(select(report_reviews.c.decision,report_reviews.c.reviewer_email,report_reviews.c.reviewed_at)
@@ -201,13 +202,14 @@ def create_app(database=None):
     @app.get('/api/reports/{ident}/review')
     def report_review(ident:str):
         with db.transaction() as c:
-            report=c.execute(select(reports.c.id,reports.c.sha256).where(reports.c.id==ident)).mappings().first()
+            report=c.execute(select(reports.c.id,reports.c.sha256,reports.c.is_active).where(reports.c.id==ident)).mappings().first()
             if not report:raise LookupError('Report not found')
             rows=c.execute(select(report_reviews).where(report_reviews.c.report_id==ident,
                 report_reviews.c.document_sha256==report['sha256']).order_by(report_reviews.c.reviewed_at.desc())).mappings().all()
             latest=dict(rows[0]) if rows else None
             return {'report_id':ident,'document_sha256':report['sha256'],
-                'status':latest['decision'] if latest else 'PENDING_REVIEW','review':latest}
+                'status':latest['decision'] if latest else ('PENDING_REVIEW' if report['is_active'] else 'ARCHIVED'),
+                'archived':not report['is_active'],'review':latest}
 
     @app.post('/api/reports/{ident}/review')
     async def review_report(ident:str,request:Request):
@@ -217,6 +219,7 @@ def create_app(database=None):
         with db.transaction(serialized=True) as c:
             report=c.execute(select(reports).where(reports.c.id==ident)).mappings().first()
             if not report:raise LookupError('Report not found')
+            if not report['is_active']:raise PermissionError('Superseded report versions are read-only')
             actual=hashlib.sha256(report['document'] or b'').hexdigest()
             if not expected or not hmac.compare_digest(expected,actual) or not hmac.compare_digest(str(report['sha256'] or ''),actual):
                 raise ValueError('The reviewed DOCX version changed; reload the report before reviewing')

@@ -216,7 +216,7 @@ class Database:
                             if constraint.get('column_names') == ['job_id']:
                                 quote = self.engine.dialect.identifier_preparer.quote
                                 c.execute(text(f'ALTER TABLE {SCHEMA}.reports DROP CONSTRAINT {quote(constraint["name"])}'))
-                        c.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {SCHEMA}.uq_reports_active_job '
+                        c.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_active_job '
                                        f'ON {SCHEMA}.reports (job_id) WHERE is_active IS TRUE'))
                     else:
                         unique = inspect(c).get_unique_constraints('reports')

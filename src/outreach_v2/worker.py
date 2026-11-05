@@ -17,11 +17,18 @@ def transition(c,job_id,**values):
 
 def claim(db):
     recovery_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
+    research_only=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').strip().lower()=='true'
+    # A live single-job research switch must constrain selection itself. A
+    # downstream research_step guard is too late: claiming another queued job
+    # mutates its lease/attempt count even when that guard blocks Engine access.
+    if research_only and not recovery_job_id:return None
     with db.transaction(serialized=True) as c:
         recoverable=and_(jobs.c.idempotency_key==recovery_job_id,jobs.c.status=='BLOCKED_CONFIGURATION',jobs.c.stage=='DONE')
-        row=c.execute(select(jobs).where(or_(jobs.c.stage!='DONE',recoverable),jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
+        eligible=[or_(jobs.c.stage!='DONE',recoverable),jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
                 or_(jobs.c.next_attempt_at.is_(None),jobs.c.next_attempt_at<=now()),
-                or_(jobs.c.lease_until.is_(None),jobs.c.lease_until<now())).order_by(jobs.c.created_at).limit(1)).mappings().first()
+                or_(jobs.c.lease_until.is_(None),jobs.c.lease_until<now())]
+        if research_only:eligible.append(jobs.c.idempotency_key==recovery_job_id)
+        row=c.execute(select(jobs).where(*eligible).order_by(jobs.c.created_at).limit(1)).mappings().first()
         if not row:return None
         token=uuid.uuid4().hex
         stage='RESEARCH' if row['idempotency_key']==recovery_job_id and row['status']=='BLOCKED_CONFIGURATION' and row['stage']=='DONE' else row['stage']

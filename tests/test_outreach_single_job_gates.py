@@ -74,6 +74,7 @@ def test_report_delivery_is_off_by_default_and_never_constructs_sender(monkeypat
 def test_claim_reopens_only_the_allowlisted_quarantined_job(tmp_path, monkeypatch):
     from outreach_v2.db import Database, batches, candidates, invitations, jobs, submissions
     monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ID", KEY)
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED", "true")
     db = Database(f"sqlite:///{tmp_path / 'claim.sqlite'}")
     db.initialize()
     with db.transaction() as conn:
@@ -87,8 +88,19 @@ def test_claim_reopens_only_the_allowlisted_quarantined_job(tmp_path, monkeypatc
         conn.execute(jobs.insert().values(id="job-85981437cfa04f779348de67",invitation_id="i-existing",
             submission_id="s-existing",status="BLOCKED_CONFIGURATION",stage="DONE",idempotency_key=KEY,
             attempts=2,created_at="2026-11-05T00:00:00+00:00"))
+        conn.execute(candidates.insert().values(id="c-other",kind="company",name="Unrelated queued company",
+            website="https://unrelated.example/",domain="unrelated.example",suppressed=False,fixture=False,
+            created_at="2026-10-27T00:00:00+00:00",updated_at="2026-10-27T00:00:00+00:00"))
+        conn.execute(invitations.insert().values(id="i-other",candidate_id="c-other",batch_id="b-existing",
+            reference="GEO-other",recipient="other@example.test",website="https://unrelated.example/",company_name="Unrelated"))
+        conn.execute(submissions.insert().values(id="s-other",invitation_id="i-other",reference="GEO-other"))
+        conn.execute(jobs.insert().values(id="job-other",invitation_id="i-other",submission_id="s-other",
+            status="RETRY_PENDING",stage="RESEARCH",idempotency_key="outreach-v2:inv-other",attempts=39,
+            next_attempt_at="2026-10-27T00:00:00+00:00",created_at="2026-10-27T00:00:00+00:00"))
     claimed = worker.claim(db)
     assert claimed["id"] == "job-85981437cfa04f779348de67"
     assert claimed["stage"] == "RESEARCH"
     with db.transaction() as conn:
         assert conn.scalar(select(jobs.c.stage).where(jobs.c.id==claimed["id"])) == "RESEARCH"
+        other=conn.execute(select(jobs).where(jobs.c.id=="job-other")).mappings().one()
+        assert other["attempts"] == 39 and other["lease_token"] is None

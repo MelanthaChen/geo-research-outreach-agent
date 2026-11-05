@@ -16,14 +16,17 @@ def transition(c,job_id,**values):
     c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job_id,event=values.get('status') or values.get('stage') or 'UPDATED',detail=dump({k:v for k,v in values.items() if k not in {'result','lease_token'}}),created_at=now()))
 
 def claim(db):
+    recovery_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
     with db.transaction(serialized=True) as c:
-        row=c.execute(select(jobs).where(jobs.c.stage!='DONE',jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
+        recoverable=and_(jobs.c.idempotency_key==recovery_job_id,jobs.c.status=='BLOCKED_CONFIGURATION',jobs.c.stage=='DONE')
+        row=c.execute(select(jobs).where(or_(jobs.c.stage!='DONE',recoverable),jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
                 or_(jobs.c.next_attempt_at.is_(None),jobs.c.next_attempt_at<=now()),
                 or_(jobs.c.lease_until.is_(None),jobs.c.lease_until<now())).order_by(jobs.c.created_at).limit(1)).mappings().first()
         if not row:return None
         token=uuid.uuid4().hex
-        c.execute(jobs.update().where(jobs.c.id==row['id']).values(lease_until=later(180),lease_token=token,attempts=row['attempts']+1))
-        return dict(row)|{'lease_token':token,'attempts':row['attempts']+1}
+        stage='RESEARCH' if row['idempotency_key']==recovery_job_id and row['status']=='BLOCKED_CONFIGURATION' and row['stage']=='DONE' else row['stage']
+        c.execute(jobs.update().where(jobs.c.id==row['id']).values(stage=stage,lease_until=later(180),lease_token=token,attempts=row['attempts']+1))
+        return dict(row)|{'stage':stage,'lease_token':token,'attempts':row['attempts']+1}
 
 def context(c,job):
     current=c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one()
@@ -47,6 +50,12 @@ def validate_result(result,inv,job):
 
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
+    allowed_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
+    exact_key='outreach-v2:inv-9880a65388184eafa7c1075f7bbadb83'
+    if job['idempotency_key']!=exact_key or job['idempotency_key']!=allowed_job_id:
+        raise ConfigurationBlocked('Research is restricted to the configured GeoAIResume test job')
+    if inv['website']!='https://geo-ai-resume.vercel.app/':
+        raise ConfigurationBlocked('Research is restricted to the exact authorized GeoAIResume website')
     research_enabled=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()=='true'
     engine=engine_factory()
     # Reconciliation is a read-only GET. Always allow it so an Engine result
@@ -94,6 +103,9 @@ def report_step(db,job,renderer=None):
     with db.transaction(serialized=True) as c:
         context(c,job);transition(c,job['id'],stage='DELIVERY',status='COMPLETED',error=None,next_attempt_at=now())
 
+def report_delivery_enabled():
+    return os.environ.get('OUTREACH_REPORT_DELIVERY_ENABLED','false').strip().lower()=='true'
+
 def delivery_step(db,job,mail_factory):
     with db.transaction() as c:
         inv,_=context(c,job);report=dict(c.execute(select(reports).where(reports.c.job_id==job['id'])).mappings().one())
@@ -113,6 +125,8 @@ def delivery_step(db,job,mail_factory):
         authorized=bool(admin and admin['status']=='ACTIVE' and admin['role'] in {'ADMIN','APPROVER'}) or reviewer==env_admin
         if not authorized:
             raise ConfigurationBlocked('DOCX approval is no longer attributable to an active administrator')
+        if not report_delivery_enabled():
+            raise ConfigurationBlocked('Automatic report delivery is disabled for this controlled research run')
     mail=mail_factory()  # Authorization is required before any provider action.
     if template and hasattr(mail,'configure_message'):
         from .template import render_template

@@ -637,6 +637,7 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
         website='https://fixture-company.pilot-example.org',name='Pilot Fixture',fixture=True)
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false');monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
+    for key in ('OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET'):monkeypatch.setenv(key,'test-configured')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
     headers={'X-CSRF-Token':login.json()['csrf']}
@@ -653,7 +654,10 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
         'body':'Hello {{company_name}}, the {{report_name}} is ready. Reply to {{reply_to}}.',
         'sender':'reports@example.org','sender_name':'Yuxuan Chen','reply_to':'reply@northeastern.edu',
         'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'})
-    assert saved.status_code==200 and saved.json()['sender_configured'] is True and saved.json()['active'] is False
+    assert saved.status_code==200 and saved.json()['sender_configured'] is True and saved.json()['active'] is True
+    report_rows=client.get('/api/admin/email-templates').json()
+    assert any(s['kind']=='REPORT' and s['email']=='reports@example.org' for s in report_rows['authorized_senders'])
+    assert report_rows['rows'][0]['body']=='Hello {{company_name}}, the {{report_name}} is ready. Reply to {{reply_to}}.'
     report_preview=client.post(f"/api/admin/email-templates/{saved.json()['id']}/preview",headers=headers,json={'company_name':'Sample Company'})
     assert report_preview.status_code==200 and report_preview.json()['status']=='REVIEW_PREVIEW_NOT_SENT'
     assert report_preview.json()['subject']=='Sample Company research report' and report_preview.json()['sent'] is False
@@ -694,6 +698,8 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     from outreach_v2.app import create_app
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    monkeypatch.setenv('OUTREACH_INVITATION_SENDER','researcher@northeastern.edu')
+    monkeypatch.setenv('OUTREACH_INVITATION_SENDER_NAME','Yuxuan Chen')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
     headers={'X-CSRF-Token':login.json()['csrf']}
@@ -707,18 +713,21 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
         'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'}
     missing=client.post('/api/admin/email-templates',headers=headers,json={**template,'body':'Hello {{company_name}}'})
     assert missing.status_code==422
+    arbitrary=client.post('/api/admin/email-templates',headers=headers,json={**template,'sender':'arbitrary@example.org'})
+    assert arbitrary.status_code==422
     first=client.post('/api/admin/email-templates',headers=headers,json=template)
     second=client.post('/api/admin/email-templates',headers=headers,json=template)
     assert first.status_code==second.status_code==200
-    assert first.json()['active'] is False and second.json()['active'] is False
+    assert first.json()['active'] is True and second.json()['active'] is True
     preview=client.post(f"/api/admin/email-templates/{second.json()['id']}/preview",headers=headers,json={'company_name':'Preview Company'})
     assert preview.status_code==200 and preview.json()['status']=='REVIEW_PREVIEW_NOT_SENT'
     assert preview.json()['reference']=='PREVIEW-NOT-SENDABLE' and preview.json()['sent'] is False
-    activated=client.post(f"/api/admin/email-templates/{second.json()['id']}/activate",headers=headers,json={})
-    assert activated.status_code==200 and activated.json()['active'] is True
-    versions=client.get('/api/admin/email-templates').json()['rows']
+    versions_response=client.get('/api/admin/email-templates').json()
+    assert any(s['kind']=='INVITATION' and s['email']=='researcher@northeastern.edu' for s in versions_response['authorized_senders'])
+    versions=versions_response['rows']
     invitation_versions=[row for row in versions if row['template_kind']=='INVITATION']
     assert len(invitation_versions)==2 and invitation_versions[0]['active'] is True and invitation_versions[1]['active'] is False
+    assert invitation_versions[0]['body']==template['body']
     assert all(row['sender']=='researcher@northeastern.edu' and row['reply_to']=='reply@northeastern.edu' for row in invitation_versions)
     candidate(db,ident='templated',email='contact@templated.example',website='https://templated.example',
         name='Templated Company',fixture=False)
@@ -751,8 +760,10 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     assert reviewer.get('/api/admin/users').status_code==403
     assert count(db,submissions)==count(db,jobs)==count(db,deliveries)==0
     third=client.post('/api/admin/email-templates',headers=headers,json={**template,'subject':'Updated {{company_name}} invitation'})
-    assert third.status_code==200 and third.json()['active'] is False
-    assert client.post(f"/api/admin/email-templates/{third.json()['id']}/activate",headers=headers,json={}).status_code==200
+    assert third.status_code==200 and third.json()['active'] is True
+    refreshed=client.get('/api/admin/email-templates').json()['rows']
+    assert next(row for row in refreshed if row['id']==third.json()['id'])['subject']=='Updated {{company_name}} invitation'
+    assert next(row for row in refreshed if row['id']==third.json()['id'])['active'] is True
     with db.transaction() as c:
         still_original=c.execute(select(invitations).where(invitations.c.candidate_id=='templated')).mappings().one()
     assert still_original['template_version']==saved['template_version'] and still_original['subject']==saved['subject']

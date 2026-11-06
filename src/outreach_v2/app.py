@@ -289,12 +289,31 @@ def create_app(database=None):
     @app.get('/api/admin/email-templates')
     def list_email_templates(request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
-        with db.transaction() as c:return {'rows':[dict(r) for r in c.execute(select(email_templates).order_by(email_templates.c.version.desc())).mappings()]}
+        invitation_sender=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
+        report_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
+        graph_ready=all(os.environ.get(k) for k in ('OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET'))
+        senders=[]
+        if invitation_sender:
+            senders.append({'kind':'INVITATION','email':invitation_sender,'display_name':os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip(),
+                'authorization':'Configured Outlook mail-merge sender'})
+        if report_sender and graph_ready:
+            senders.append({'kind':'REPORT','email':report_sender,'display_name':'','authorization':'Configured Microsoft Graph report sender'})
+        with db.transaction() as c:
+            rows=[dict(r) for r in c.execute(select(email_templates).order_by(email_templates.c.version.desc())).mappings()]
+        return {'rows':rows,'authorized_senders':senders,
+            'defaults':{'INVITATION':{'subject':__import__('outreach_v2.template',fromlist=['DEFAULT_INVITATION_SUBJECT']).DEFAULT_INVITATION_SUBJECT,
+                'body':__import__('outreach_v2.template',fromlist=['DEFAULT_INVITATION_BODY']).DEFAULT_INVITATION_BODY,
+                'sender':invitation_sender,'sender_name':os.environ.get('OUTREACH_INVITATION_SENDER_NAME',''),
+                'reply_to':os.environ.get('OUTREACH_REPLY_TO',''),'researcher_name':os.environ.get('OUTREACH_RESEARCHER_NAME',''),
+                'university_affiliation':os.environ.get('OUTREACH_UNIVERSITY_AFFILIATION','')},
+                'REPORT':{'subject':'Your GEO website research report','body':'Thank you for participating in the GEO research study. Your evidence-based website optimization report is attached.',
+                'sender':report_sender if graph_ready else '', 'sender_name':'','reply_to':'','researcher_name':os.environ.get('OUTREACH_RESEARCHER_NAME',''),
+                'university_affiliation':os.environ.get('OUTREACH_UNIVERSITY_AFFILIATION','')}},'report_delivery_configured':bool(report_sender and graph_ready)}
 
     @app.post('/api/admin/email-templates')
     async def save_email_template(request:Request):
         auth.require_role(request.state.session,'ADMIN')
-        body=await request.json();subject=str(body.get('subject') or '').strip();content=str(body.get('body') or '').strip()
+        body=await request.json();subject=str(body.get('subject') or '');content=str(body.get('body') or '')
         sender=str(body.get('sender') or '').strip()
         kind=str(body.get('kind') or 'REPORT').strip().upper()
         if kind not in {'REPORT','INVITATION'}:raise ValueError('Template kind must be REPORT or INVITATION')
@@ -307,7 +326,7 @@ def create_app(database=None):
             validate_invitation_template(subject,content,sender=sender,sender_name=sender_name,reply_to=reply_to,
                 researcher_name=researcher_name,university_affiliation=affiliation)
             configured_sender=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
-            if configured_sender and sender.lower()!=configured_sender.lower():
+            if not configured_sender or sender.lower()!=configured_sender.lower():
                 raise ValueError('Invitation sender must match the configured researcher mailbox')
             configured_sender_name=os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip()
             if configured_sender_name and sender_name.casefold()!=configured_sender_name.casefold():
@@ -316,19 +335,20 @@ def create_app(database=None):
             from .template import validate_report_template
             validate_report_template(subject,content,sender=sender,reply_to=reply_to,sender_name=sender_name)
             configured_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
-            if sender and configured_sender and sender.lower()!=configured_sender.lower():
+            if not configured_sender or not all(os.environ.get(k) for k in ('OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET')) or sender.lower()!=configured_sender.lower():
                 raise ValueError('Template sender must match the authorized report mailbox')
             if sender_name and len(sender_name)>120:raise ValueError('Report sender display name is too long')
         with db.transaction(serialized=True) as c:
             version=(c.scalar(select(func.max(email_templates.c.version)).where(email_templates.c.template_kind==kind)) or 0)+1
             ident='email-template-'+uuid.uuid4().hex
+            c.execute(email_templates.update().where(email_templates.c.template_kind==kind).values(active=False))
             c.execute(email_templates.insert().values(id=ident,version=version,subject=subject,body=content,sender=sender or None,sender_name=sender_name or None,
-                active=False,created_by=request.state.session['email'],created_at=now(),template_kind=kind,
+                active=True,created_by=request.state.session['email'],created_at=now(),template_kind=kind,
                 reply_to=reply_to or None,researcher_name=researcher_name or None,university_affiliation=affiliation or None))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_DRAFT_CREATED',
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_VERSION_ACTIVATED',
                 detail=json.dumps({'kind':kind,'version':version,'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
-        return {'id':ident,'version':version,'kind':kind,'active':False,
-            'sender_configured':bool(configured_sender and (not sender or sender.lower()==configured_sender.lower()))}
+        return {'id':ident,'version':version,'kind':kind,'active':True,
+            'sender_configured':bool(configured_sender and sender.lower()==configured_sender.lower())}
 
     @app.post('/api/admin/email-templates/{ident}/activate')
     async def activate_email_template(ident:str,request:Request):

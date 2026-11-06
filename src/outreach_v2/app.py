@@ -661,11 +661,8 @@ def create_app(database=None):
                 attempts=c.execute(select(personalization_attempts.c.status).where(personalization_attempts.c.candidate_id==ids[0])).scalars().all()
                 if any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts):
                     raise ValueError('Candidate has unresolved provider spend or an open reservation')
-                manifest_member=c.execute(select(pilot_members.c.candidate_id).join(pilot_cohorts,
-                    pilot_cohorts.c.id==pilot_members.c.cohort_id).where(pilot_members.c.candidate_id==ids[0],
-                    pilot_cohorts.c.target_size==100)).first()
-                if not manifest_member or ids[0] not in _existing_100_manifest_ids(c):
-                    raise ValueError('Candidate is not a member of a saved 100-candidate cohort manifest')
+                if ids[0] not in _existing_100_manifest_ids(c):
+                    raise ValueError('Candidate is not a member of an intact saved 100-candidate authorization manifest')
         ident='personalization-auth-'+uuid.uuid4().hex
         encoded=json.dumps(ids,separators=(',',':'))
         digest=hashlib.sha256(encoded.encode()).hexdigest()
@@ -683,9 +680,7 @@ def create_app(database=None):
         auth.require_role(request.state.session,'ADMIN')
         with db.transaction() as c:
             rows=c.execute(select(candidate_table.c.id,candidate_table.c.name,candidate_table.c.website,
-                candidate_table.c.kind).join(pilot_members,pilot_members.c.candidate_id==candidate_table.c.id)
-                .join(pilot_cohorts,pilot_cohorts.c.id==pilot_members.c.cohort_id)
-                .where(pilot_cohorts.c.target_size==100,candidate_table.c.fixture.is_(False),
+                candidate_table.c.kind).where(candidate_table.c.fixture.is_(False),
                     candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
                     candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidate_table.c.kind.in_(['company','hotel']),
                     candidate_table.c.personalization_status!='READY',candidate_table.c.personalization_analysis_version.is_(None),
@@ -762,8 +757,6 @@ def create_app(database=None):
                 ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists(),
                 (candidate_table.c.id.in_(ids) if single_pilot else True),
                 candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
-                (select(pilot_members.c.candidate_id).join(pilot_cohorts,pilot_cohorts.c.id==pilot_members.c.cohort_id)
-                    .where(pilot_members.c.candidate_id==candidate_table.c.id,pilot_cohorts.c.target_size==100).exists()),
                 (~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
                     personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists())
                 ).order_by(candidate_table.c.id).limit(1 if single_pilot else 5)).scalars().all()
@@ -781,7 +774,12 @@ def create_app(database=None):
                 candidate_table.c.id.in_(ids),candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
                 candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
                 candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidate_table.c.personalization_status!='READY',
+                candidate_table.c.personalization_analysis_version.is_(None),
                 (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
+                (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
+                candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
+                ~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
+                    personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists(),
                 ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()))
         return result
     @app.post('/api/internal/worker-tick')

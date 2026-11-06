@@ -1285,12 +1285,11 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     from argon2 import PasswordHasher
     from fastapi.testclient import TestClient
     from outreach_v2.app import create_app
-    from outreach_v2.db import pilot_cohorts,personalization_authorizations,personalization_attempts
+    from outreach_v2.db import personalization_authorizations,personalization_attempts
     candidate(db,ident='manifest-pilot',name='Eligible Pilot',fixture=False,personalization=False)
     with db.transaction() as c:
-        c.execute(pilot_cohorts.insert().values(id='saved-100',name='Saved exact manifest',target_size=100,
-            created_by='owner@example.org',created_at=now()))
-        c.execute(pilot_members.insert().values(cohort_id='saved-100',candidate_id='manifest-pilot',position=1,eligibility_snapshot='{}'))
+        # The persisted 100-ID authorization is the exact saved manifest; it
+        # need not also have pilot_cohorts/pilot_members rows.
         manifest=['manifest-pilot']+[f'manifest-member-{i:03}' for i in range(99)]
         manifest_encoded=dump(manifest)
         manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
@@ -1346,14 +1345,15 @@ def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
     from argon2 import PasswordHasher
     from fastapi.testclient import TestClient
     from outreach_v2.app import create_app
-    from outreach_v2.db import pilot_cohorts,personalization_attempts,personalization_runs,personalization_authorizations
+    from outreach_v2.db import personalization_attempts,personalization_runs,personalization_authorizations
     candidate(db,ident='unknown-spend-pilot',name='Unknown Spend Candidate',fixture=False,personalization=False)
     candidate(db,ident='osm:0049f46cc4ea2f170b9628b0',name='Semolina Kitchen + Bar',fixture=False,personalization=False)
     with db.transaction() as c:
-        c.execute(pilot_cohorts.insert().values(id='saved-100',name='Saved exact manifest',target_size=100,
+        manifest=['unknown-spend-pilot','osm:0049f46cc4ea2f170b9628b0']+[f'manifest-member-{i:03}' for i in range(98)]
+        manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
+        c.execute(personalization_authorizations.insert().values(id='pending-five',candidate_ids=dump(manifest),
+            candidate_ids_sha256=manifest_hash,total_budget_usd='5.00',status='PENDING',
             created_by='owner@example.org',created_at=now()))
-        for i,ident in enumerate(['unknown-spend-pilot','osm:0049f46cc4ea2f170b9628b0']):
-            c.execute(pilot_members.insert().values(cohort_id='saved-100',candidate_id=ident,position=i+1,eligibility_snapshot='{}'))
         c.execute(personalization_runs.insert().values(id='prior-run',started_at=now(),status='ATTENTION_REQUIRED',candidate_limit=1,
             run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',actual_cost_usd='0',detail='{}'))
         c.execute(personalization_attempts.insert().values(id='unknown-attempt',candidate_id='unknown-spend-pilot',run_id='prior-run',
@@ -1370,4 +1370,7 @@ def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
         response=client.post('/api/admin/personalization/authorizations',headers=headers,json={
             'candidate_ids':[ident],'total_budget_usd':'0.05'})
         assert response.status_code==422
-    assert count(db,personalization_authorizations)==0 and count(db,personalization_attempts)==1
+    assert count(db,personalization_authorizations)==1 and count(db,personalization_attempts)==1
+    with db.transaction() as c:
+        saved=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id=='pending-five')).mappings().one()
+    assert saved['status']=='PENDING' and saved['total_budget_usd']=='5.00'

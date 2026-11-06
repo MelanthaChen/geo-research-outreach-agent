@@ -382,16 +382,20 @@ class OpenAIResponsesBackend:
             raise OpenAIRequestError(status_code, "INVALID_RESPONSE_JSON",
                                      "Provider response body was not valid JSON",
                                      raw_response={"status_code": status_code, "body_text": body},
-                                     failure_stage="provider_response_json") from exc
+                                     failure_stage="provider_response_json",
+                                     request_id=getattr(response, "headers", {}).get("x-request-id")) from exc
         if status_code < 200 or status_code >= 300:
             err = raw.get("error", {}) if isinstance(raw, dict) else {}
             # Do not save response headers or authorization state.
             raise OpenAIRequestError(status_code, str(err.get("code") or "API_ERROR"),
                                      str(err.get("message") or "OpenAI request failed"), raw_response=raw,
-                                     failure_stage="provider_http")
+                                     failure_stage="provider_http",
+                                     request_id=(raw.get("id") or raw.get("request_id") or
+                                                 getattr(response, "headers", {}).get("x-request-id")))
         if not isinstance(raw, dict):
             raise OpenAIRequestError(status_code, "INVALID_RESPONSE", "Response JSON was not an object", raw_response=raw,
-                                     failure_stage="provider_response_json")
+                                     failure_stage="provider_response_json",
+                                     request_id=getattr(response, "headers", {}).get("x-request-id"))
         usage = raw.get("usage") or {}
         in_tokens = usage.get("input_tokens")
         out_tokens = usage.get("output_tokens")
@@ -480,7 +484,9 @@ class OpenAIRequestError(RuntimeError):
         self.failure_stage = failure_stage
         self.failure_path = failure_path
         self.usage = dict(usage or {})
-        self.request_id = request_id
+        raw_request_id = (raw_response.get("id") or raw_response.get("request_id")
+                          if isinstance(raw_response, dict) else None)
+        self.request_id = request_id or raw_request_id
         self.actual_cost_usd = actual_cost_usd
         super().__init__(f"OpenAI request failed ({status_code}, {code}): {self.message}")
 

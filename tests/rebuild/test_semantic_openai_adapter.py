@@ -343,6 +343,7 @@ def _run_fake_response(raw, *, status=200):
     selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
     class FakeResponse:
         status_code = status
+        headers = {"x-request-id": "resp_header_diag"}
         text = json.dumps(raw) if isinstance(raw, (dict, list)) else str(raw)
         def json(self):
             if not isinstance(raw, (dict, list)):
@@ -395,6 +396,7 @@ def test_malformed_provider_json_body_is_distinguished_and_bounded_for_diagnosti
     assert calls == 1
     assert error.code == "INVALID_RESPONSE_JSON"
     assert error.failure_stage == "provider_response_json"
+    assert error.request_id == "resp_header_diag"
     assert error.diagnostic_artifact()["provider_response"]["body_text"] == "not-json"
 
 

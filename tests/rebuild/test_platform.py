@@ -1019,8 +1019,9 @@ def test_engine_reconciliation_reports_sanitized_http_auth_stage():
     class Response:
         status_code=401
     class Client:
-        def get(self,path):
+        def get(self,path,**kwargs):
             assert path.startswith('/api/v1/integration/outreach-jobs/')
+            assert kwargs['timeout'].read == 120.0
             return Response()
     engine=Engine.__new__(Engine);engine.client=Client()
     with pytest.raises(ConfigurationBlocked,match=r'job reconciliation GET authorization denied: HTTP 401'):

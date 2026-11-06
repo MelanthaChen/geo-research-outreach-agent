@@ -4,7 +4,7 @@ import pytest
 from outreach_v2.integrations import Engine, OutcomeUncertain
 
 
-def test_only_engine_advance_overrides_the_default_http_timeout(monkeypatch):
+def test_advance_and_reconcile_use_only_their_bounded_timeouts(monkeypatch):
     requests = []
 
     def respond(request):
@@ -33,16 +33,22 @@ def test_only_engine_advance_overrides_the_default_http_timeout(monkeypatch):
     engine.start("key", {"profile_id": "p"})
 
     advance = next(r for r in requests if r.url.path.endswith("/outreach-advance/key"))
-    other_requests = [r for r in requests if r is not advance]
+    reconcile_requests = [r for r in requests if r.method == "GET"]
+    start_post = next(r for r in requests if r.method == "POST" and r.url.path.endswith("/outreach-jobs"))
     assert advance.extensions["timeout"] == {
         "connect": 10.0,
         "read": 600.0,
         "write": 600.0,
         "pool": 600.0,
     }
-    assert other_requests
-    assert all(r.extensions["timeout"]["read"] == 40.0 for r in other_requests)
-    assert all(r.extensions["timeout"]["connect"] == 40.0 for r in other_requests)
+    assert reconcile_requests
+    assert all(r.extensions["timeout"] == {
+        "connect": 10.0,
+        "read": 120.0,
+        "write": 120.0,
+        "pool": 120.0,
+    } for r in reconcile_requests)
+    assert start_post.extensions["timeout"]["read"] == 40.0
     engine.client.close()
 
 

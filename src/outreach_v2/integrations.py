@@ -186,10 +186,19 @@ class Engine:
         if not url.startswith('https://') or not token:raise ConfigurationBlocked('GEO Engine HTTPS URL and service token are required')
         self.client=httpx.Client(base_url=url,headers={'Authorization':'Bearer '+token},timeout=40)
     def reconcile(self,key):
-        r=self.client.get('/api/v1/integration/outreach-jobs/'+quote(key,safe=''))
+        # Render may need to cold-start the read-only Engine service. Keep this
+        # bounded read above the observed cold-start delay while below the
+        # Outreach worker lease, and leave the client's defaults unchanged.
+        timeout=httpx.Timeout(120.0,connect=10.0)
+        try:
+            r=self.client.get('/api/v1/integration/outreach-jobs/'+quote(key,safe=''),timeout=timeout)
+        except httpx.TransportError as e:
+            raise OutcomeUncertain('Engine reconciliation GET outcome uncertain; no research action initiated') from e
         if r.status_code==404:
             # Separate capability check prevents interpreting an absent route as an absent job.
-            caps=self.client.get('/api/v1/integration/outreach-capabilities')
+            try:caps=self.client.get('/api/v1/integration/outreach-capabilities',timeout=timeout)
+            except httpx.TransportError as e:
+                raise OutcomeUncertain('Engine capability reconciliation GET outcome uncertain; no research action initiated') from e
             if caps.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine capabilities GET authorization denied: HTTP {caps.status_code}')
             if caps.status_code!=200:raise ConfigurationBlocked(f'GEO Engine capabilities GET failed: HTTP {caps.status_code}')
             if not caps.json().get('durable_jobs'):raise ConfigurationBlocked('Deployed GEO Engine does not provide durable outreach jobs')

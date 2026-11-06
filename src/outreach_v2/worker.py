@@ -109,25 +109,44 @@ def _genuine_job_result(job, inv):
         raise ConfigurationBlocked('Research result identity or provenance is not genuine')
     return result
 
+def _verified_research_submission(inv, submission):
+    """Require the real verified Forms identity or a separately audited binding."""
+    if (submission.get('status') != 'AUTHORIZED'
+        or submission.get('identity_provider') != 'GOOGLE_FORMS_VERIFIED'
+        or not str(submission.get('identity_reference') or '').strip()
+        or not str(submission.get('identity_verified_email') or '').strip()):
+        return False
+    verified_email=str(submission['identity_verified_email']).strip().lower()
+    recipient=str(inv.get('recipient') or '').strip().lower()
+    representative=str(submission.get('representative_email') or '').strip().lower()
+    if verified_email and verified_email == recipient == representative:
+        return True
+    authority=parse(inv.get('authority'))
+    binding=authority.get('owner_identity_binding') or {}
+    return bool(
+        binding.get('id')
+        and binding.get('authorization') == 'EXPLICIT_OWNER_CONTROLLED_STAGING_BINDING'
+        and binding.get('identity_source') == 'GOOGLE_FORMS_VERIFIED_RESPONDENT_EMAIL'
+        and binding.get('candidate_id') == inv.get('candidate_id')
+        and binding.get('invitation_id') == inv.get('id')
+        and binding.get('invitation_reference') == inv.get('reference')
+        and str(binding.get('website') or '').rstrip('/') == str(inv.get('website') or '').rstrip('/')
+        and str(binding.get('invitation_recipient') or '').strip().lower() == recipient
+        and str(binding.get('verified_respondent_email') or '').strip().lower() == verified_email
+        and bool(binding.get('recorded_at'))
+    )
+
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
     allowed_job_ids={x.strip() for x in os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST','').split(',') if x.strip()}
     if len(allowed_job_ids)!=1 or job['idempotency_key'] not in allowed_job_ids:
         raise ConfigurationBlocked('Research is restricted to the exact configured job allowlist')
-    if inv['website'].rstrip('/')!='https://geo-ai-resume.vercel.app':
-        raise ConfigurationBlocked('Research is restricted to the exact authorized GeoAIResume website')
     research_enabled=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()=='true'
-    submission=None;binding=None
-    if candidate['id']=='geo-e2e-rerun-20261105-neu-owner':
-        with db.transaction() as c:
-            submission=c.execute(select(submissions).where(submissions.c.id==job['submission_id'])).mappings().one()
-        binding=parse(inv.get('authority')).get('owner_identity_binding') or {}
-        if (submission['status']!='AUTHORIZED' or submission.get('identity_provider')!='GOOGLE_FORMS_VERIFIED'
-            or not submission.get('identity_reference') or not submission.get('identity_verified_email')
-            or binding.get('id') is None or binding.get('verified_respondent_email','').lower()!=submission['identity_verified_email'].lower()
-            or binding.get('invitation_recipient','').lower()!=inv['recipient'].lower()
-            or binding.get('website')!=inv['website']):
-            raise PermissionError('Fresh GeoAIResume research requires the exact audited binding and verified Google response')
+    with db.transaction() as c:
+        submission=dict(c.execute(select(submissions).where(submissions.c.id==job['submission_id'])).mappings().one())
+    if not _verified_research_submission(inv,submission):
+        raise PermissionError('Research requires independently verified Google Forms identity, authorized consent, and a matching invitation or audited identity binding')
+    binding=parse(inv.get('authority')).get('owner_identity_binding') or {}
     engine=engine_factory()
     # Reconciliation is a read-only GET. Always allow it so an Engine result
     # completed under its own authorization can advance to report generation.
@@ -135,13 +154,14 @@ def research_step(db,job,engine_factory):
     if result is None:
         if not research_enabled:
             raise ConfigurationBlocked('GEO research execution is disabled; no existing Engine job is available to reconcile')
-        payload={'profile_id':inv['candidate_id'],'profile_version':inv['id'],
+        payload={'profile_id':inv['candidate_id'],'profile_version':inv['id'],'invitation_id':inv['id'],
+            'invitation_recipient':inv['recipient'],
             'profile_type':'owner_controlled_test' if candidate['fixture'] else ('hotel_property' if candidate['kind']=='hotel' else 'business_company'),
             'identity':{'name':inv['company_name'],'website':inv['website'],'industry':candidate['industry'],'location':candidate['location']},
-            'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES',
+            'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES','representative_email':submission.get('representative_email'),
                 'verified_identity':({'provider':submission.get('identity_provider'),'email':submission.get('identity_verified_email'),'response_id':submission.get('identity_reference')} if submission else None),
                 'owner_identity_binding':binding},
-            'controlled_fixture':False}
+            }
         result=engine.start(job['idempotency_key'],payload)
     if research_enabled and result.get('status') in {'QUEUED','RUNNING','RETRY_PENDING','BLOCKED_CONFIGURATION'}:
         result=engine.advance(job['idempotency_key'])

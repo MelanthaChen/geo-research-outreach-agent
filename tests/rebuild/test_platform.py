@@ -1425,3 +1425,119 @@ def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
     with db.transaction() as c:
         saved=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id=='pending-five')).mappings().one()
     assert saved['status']=='PENDING' and saved['total_budget_usd']=='5.00'
+
+
+def test_gpt_personalization_batch_preview_requires_one_explicit_saved_grant_approval(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import personalization_authorizations,events,personalization_attempts
+    import outreach_v2.personalization_batch as batch
+    candidate(db,ident='batch-eligible',name='Batch Eligible',fixture=False,personalization=False)
+    manifest=['batch-eligible']+[f'batch-member-{i:03}' for i in range(99)]
+    digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id='pending-batch',candidate_ids=dump(manifest),
+            candidate_ids_sha256=digest,total_budget_usd='5.00',status='PENDING',
+            created_by='owner@example.org',created_at=now()))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    monkeypatch.setattr(batch,'launch',lambda _db,_ident:False)
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    preview=client.get('/api/admin/personalization/batch',headers=headers)
+    assert preview.status_code==200
+    data=preview.json()
+    assert data['authorization_id']=='pending-batch' and data['authorization_status']=='PENDING'
+    assert data['candidate_count']==100 and data['eligible_count']==1
+    assert data['estimated_max_cost_usd']=='0.05' and data['total_budget_cap_usd']=='5.00'
+    with db.transaction() as c:
+        before=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='pending-batch')).mappings().one()
+    assert before['status']=='PENDING' and before['approved_at'] is None
+    stale=client.post('/api/admin/personalization/batch/start',headers=headers,json={
+        'authorization_id':'pending-batch','candidate_ids_sha256':digest,'eligible_count':2,'confirm_budget':True})
+    assert stale.status_code==422
+    with db.transaction() as c:
+        still_pending=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='pending-batch')).mappings().one()
+    assert still_pending['status']=='PENDING' and still_pending['approved_at'] is None
+    started=client.post('/api/admin/personalization/batch/start',headers=headers,json={
+        'authorization_id':'pending-batch','candidate_ids_sha256':digest,'eligible_count':1,'confirm_budget':True})
+    assert started.status_code==200 and started.json()['status']=='RUNNING'
+    with db.transaction() as c:
+        saved=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='pending-batch')).mappings().one()
+        audit=c.execute(select(events.c.event).where(events.c.entity_id=='pending-batch')).scalars().all()
+    assert saved['status']=='RUNNING' and saved['approved_by']=='chen.yuxuan9@northeastern.edu' and saved['approved_at']
+    assert 'PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED' in audit
+    assert 'PERSONALIZATION_BATCH_STARTED' in audit
+    assert count(db,personalization_attempts)==0
+    paused=client.post('/api/admin/personalization/batch/pending-batch/pause',headers=headers,json={})
+    assert paused.status_code==200 and paused.json()['status']=='PAUSED'
+    resumed=client.post('/api/admin/personalization/batch/pending-batch/resume',headers=headers,json={})
+    assert resumed.status_code==200 and resumed.json()['status']=='RUNNING'
+    assert count(db,personalization_attempts)==0
+
+
+def test_batch_runner_resumes_safe_transient_and_skips_unknown_spend(db,monkeypatch):
+    from datetime import datetime,timedelta,timezone
+    from outreach_v2.db import personalization_authorizations,personalization_runs,personalization_attempts
+    import outreach_v2.personalization as personalization
+    import outreach_v2.personalization_batch as batch
+    candidate(db,ident='transient-retry',name='Transient Retry',fixture=False,personalization=False)
+    candidate(db,ident='unknown-never',name='Unknown Never',fixture=False,personalization=False)
+    manifest=['transient-retry','unknown-never']+[f'batch-member-{i:03}' for i in range(98)]
+    digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id='running-batch',candidate_ids=dump(manifest),
+            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@example.org',
+            approved_by='admin@example.org',approved_at=now(),created_at=now()))
+        c.execute(personalization_runs.insert().values(id='batch-history',started_at=now(),status='ATTENTION_REQUIRED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',actual_cost_usd='0',detail='{}'))
+        c.execute(personalization_attempts.insert().values(id='unknown-never-attempt',candidate_id='unknown-never',
+            run_id='batch-history',evidence_fingerprint='unknown-fp',operation_id='initial',
+            model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',reserved_usd='0.05',actual_cost_usd='0',
+            usage='{}',created_at=now()))
+    calls=[]
+    def fake_backfill(_db,*,authorized_candidate_ids,**kwargs):
+        calls.append(list(authorized_candidate_ids))
+        assert authorized_candidate_ids==['transient-retry']
+        with db.transaction() as c:
+            if len(calls)==1:
+                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
+                    personalization_status='INCOMPLETE',personalization_outcome='TRANSIENT_HTTP',
+                    personalization_attempts=1,
+                    personalization_retry_after=(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()))
+            else:
+                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
+                    personalization_status='READY',personalization_analysis_version='semantic-openai-v1',
+                    personalization_quality_status='PASS',personalization_outcome='SEMANTIC_READY',
+                    personalization_retry_after=None))
+        return {'status':'COMPLETED','attempted':1,'completed':1 if len(calls)>1 else 0,
+            'incomplete':0 if len(calls)>1 else 1,'budget_stopped':False,'run_id':f'run-{len(calls)}',
+            'actual_cost_usd':'0.01','unresolved_reserved_usd':'0'}
+    monkeypatch.setattr(personalization,'backfill',fake_backfill)
+    retry_checks=[]
+    def retry_wait(_db,ids):
+        retry_checks.append(True)
+        if len(retry_checks)==1:
+            with db.transaction() as c:
+                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
+                    personalization_retry_after=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()))
+            return 0
+        return None
+    monkeypatch.setattr(batch,'_retry_wait',retry_wait)
+    monkeypatch.setattr(batch,'_sleep_while_running',lambda *_args:True)
+    batch._run(db,'running-batch')
+    assert len(calls)==2 and calls==[['transient-retry'],['transient-retry']]
+    with db.transaction() as c:
+        auth_row=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='running-batch')).mappings().one()
+        untouched=c.execute(select(candidates).where(candidates.c.id=='unknown-never')).mappings().one()
+        unknown=c.execute(select(personalization_attempts).where(
+            personalization_attempts.c.id=='unknown-never-attempt')).mappings().one()
+    assert auth_row['status']=='ATTENTION_REQUIRED'
+    assert untouched['personalization_status']=='INCOMPLETE'
+    assert unknown['status']=='UNKNOWN_SPEND' and unknown['reserved_usd']=='0.05'

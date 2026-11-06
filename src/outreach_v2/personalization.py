@@ -701,8 +701,10 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
         if not Decimal('0') < approved_cumulative <= Decimal('5.00'):
             return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
                 'reason':'Approved cumulative authorization must be positive and no more than $5.00.'}
+        # A persisted batch grant may raise only the cumulative ceiling to its
+        # approved value. Keep the configured run and per-candidate safeguards;
+        # the batch runner invokes at most five candidates per run.
         cumulative_budget=approved_cumulative
-        run_budget=min(run_budget,approved_cumulative)
     if approved_candidate is not None:
         # A one-candidate grant is an additional, exact-scope authorization.
         # Keep the configured lifetime ceiling in force for the whole ledger;

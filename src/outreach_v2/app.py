@@ -784,6 +784,140 @@ def create_app(database=None):
                     personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists(),
                 ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()))
         return result
+
+    @app.get('/api/admin/personalization/batch')
+    def personalization_batch_preview(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        from .personalization_batch import (MAX_PER_CANDIDATE_USD,MAX_TOTAL_BUDGET_USD,
+            eligibility,progress,_manifest)
+        with db.transaction() as c:
+            grants=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.total_budget_usd=='5.00',
+                personalization_authorizations.c.status.in_(['PENDING','APPROVED','RUNNING','PAUSED','COMPLETED','ATTENTION_REQUIRED'])
+            ).order_by(personalization_authorizations.c.created_at.desc())).mappings().all()
+            grant=next((row for row in grants if len(json.loads(row['candidate_ids']))==100),None)
+            if not grant:
+                raise LookupError('The existing exact 100-candidate $5.00 authorization was not found')
+            ids=_manifest(grant)
+            saved=_existing_100_manifest_ids(c)
+            if not set(ids).issubset(saved):
+                raise ValueError('The saved authorization does not match an intact 100-candidate manifest')
+            eligible_count=c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) or 0
+        current=progress(db,grant,ids)
+        estimated=min(MAX_PER_CANDIDATE_USD*eligible_count,MAX_TOTAL_BUDGET_USD)
+        current.update({'candidate_count':100,'eligible_count':int(eligible_count),
+            'estimated_max_cost_usd':str(estimated),'total_budget_cap_usd':'5.00',
+            'authorization_status':grant['status'],'created_at':grant['created_at'],
+            'approved_by':grant.get('approved_by'),'approved_at':grant.get('approved_at')})
+        return current
+
+    @app.get('/api/admin/personalization/batch/{ident}')
+    def personalization_batch_status(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        from .personalization_batch import MAX_PER_CANDIDATE_USD,progress,_manifest
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().first()
+            if not grant: raise LookupError('Personalization batch authorization not found')
+            ids=_manifest(grant)
+            if len(ids)!=100 or not set(ids).issubset(_existing_100_manifest_ids(c)):
+                raise ValueError('The saved authorization does not match an intact 100-candidate manifest')
+        current=progress(db,grant,ids)
+        with db.transaction() as c:
+            current['next_retry_at']=c.scalar(select(func.min(candidate_table.c.personalization_retry_after)).where(
+                candidate_table.c.id.in_(ids),candidate_table.c.personalization_outcome=='TRANSIENT_HTTP',
+                candidate_table.c.personalization_attempts<5,
+                candidate_table.c.personalization_retry_after.is_not(None)))
+        current['eligible_count']=current['eligible_remaining']
+        current['estimated_max_cost_usd']=str(min(MAX_PER_CANDIDATE_USD*current['eligible_remaining'],Decimal('5.00')))
+        return current
+
+    @app.post('/api/admin/personalization/batch/start')
+    async def start_personalization_batch(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        required={'authorization_id','candidate_ids_sha256','eligible_count','confirm_budget'}
+        if not isinstance(body,dict) or set(body)!=required or body.get('confirm_budget') is not True:
+            raise ValueError('Confirm the displayed manifest and $5.00 total budget to start the batch')
+        from .personalization_batch import (MAX_PER_CANDIDATE_USD,MAX_TOTAL_BUDGET_USD,
+            eligibility,_manifest,launch,progress)
+        ident=str(body['authorization_id'])
+        with db.transaction(serialized=True) as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident,
+                personalization_authorizations.c.status=='PENDING').with_for_update()).mappings().first()
+            if not grant: raise ValueError('Only the existing pending batch authorization can be started')
+            ids=_manifest(grant)
+            if (len(ids)!=100 or grant['total_budget_usd']!='5.00'
+                    or grant['candidate_ids_sha256']!=body['candidate_ids_sha256']
+                    or not set(ids).issubset(_existing_100_manifest_ids(c))):
+                raise ValueError('The displayed authorization is no longer the exact saved 100-candidate $5.00 batch')
+            eligible_count=c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) or 0
+            if eligible_count!=body['eligible_count'] or eligible_count<=0:
+                raise ValueError('Batch eligibility changed since preview; refresh before confirming')
+            estimated=MAX_PER_CANDIDATE_USD*eligible_count
+            if estimated>MAX_TOTAL_BUDGET_USD or estimated>Decimal(grant['total_budget_usd']):
+                raise ValueError('The estimated maximum exceeds the approved total budget cap')
+            stamp=now();email=request.state.session['email']
+            c.execute(personalization_authorizations.update().where(
+                personalization_authorizations.c.id==ident).values(status='RUNNING',approved_by=email,approved_at=stamp))
+            approval_detail=json.dumps({'candidate_ids_sha256':grant['candidate_ids_sha256'],
+                'total_budget_usd':grant['total_budget_usd'],'approved_by':email,
+                'eligible_count':int(eligible_count),'estimated_max_cost_usd':str(estimated)},sort_keys=True,separators=(',',':'))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                event='PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED',detail=approval_detail,created_at=stamp))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                event='PERSONALIZATION_BATCH_STARTED',detail=approval_detail,created_at=stamp))
+        launched=launch(db,ident)
+        with db.transaction() as c:
+            fresh=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().one()
+        result=progress(db,fresh,ids)
+        result.update({'authorization_status':'RUNNING','approved_by':email,'approved_at':stamp,
+            'estimated_max_cost_usd':str(estimated),'runner_started':launched})
+        return result
+
+    @app.post('/api/admin/personalization/batch/{ident}/pause')
+    async def pause_personalization_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if body not in ({},None): raise ValueError('Pause accepts no request fields')
+        from .personalization_batch import pause,progress,_manifest
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
+            if not grant: raise LookupError('Personalization batch authorization not found')
+            ids=_manifest(grant)
+        pause(db,ident)
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().one()
+        return progress(db,grant,ids)
+
+    @app.post('/api/admin/personalization/batch/{ident}/resume')
+    async def resume_personalization_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if body not in ({},None): raise ValueError('Resume accepts no request fields')
+        from .personalization_batch import progress,_manifest,launch
+        with db.transaction(serialized=True) as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
+            if not grant: raise LookupError('Personalization batch authorization not found')
+            ids=_manifest(grant)
+            if grant['status'] not in {'PAUSED','RUNNING'}:
+                raise ValueError('Only a paused or interrupted running batch can resume')
+            if grant['status']=='PAUSED':
+                c.execute(personalization_authorizations.update().where(
+                    personalization_authorizations.c.id==ident).values(status='RUNNING'))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BATCH_RESUMED',detail=json.dumps({'candidate_ids_sha256':grant['candidate_ids_sha256']}),created_at=now()))
+        launched=launch(db,ident)
+        with db.transaction() as c:
+            fresh=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().one()
+        result=progress(db,fresh,ids);result['runner_started']=launched
+        return result
     @app.post('/api/internal/worker-tick')
     async def scheduled_worker_tick(request:Request):
         expected=os.environ.get('OUTREACH_WORKER_TOKEN','')

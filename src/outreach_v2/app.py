@@ -765,7 +765,9 @@ def create_app(database=None):
         if not pending:return {'status':'COMPLETED','attempted':0,'completed':0,'remaining':0,'invitations_created':0}
         from .personalization import backfill
         result=await run_in_threadpool(backfill,db,limit=len(pending),concurrency=1,time_budget_seconds=300,
-            authorized_candidate_ids=pending,approved_cumulative_budget_usd=grant['total_budget_usd'])
+            authorized_candidate_ids=pending,
+            approved_candidate_budget_usd=grant['total_budget_usd'] if single_pilot else None,
+            approved_cumulative_budget_usd=None if single_pilot else grant['total_budget_usd'])
         result['invitations_created']=0
         with db.transaction() as c:
             ready=c.scalar(select(func.count()).select_from(candidate_table).where(candidate_table.c.id.in_(ids),candidate_table.c.personalization_status=='READY'))

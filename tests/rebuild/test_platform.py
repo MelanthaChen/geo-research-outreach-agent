@@ -977,6 +977,56 @@ def test_semantic_backfill_stops_before_call_when_run_budget_is_too_small(db, mo
     assert result['status']=='BUDGET_STOPPED' and result['budget_stopped'] is True
     assert backend.calls==0 and count(db,personalization_attempts)==0
 
+def test_approved_one_candidate_budget_is_scoped_without_spending_legacy_unknown_reserve(db, monkeypatch):
+    from outreach_v2.db import personalization_attempts,personalization_runs
+    from outreach_v2.personalization import backfill
+    from outreach_v2.semantic_openai import MODEL,build_preflight
+    from test_semantic_openai_adapter import profile,response
+    import outreach_v2.personalization as module
+
+    candidate(db,ident='approved-budget-pilot',email='hello@lagoonny.com',
+        website='https://www.lagoonny.com/',name='Lagoon New York',personalization=False,fixture=False)
+    candidate(db,ident='semolina-unknown',name='Semolina Kitchen + Bar',personalization=False,fixture=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='historical-unknown-run',started_at=now(),
+            status='ATTENTION_REQUIRED',candidate_limit=1,run_budget_usd='0.25',
+            cumulative_budget_usd='0.25',reserved_usd='0.02985',actual_cost_usd='0'))
+        c.execute(personalization_attempts.insert().values(id='historical-unknown-attempt',
+            candidate_id='semolina-unknown',run_id='historical-unknown-run',evidence_fingerprint='old-fingerprint',
+            operation_id='initial',model=MODEL,status='UNKNOWN_SPEND',reserved_usd='0.02985',
+            actual_cost_usd='0',usage='{}',created_at=now()))
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MODEL',MODEL)
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
+    class Backend:
+        calls=0
+        def analyze_once(self,*args,**kwargs):
+            self.calls+=1
+            return {'structured_output':response(),'provider':'OPENAI','model':MODEL,
+                'request_id':'offline-regression-response','usage':{'input_tokens':1000,'output_tokens':100},
+                'estimated_cost_usd':0.0012,'preflight':{},'rejected_claims':[]}
+    backend=Backend()
+    preflight,_=build_preflight(profile(),token_count=lambda _:1000)
+    assert preflight.worst_case_cost_usd < 0.05
+    assert 0.02985+preflight.worst_case_cost_usd > 0.05
+    assert 0.02985+preflight.worst_case_cost_usd < 0.25
+
+    result=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['approved-budget-pilot'],
+        approved_candidate_budget_usd='0.05',backend_factory=lambda:backend,token_count=lambda _:1000)
+    assert backend.calls==1
+    assert result['status']!='BUDGET_STOPPED' and result['attempted']==1
+    with db.transaction() as c:
+        pilot=c.execute(select(personalization_attempts).where(
+            personalization_attempts.c.candidate_id=='approved-budget-pilot')).mappings().one()
+        historical=c.execute(select(personalization_attempts).where(
+            personalization_attempts.c.id=='historical-unknown-attempt')).mappings().one()
+    assert pilot['status']=='COMPLETED' and pilot['request_id']=='offline-regression-response'
+    assert historical['status']=='UNKNOWN_SPEND' and historical['reserved_usd']=='0.02985'
+
 def test_personalization_expands_to_three_grounded_same_site_pages():
     from outreach_v2.personalization import _evidence_urls
     html='''<a href="/about">About</a><a href="/services">Services</a>
@@ -1329,7 +1379,8 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     assert approved.status_code==200 and approved.json()['status']=='APPROVED'
     def fake_backfill(_db,**kwargs):
         assert kwargs['limit']==1 and kwargs['authorized_candidate_ids']==['manifest-pilot']
-        assert kwargs['approved_cumulative_budget_usd']=='0.05'
+        assert kwargs['approved_candidate_budget_usd']=='0.05'
+        assert kwargs['approved_cumulative_budget_usd'] is None
         return {'status':'COMPLETED','attempted':1,'completed':1,'actual_cost_usd':'0.02'}
     import outreach_v2.personalization as personalization
     monkeypatch.setattr(personalization,'backfill',fake_backfill)

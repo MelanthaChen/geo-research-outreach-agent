@@ -649,7 +649,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     from decimal import Decimal
     from .semantic_openai import (MODEL, MAX_ESTIMATED_USD, OpenAIResponsesBackend,
         build_preflight, select_evidence, build_automated_personalization,
-        OpenAIRequestError, PreflightError)
+        OpenAIRequestError, PreflightError, attempt_failure_accounting)
     from .quality import quality_decisions, quality_reasons
     from .template import validate
 
@@ -806,16 +806,16 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     'source_urls':personalization.get('source_urls',[])}),created_at=at))
         return True
 
-    def release(row, status='INCOMPLETE', reason='', retry_kind='TRANSIENT_HTTP'):
+    def release(row, status='INCOMPLETE', reason='', retry_kind='TRANSIENT_HTTP', outcome='TRANSIENT_HTTP'):
         at=now(); attempts=int(row.get('personalization_attempts') or 0)+1
         with db.transaction(serialized=True) as c:
             c.execute(candidates.update().where(candidates.c.id==row['id'],candidates.c.personalization_lease_token==lease_token)
                 .values(personalization_status=status,personalization_at=at,personalization_error=reason[:300] or None,
-                    personalization_outcome='TRANSIENT_HTTP',personalization_attempts=attempts,
+                    personalization_outcome=outcome,personalization_attempts=attempts,
                     personalization_retry_after=_retry_time(retry_kind,attempts,at),
                     personalization_lease_token=None,personalization_lease_until=None))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row['id'],event='PERSONALIZATION_'+status,
-                detail=_safe_json({'classification':'TRANSIENT_HTTP','error':reason[:200]}),created_at=at))
+                detail=_safe_json({'classification':outcome,'error':reason[:200]}),created_at=at))
 
     for index,row in enumerate(claimed):
         if row['id'] not in authorized_ids:
@@ -859,10 +859,10 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     rows=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
                         personalization_attempts.c.actual_cost_usd).with_for_update()).all()
                     for item in rows:
-                        if item.status == 'COMPLETED':
-                            spent += Decimal(str(item.actual_cost_usd or 0))
-                        elif item.status in {'RESERVED','UNKNOWN_SPEND'}:
-                            spent += max(Decimal(str(item.actual_cost_usd or 0)), Decimal(str(item.reserved_usd or 0)))
+                        row_cost=Decimal(str(item.actual_cost_usd or 0))
+                        if item.status in {'RESERVED','UNKNOWN_SPEND'}:
+                            row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
+                        spent += row_cost
                     run_reserved=Decimal(str(c.scalar(select(personalization_runs.c.reserved_usd).where(personalization_runs.c.id==run_id)) or 0))
                     if run_reserved+Decimal(str(preflight.worst_case_cost_usd))>run_budget or spent+Decimal(str(preflight.worst_case_cost_usd))>cumulative_budget:
                         result['budget_stopped']=True
@@ -926,17 +926,22 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1
         except OpenAIRequestError as exc:
             # The request may have reached the provider. Keep the full reservation
-            # charged and block automatic retries for this exact evidence snapshot.
+            # when spend is unknown; otherwise record provider-reported usage/cost.
             with db.transaction(serialized=True) as c:
                 attempt_row=c.execute(select(personalization_attempts).where(
                     personalization_attempts.c.candidate_id==row['id'],personalization_attempts.c.evidence_fingerprint==locals().get('fp',''),
                     personalization_attempts.c.operation_id==operation_id).with_for_update()).mappings().first()
                 if attempt_row:
-                    c.execute(personalization_attempts.update().where(personalization_attempts.c.id==attempt_row['id']).values(
-                        status='UNKNOWN_SPEND',error_code=exc.code,finished_at=now()))
-            release(row,'INCOMPLETE','MODEL_REQUEST_'+exc.code,retry_kind='PERMANENT_EVIDENCE')
+                    updates=attempt_failure_accounting(exc,attempt_row)
+                    updates['finished_at']=now()
+                    c.execute(personalization_attempts.update().where(personalization_attempts.c.id==attempt_row['id']).values(**updates))
+            outcome='PROVIDER_'+exc.failure_stage.upper()
+            release(row,'INCOMPLETE','MODEL_REQUEST_'+exc.code,retry_kind='PERMANENT_EVIDENCE',outcome=outcome)
             result['status']='ATTENTION_REQUIRED'
-            result['attempted']+=1;result['incomplete']+=1;result['failure_categories']['UNKNOWN_SPEND']=result['failure_categories'].get('UNKNOWN_SPEND',0)+1;result['failure_reasons']['MODEL_REQUEST_'+exc.code]=1
+            result['attempted']+=1;result['incomplete']+=1
+            category='PROVIDER_VALIDATION_FAILED' if exc.actual_cost_usd is not None else 'UNKNOWN_SPEND'
+            result['failure_categories'][category]=result['failure_categories'].get(category,0)+1
+            result['failure_reasons']['MODEL_REQUEST_'+exc.code]=1
         except Exception as exc:
             # No exception text is written; transport failures may contain secret-bearing URLs.
             with db.transaction(serialized=True) as c:

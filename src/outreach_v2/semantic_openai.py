@@ -375,33 +375,47 @@ class OpenAIResponsesBackend:
         status_code = int(response.status_code)
         try:
             raw = response.json()
-        except Exception:
-            raw = {"status_code": status_code, "body_text": response.text[:2000]}
+        except Exception as exc:
+            # Keep the bounded body for diagnosis, but distinguish transport
+            # JSON decoding from a model-produced structured-output failure.
+            body = response.text[:12000]
+            raise OpenAIRequestError(status_code, "INVALID_RESPONSE_JSON",
+                                     "Provider response body was not valid JSON",
+                                     raw_response={"status_code": status_code, "body_text": body},
+                                     failure_stage="provider_response_json") from exc
         if status_code < 200 or status_code >= 300:
             err = raw.get("error", {}) if isinstance(raw, dict) else {}
             # Do not save response headers or authorization state.
             raise OpenAIRequestError(status_code, str(err.get("code") or "API_ERROR"),
-                                     str(err.get("message") or "OpenAI request failed"), raw_response=raw)
+                                     str(err.get("message") or "OpenAI request failed"), raw_response=raw,
+                                     failure_stage="provider_http")
         if not isinstance(raw, dict):
-            raise OpenAIRequestError(status_code, "INVALID_RESPONSE", "Response JSON was not an object", raw_response=raw)
+            raise OpenAIRequestError(status_code, "INVALID_RESPONSE", "Response JSON was not an object", raw_response=raw,
+                                     failure_stage="provider_response_json")
         usage = raw.get("usage") or {}
         in_tokens = usage.get("input_tokens")
         out_tokens = usage.get("output_tokens")
         if not isinstance(in_tokens, int) or not isinstance(out_tokens, int):
-            raise OpenAIRequestError(status_code, "USAGE_MISSING", "Response did not include verifiable token usage", raw_response=raw)
+            raise OpenAIRequestError(status_code, "USAGE_MISSING", "Response did not include verifiable token usage", raw_response=raw,
+                                     failure_stage="provider_accounting")
         if in_tokens > MAX_INPUT_TOKENS or out_tokens > MAX_OUTPUT_TOKENS:
-            raise OpenAIRequestError(status_code, "TOKEN_LIMIT_EXCEEDED", "Server token usage exceeded configured limits", raw_response=raw)
+            raise OpenAIRequestError(status_code, "TOKEN_LIMIT_EXCEEDED", "Server token usage exceeded configured limits", raw_response=raw,
+                                     failure_stage="provider_accounting", usage=usage, request_id=raw.get("id"))
         details = usage.get("output_tokens_details") or {}
         reasoning_tokens = details.get("reasoning_tokens", 0)
         if not isinstance(reasoning_tokens, int) or reasoning_tokens < 0 or reasoning_tokens > out_tokens:
-            raise OpenAIRequestError(status_code, "INVALID_REASONING_USAGE", "Reasoning token usage was invalid", raw_response=raw)
+            raise OpenAIRequestError(status_code, "INVALID_REASONING_USAGE", "Reasoning token usage was invalid", raw_response=raw,
+                                     failure_stage="provider_accounting", usage=usage, request_id=raw.get("id"))
         actual_cost = estimated_cost(in_tokens, out_tokens)
         if not actual_cost < MAX_ESTIMATED_USD:
-            raise OpenAIRequestError(status_code, "COST_CAP_EXCEEDED", "Actual token usage reached the authorized cost cap", raw_response=raw)
+            raise OpenAIRequestError(status_code, "COST_CAP_EXCEEDED", "Actual token usage reached the authorized cost cap", raw_response=raw,
+                                     failure_stage="provider_accounting", usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost)
         if raw.get("status") != "completed":
-            raise OpenAIRequestError(status_code, "INCOMPLETE_RESPONSE", f"Response status was {raw.get('status')}", raw_response=raw)
+            raise OpenAIRequestError(status_code, "INCOMPLETE_RESPONSE", f"Response status was {raw.get('status')}", raw_response=raw,
+                                     failure_stage="provider_completion", usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost)
         if raw.get("model") != MODEL or not isinstance(raw.get("id"), str) or not raw.get("id"):
-            raise OpenAIRequestError(status_code, "MODEL_OR_REQUEST_ID_MISMATCH", "Response model or request identifier was missing or unexpected", raw_response=raw)
+            raise OpenAIRequestError(status_code, "MODEL_OR_REQUEST_ID_MISMATCH", "Response model or request identifier was missing or unexpected", raw_response=raw,
+                                     failure_stage="provider_metadata", usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost)
         output_text = raw.get("output_text")
         if not isinstance(output_text, str):
             texts = []
@@ -413,13 +427,35 @@ class OpenAIResponsesBackend:
         try:
             structured = json.loads(output_text)
         except Exception as exc:
-            raise OpenAIRequestError(status_code, "INVALID_STRUCTURED_OUTPUT", "Model output was not valid JSON", raw_response=raw) from exc
+            raise OpenAIRequestError(status_code, "INVALID_STRUCTURED_OUTPUT", "Model output was not valid JSON", raw_response=raw,
+                                     failure_stage="structured_json_parse", failure_path="$", usage=usage,
+                                     request_id=raw.get("id"), actual_cost_usd=actual_cost) from exc
         try:
             _validate_against_schema(structured, OPENAI_ANALYSIS_SCHEMA)
-            structured, rejected_claims = reject_claims_with_unknown_evidence(structured, evidence)
+        except (TypeError, ValueError) as exc:
+            path_match = re.search(r"\bat \$([^:]*)(?::|$)", str(exc))
+            raise OpenAIRequestError(status_code, "STRUCTURED_VALIDATION_FAILED", str(exc), raw_response=raw,
+                                     failure_stage="json_schema_validation",
+                                     failure_path="$" + path_match.group(1) if path_match else "$",
+                                     usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost) from exc
+        structured, rejected_claims = reject_claims_with_unknown_evidence(structured, evidence)
+        try:
             validate_openai_response(structured, evidence)
         except (TypeError, ValueError) as exc:
-            raise OpenAIRequestError(status_code, "STRUCTURED_VALIDATION_FAILED", str(exc), raw_response=raw) from exc
+            message = str(exc)
+            if "identity" in message.casefold() or "business identity" in message.casefold():
+                stage = "identity_validation"
+            elif "evidence" in message.casefold() or "first-party" in message.casefold() or "non-company" in message.casefold():
+                stage = "evidence_reference_validation"
+            else:
+                stage = "semantic_contract_validation"
+            path = "$"
+            path_match = re.search(r"\b(Claim [^ ]+|products_services|target_audiences|capabilities_characteristics|Relationship|GEO hypothesis)", message)
+            if path_match:
+                path = path_match.group(0)
+            raise OpenAIRequestError(status_code, "STRUCTURED_VALIDATION_FAILED", message, raw_response=raw,
+                                     failure_stage=stage, failure_path=path,
+                                     usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost) from exc
         return {
             "provider": "openai", "model": str(raw.get("model") or MODEL),
             "request_id": str(raw.get("id") or ""), "status": raw.get("status"),
@@ -433,12 +469,83 @@ class OpenAIResponsesBackend:
 
 
 class OpenAIRequestError(RuntimeError):
-    def __init__(self, status_code: int, code: str, message: str, *, raw_response: Any = None):
+    def __init__(self, status_code: int, code: str, message: str, *, raw_response: Any = None,
+                 failure_stage: str = "provider_request", failure_path: str | None = None,
+                 usage: Mapping[str, Any] | None = None, request_id: str | None = None,
+                 actual_cost_usd: float | None = None):
         # Scrub common API-key shapes in unexpected provider diagnostics.
         message = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "[REDACTED]", message)
         self.status_code, self.code, self.message = status_code, code, message[:500]
         self.raw_response = raw_response
+        self.failure_stage = failure_stage
+        self.failure_path = failure_path
+        self.usage = dict(usage or {})
+        self.request_id = request_id
+        self.actual_cost_usd = actual_cost_usd
         super().__init__(f"OpenAI request failed ({status_code}, {code}): {self.message}")
+
+    def diagnostic_artifact(self) -> dict[str, Any]:
+        """Response artifact for the admin-only attempt ledger; never includes request headers."""
+        def redact(value: Any) -> Any:
+            if isinstance(value, str):
+                value = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "[REDACTED]", value)
+                value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~-]+", r"\1[REDACTED]", value)
+                return value
+            if isinstance(value, dict):
+                return {str(key): redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value]
+            return value
+
+        raw = redact(self.raw_response)
+        if not isinstance(raw, (dict, list, str, int, float, bool, type(None))):
+            raw = {"unserializable_response_type": type(raw).__name__}
+        encoded = json.dumps(raw, ensure_ascii=False, separators=(",", ":"), default=str)
+        if len(encoded) > 256_000:
+            raw = {"truncated": True, "sha256": __import__("hashlib").sha256(encoded.encode()).hexdigest(),
+                   "preview": encoded[:4096]}
+        return {
+            "diagnostic_version": 1,
+            "http_status": self.status_code,
+            "request_id": self.request_id,
+            "model": raw.get("model") if isinstance(raw, dict) else None,
+            "response_status": raw.get("status") if isinstance(raw, dict) else None,
+            "incomplete_details": raw.get("incomplete_details") if isinstance(raw, dict) else None,
+            "finish_reason": raw.get("finish_reason") if isinstance(raw, dict) else None,
+            "usage": self.usage,
+            "actual_cost_usd": self.actual_cost_usd,
+            "failure_code": self.code,
+            "failure_stage": self.failure_stage,
+            "failure_path": self.failure_path,
+            "failure_message": self.message,
+            "provider_response": raw,
+        }
+
+
+def attempt_failure_accounting(exc: OpenAIRequestError, previous: Mapping[str, Any]) -> dict[str, Any]:
+    """Attempt-row fields for a failed local validation after a provider call.
+
+    Omitting ``reserved_usd`` is intentional: unknown spend keeps the existing
+    reservation untouched. A verified usage/cost closes that reservation and
+    records the actual charge.
+    """
+    from decimal import Decimal
+    known_cost = exc.actual_cost_usd
+    values: dict[str, Any] = {
+        "status": ("VALIDATION_FAILED" if exc.failure_stage in {
+            "structured_json_parse", "json_schema_validation", "identity_validation",
+            "evidence_reference_validation", "semantic_contract_validation"}
+            else "PROVIDER_FAILED") if known_cost is not None else "UNKNOWN_SPEND",
+        "request_id": exc.request_id,
+        "usage": json.dumps(exc.usage, ensure_ascii=False, separators=(",", ":")) if exc.usage
+                 else previous.get("usage") or "{}",
+        "actual_cost_usd": format(Decimal(str(known_cost)), "f") if known_cost is not None
+                           else previous.get("actual_cost_usd"),
+        "provider_response": json.dumps(exc.diagnostic_artifact(), ensure_ascii=False,
+                                         separators=(",", ":"), default=str),
+        "error_code": exc.code,
+    }
+    return values
 
 
 def _validate_against_schema(value: Any, schema: Mapping[str, Any], path: str = "$" ) -> None:

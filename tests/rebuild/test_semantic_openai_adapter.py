@@ -21,6 +21,7 @@ from outreach_v2.semantic_openai import (
     select_evidence,
     to_evidence_contract,
     validate_openai_response,
+    attempt_failure_accounting,
 )
 
 
@@ -336,4 +337,130 @@ def test_tokenizer_failure_fails_closed_before_any_request():
     def uncertain(_): raise RuntimeError("tokenizer unavailable")
     with pytest.raises(PreflightError, match="Could not count"):
         build_preflight(evidence, token_count=uncertain)
+
+
+def _run_fake_response(raw, *, status=200):
+    selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
+    class FakeResponse:
+        status_code = status
+        text = json.dumps(raw) if isinstance(raw, (dict, list)) else str(raw)
+        def json(self):
+            if not isinstance(raw, (dict, list)):
+                raise ValueError("malformed provider body")
+            return raw
+    class FakeClient:
+        calls = 0
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def post(self, *args, **kwargs):
+            self.calls += 1
+            return FakeResponse()
+    client = FakeClient()
+    backend = OpenAIResponsesBackend(api_key="test-only", client_factory=lambda **kwargs: client)
+    try:
+        result = backend.analyze_once(selection.to_input(), token_count=lambda _: 100)
+        return result, client.calls
+    except OpenAIRequestError as exc:
+        return exc, client.calls
+
+
+def _provider_response(output):
+    return {"id": "resp_diag_123", "model": MODEL, "status": "completed",
+            "finish_reason": "stop",
+            "usage": {"input_tokens": 1234, "output_tokens": 321,
+                      "output_tokens_details": {"reasoning_tokens": 0}},
+            "output_text": json.dumps(output)}
+
+
+def test_malformed_structured_json_preserves_provider_metadata_and_known_cost():
+    raw = {"id": "resp_badjson", "model": MODEL, "status": "completed", "finish_reason": "stop",
+           "usage": {"input_tokens": 100, "output_tokens": 20}, "output_text": "{bad"}
+    error, calls = _run_fake_response(raw)
+    assert calls == 1
+    assert error.code == "INVALID_STRUCTURED_OUTPUT"
+    assert error.failure_stage == "structured_json_parse"
+    assert error.failure_path == "$"
+    assert error.request_id == "resp_badjson"
+    assert error.usage["input_tokens"] == 100
+    assert error.actual_cost_usd == estimated_cost(100, 20)
+    artifact = error.diagnostic_artifact()
+    assert artifact["provider_response"] == raw
+    assert artifact["response_status"] == "completed"
+    assert artifact["finish_reason"] == "stop"
+
+
+def test_malformed_provider_json_body_is_distinguished_and_bounded_for_diagnostics():
+    error, calls = _run_fake_response("not-json")
+    assert calls == 1
+    assert error.code == "INVALID_RESPONSE_JSON"
+    assert error.failure_stage == "provider_response_json"
+    assert error.diagnostic_artifact()["provider_response"]["body_text"] == "not-json"
+
+
+def test_schema_mismatch_reports_exact_validation_path_and_preserves_response():
+    output = response()
+    del output["entity_identity"]["website"]
+    raw = _provider_response(output)
+    error, calls = _run_fake_response(raw)
+    assert calls == 1
+    assert error.code == "STRUCTURED_VALIDATION_FAILED"
+    assert error.failure_stage == "json_schema_validation"
+    assert error.failure_path == "$.entity_identity"
+    assert error.request_id == "resp_diag_123"
+    assert error.actual_cost_usd == estimated_cost(1234, 321)
+    assert error.diagnostic_artifact()["provider_response"] == raw
+
+
+def test_invalid_evidence_reference_is_distinguished_from_schema_failure():
+    output = response()
+    output["products_services"][0]["evidence_ids"] = ["missing-source-id"]
+    error, calls = _run_fake_response(_provider_response(output))
+    assert calls == 1
+    assert error.code == "STRUCTURED_VALIDATION_FAILED"
+    assert error.failure_stage == "evidence_reference_validation"
+    assert "missing-source-id" not in error.message
+    assert "products_services" in error.message
+
+
+def test_provider_success_local_identity_failure_has_replayable_response_and_usage():
+    output = response()
+    output["entity_identity"]["name"] = "Different business"
+    raw = _provider_response(output)
+    error, calls = _run_fake_response(raw)
+    assert calls == 1
+    assert error.failure_stage == "identity_validation"
+    assert error.actual_cost_usd == estimated_cost(1234, 321)
+    artifact = error.diagnostic_artifact()
+    assert artifact["failure_message"] == "Model changed the target business identity"
+    assert artifact["provider_response"] == raw
+    assert artifact["usage"] == raw["usage"]
+
+
+def test_diagnostic_artifact_redacts_key_shapes_and_has_bounded_response_size():
+    error = OpenAIRequestError(200, "STRUCTURED_VALIDATION_FAILED", "bad sk-12345678901234567890",
+                               raw_response={"output_text": "sk-12345678901234567890"},
+                               failure_stage="json_schema_validation")
+    artifact = error.diagnostic_artifact()
+    assert "sk-12345678901234567890" not in json.dumps(artifact)
+    assert "[REDACTED]" in json.dumps(artifact)
+
+
+def test_attempt_accounting_keeps_unknown_reservation_and_records_verified_cost():
+    unknown = OpenAIRequestError(200, "USAGE_MISSING", "missing usage", raw_response={"id": "resp_unknown"})
+    prior = {"reserved_usd": "0.02985", "actual_cost_usd": "0", "usage": "{}"}
+    unknown_values = attempt_failure_accounting(unknown, prior)
+    assert unknown_values["status"] == "UNKNOWN_SPEND"
+    assert "reserved_usd" not in unknown_values
+    assert unknown_values["actual_cost_usd"] == "0"
+
+    known = OpenAIRequestError(200, "STRUCTURED_VALIDATION_FAILED", "invalid identity",
+                               raw_response={"id": "resp_known"}, usage={"input_tokens": 10, "output_tokens": 5},
+                               request_id="resp_known", actual_cost_usd=0.00003,
+                               failure_stage="identity_validation")
+    known_values = attempt_failure_accounting(known, prior)
+    assert known_values["status"] == "VALIDATION_FAILED"
+    assert known_values["actual_cost_usd"] == "0.00003"
+    assert json.loads(known_values["usage"]) == {"input_tokens": 10, "output_tokens": 5}
+    assert json.loads(known_values["provider_response"])["failure_stage"] == "identity_validation"
 

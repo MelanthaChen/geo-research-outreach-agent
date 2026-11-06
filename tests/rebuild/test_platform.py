@@ -7,11 +7,12 @@ from sqlalchemy import select,func
 from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates
 from outreach_v2.service import generate,list_candidates
 from outreach_v2.consent import process
-from outreach_v2.template import render,render_template,BULK_SUBJECT
+from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick,claim,research_step,report_step,delivery_step
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,Engine,verified_form_rows,VerifiedFormResponse,_sheet_row
 from outreach_agent.google_forms_integration import parse_sheet_row
+from outreach_v2.owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION
 
 @pytest.fixture
 def db(tmp_path):
@@ -95,6 +96,103 @@ def test_invitation_generation_rejects_legacy_ready_quality_pass_without_writing
         generate(db,{'ids':['legacy-ready']},'legacy-ready-request-key')
     assert count(db,invitations)==0
     assert count(db,batches)==0
+
+@pytest.mark.parametrize('ident,name,website,summary,detail,relevance', [
+    ('geoairesume-owner-test-v1','GeoAIResume controlled test website','https://geo-ai-resume.vercel.app',
+     'GeoAIResume is a test website demonstrating how an AI-assisted resume platform can present its features, workflows, and product information to visitors.',
+     'Its test scenario focuses on helping users explore resume creation, content refinement, and the presentation of professional experience through an AI-assisted workflow.',
+     "This website provides a controlled example for studying how AI-powered search systems interpret a digital product's purpose, features, and intended audience."),
+    ('whisker-haven-owner-demo-20261023-v1','Whisker Haven (Fictional Demo)','https://whisker-haven-demo.vercel.app/',
+     'Whisker Haven is a fictional pet-care business used as a controlled website and email test fixture for the GEO research outreach workflow.',
+     'Its simulated business profile centers on pet-care services, everyday animal well-being, and accessible information for pet owners.',
+     'Whisker Haven provides a controlled local-service example for examining how AI-powered search connects business descriptions, service categories, and customer questions.'),
+])
+def test_owner_fixture_batch_generation_uses_exact_synthetic_policy_without_mutating_send_state(
+    db, monkeypatch, ident, name, website, summary, detail, relevance
+):
+    recipient=OWNER_TEST_FIXTURES[ident]['recipient']
+    candidate(db,ident=ident,email=recipient,website=website,name=name,fixture=True)
+    with db.transaction() as c:
+        saved=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        personalization=json.loads(saved['personalization'])
+        personalization['recipient_copy']={
+            'business_summary':summary,'distinctive_detail':detail,'research_relevance':relevance,
+            'supported_observation':None,'data_classification':SYNTHETIC_CLASSIFICATION,
+        }
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization=dump(personalization),personalization_status='READY',
+            personalization_quality_status='FAIL',personalization_quality_errors='["INSUFFICIENT_EVIDENCE"]',
+            personalization_analysis_version=None,personalization_version=0))
+        c.execute(email_templates.insert().values(id='invitation-template-v2',version=2,
+            subject=DEFAULT_INVITATION_SUBJECT,body=DEFAULT_INVITATION_BODY,
+            sender='chen.yuxuan9@northeastern.edu',sender_name='Yuxuan Chen',
+            reply_to='chen.yuxuan9@northeastern.edu',researcher_name='Yuxuan Chen',
+            university_affiliation='Northeastern University',template_kind='INVITATION',active=True,
+            created_by='unit-test',created_at=now()))
+
+    listed=list_candidates(db,{'q':name})
+    assert listed['eligible_matching']==1
+    assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is True
+    assert listed['rows'][0]['owner_test_fixture_ready'] is True
+
+    result=generate(db,{'ids':[ident]},'owner-fixture-invitation-'+ident)
+    assert result['pilot_review_status']=='PENDING_REVIEW'
+    assert result['send_status']=='UNVERIFIED'
+    manifest=json.loads(zipfile.ZipFile(io.BytesIO(result['package'])).read('manifest.json'))
+    assert manifest['count']==1 and manifest['excluded']==[]
+    with db.transaction() as c:
+        invitation=c.execute(select(invitations).where(invitations.c.candidate_id==ident)).mappings().one()
+        assert invitation['recipient']==recipient
+        assert invitation['template_version']=='invitation-template-v2'
+        assert invitation['send_status']=='UNVERIFIED' and invitation['consent_status']=='NOT_RECEIVED'
+        assert json.loads(invitation['authority'])['method']=='OWNER_BINDING'
+        assert json.loads(invitation['personalization'])['recipient_copy']['data_classification']==SYNTHETIC_CLASSIFICATION
+        assert c.scalar(select(func.count()).select_from(batches))==1
+        assert c.scalar(select(func.count()).select_from(invitations))==1
+    for text in (summary,detail,relevance,'SYNTHETIC PERSONALIZATION - NOT VERIFIED WEBSITE EVIDENCE',
+                 'No website observation is asserted for this synthetic test fixture'):
+        assert text in invitation['body']
+    assert count(db,jobs)==0
+
+    # The exact fixture exception carries through the human review gate; it
+    # does not send or create any delivery record.
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db))
+    login=client.post('/api/auth/login',json={'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    assert login.status_code==200
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    review=client.get(f"/api/batches/{result['id']}/review")
+    assert review.status_code==200 and review.json()['status']=='PENDING_REVIEW'
+    assert review.json()['invitations'][0]['personalization_quality_errors']==['INSUFFICIENT_EVIDENCE']
+    approved=client.post(f"/api/batches/{result['id']}/approve",headers=headers,
+        json={'package_sha256':review.json()['package_sha256'],'confirm_reviewed':True})
+    assert approved.status_code==200 and approved.json()['sent'] is False
+    assert count(db,deliveries)==0
+
+def test_synthetic_fixture_policy_still_requires_exact_owner_contact(db):
+    from outreach_v2.service import eligible_recipient
+    ident='geoairesume-owner-test-v1';recipient=OWNER_TEST_FIXTURES[ident]['recipient']
+    candidate(db,ident=ident,email=recipient,website=OWNER_TEST_FIXTURES[ident]['website'],fixture=True)
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        personalization=json.loads(row['personalization'])
+        personalization['recipient_copy']={
+            'business_summary':'Synthetic summary','distinctive_detail':'Synthetic detail',
+            'research_relevance':'Synthetic relevance','supported_observation':None,
+            'data_classification':SYNTHETIC_CLASSIFICATION,
+        }
+        c.execute(candidates.update().where(candidates.c.id==ident).values(personalization=dump(personalization),
+            personalization_quality_status='FAIL',personalization_quality_errors='["INSUFFICIENT_EVIDENCE"]',
+            personalization_analysis_version=None,personalization_version=0))
+        c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(verification='VERIFIED'))
+        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        resolved,reasons=eligible_recipient(c,row)
+    assert resolved==recipient
+    assert 'Synthetic test copy requires its exact unsuppressed OWNER_AUTHORIZED fixture recipient' in reasons
 
 def test_two_recipient_package_and_exact_binding(db):
     candidate(db);candidate(db,'b','yuxaun.chen.1031@outlook.com','https://whisker-haven-demo.vercel.app/','Whisker Haven')

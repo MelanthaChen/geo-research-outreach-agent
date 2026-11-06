@@ -1,4 +1,5 @@
 """Exact owner-controlled staging fixtures; never use for production candidates."""
+from collections.abc import Mapping
 
 SYNTHETIC_CLASSIFICATION = 'SYNTHETIC_OWNER_CONTROLLED_TEST_DATA'
 
@@ -16,7 +17,10 @@ OWNER_TEST_FIXTURES = {
 
 def synthetic_fixture_copy(record, personalization):
     """Validate only the synthetic recipient copy for one exact saved fixture."""
-    if not isinstance(record, dict) or not isinstance(personalization, dict):
+    # SQLAlchemy returns RowMapping objects in the batch-generation path while
+    # the Dashboard uses ordinary dicts. Accept both mapping types, but keep the
+    # exact candidate ID, website, fixture flag, and copy classification gates.
+    if not isinstance(record, Mapping) or not isinstance(personalization, Mapping):
         return False
     fixture = OWNER_TEST_FIXTURES.get(record.get('id'))
     if not fixture or record.get('fixture') is not True or record.get('website') != fixture['website']:

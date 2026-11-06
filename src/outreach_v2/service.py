@@ -37,6 +37,36 @@ def readiness():
         candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',safe_copy,
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
 
+def owner_test_recipient_authorized(c, row, recipient):
+    """Recheck the exact fixture's saved owner binding at every invitation gate."""
+    fixture=OWNER_TEST_FIXTURES.get(row.get('id'))
+    if (not fixture or row.get('fixture') is not True or row.get('website')!=fixture['website']
+        or row.get('website_status')!='VERIFIED' or row.get('qualification') not in {'ELIGIBLE','QUALIFIED'}
+        or row.get('suppressed') or (recipient or '').strip().casefold()!=fixture['recipient'].casefold()):
+        return False
+    saved=c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings().all()
+    if len(saved)!=1:
+        return False
+    contact=saved[0]
+    if ((contact['email'] or '').strip().casefold()!=fixture['recipient'].casefold()
+        or contact['verification']!='OWNER_AUTHORIZED' or contact['suppressed']
+        or not same_site(row['website'],contact['source_url'])):
+        return False
+    return not bool(c.scalar(select(suppressions.c.email).where(
+        suppressions.c.email==fixture['recipient'].casefold())))
+
+def validate_invitation_personalization(c, row, personalization, recipient=None):
+    """Apply the ordinary quality gate except for a verified exact owner fixture."""
+    synthetic=synthetic_fixture_copy(row,personalization)
+    if synthetic and recipient is not None and not owner_test_recipient_authorized(c,row,recipient):
+        raise ValueError('Synthetic test copy requires its exact unsuppressed OWNER_AUTHORIZED fixture recipient')
+    validate(personalization,row['website'],record=row)
+    if not synthetic and row.get('personalization_quality_status')!='PASS':
+        raise ValueError('Personalization quality is '+str(row.get('personalization_quality_status') or 'UNVERIFIED')+
+            (': '+str(row.get('personalization_quality_errors') or 'quality audit required')
+             if row.get('personalization_quality_errors') else ''))
+    return synthetic
+
 def predicates(filters):
     unknown=set(filters)-FILTERS
     if unknown:raise ValueError('Unknown filters: '+','.join(sorted(unknown)))
@@ -144,6 +174,8 @@ def eligible_recipient(c,row):
         expected=OWNER_TEST_FIXTURES[row['id']]['recipient']
         if len(emails)==1 and next(iter(emails))!=expected:
             reasons.append('Synthetic test copy is restricted to its exact owner-authorized recipient')
+        elif len(emails)==1 and not owner_test_recipient_authorized(c,row,next(iter(emails))):
+            reasons.append('Synthetic test copy requires its exact unsuppressed OWNER_AUTHORIZED fixture recipient')
     return (next(iter(emails)) if len(emails)==1 else None),reasons
 
 def select_pilot_cohort(c, limit=100):
@@ -325,7 +357,7 @@ def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
             raise ValueError('Invitation has consent or research activity and cannot be corrected as unsent')
         candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
         p=parse(candidate['personalization'])
-        try: validate(p,candidate['website'])
+        try: validate_invitation_personalization(c,candidate,p,inv['recipient'])
         except ValueError as exc: raise ValueError('Current personalization does not pass quality validation: '+str(exc)) from exc
         invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
             email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
@@ -368,7 +400,8 @@ def approve_invitation_correction(db, correction_id, actor, expected_sha256):
         if corrected_hash!=correction['proposed_sha256'] or corrected_hash!=expected_sha256:
             raise ValueError('Correction contents changed since this version was reviewed')
         evidence=parse(correction['evidence']);p=evidence.get('personalization') or {}
-        validate(p,inv['website'])
+        candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
+        validate_invitation_personalization(c,candidate,p,inv['recipient'])
         item={**dict(inv),'subject':correction['subject'],'body':correction['body'],'personalization':dump(p),
             'template_version':(inv['template_version'] or VERSION)+'+quality-correction-v1'}
         package=build_package([item],[],BULK_SUBJECT)

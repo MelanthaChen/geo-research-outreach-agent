@@ -161,13 +161,17 @@ def create_app(database=None):
             if batch['pilot_review_status'] not in {'PENDING_REVIEW','BLOCKED_INCOMPLETE','NOT_REQUIRED'}:raise ValueError('Batch is not awaiting review')
             digest=hashlib.sha256(batch['package'] or b'').hexdigest()
             if not provided or not hmac.compare_digest(provided,digest):raise ValueError('Approval must match the current complete package SHA-256')
-            rows=c.execute(select(invitations.c.id,invitations.c.website,invitations.c.personalization,
+            rows=c.execute(select(invitations.c.id,invitations.c.candidate_id,invitations.c.recipient,
+                invitations.c.website,invitations.c.personalization,
                 candidate_table.c.personalization_quality_status).select_from(invitations.join(candidate_table,
                 candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==ident)).all()
             if not rows:raise ValueError('Empty invitation batch cannot be approved')
             for row in rows:
-                if row.personalization_quality_status!='PASS':raise ValueError('Every invitation must pass the current personalization quality gate')
-                service.validate(json.loads(row.personalization or '{}'),row.website)
+                candidate=c.execute(select(candidate_table).where(candidate_table.c.id==row.candidate_id)).mappings().one()
+                personalization=json.loads(row.personalization or '{}')
+                synthetic=service.validate_invitation_personalization(c,candidate,personalization,row.recipient)
+                if row.personalization_quality_status!='PASS' and not synthetic:
+                    raise ValueError('Every invitation must pass the current personalization quality gate')
             stamp=now();actor=request.state.session['email']
             c.execute(batches.update().where(batches.c.id==ident).values(pilot_review_status='APPROVED',pilot_review_sha256=digest,
                 pilot_reviewed_by=actor,pilot_reviewed_at=stamp,send_status='READY_TO_SEND'))

@@ -16,49 +16,30 @@ class DummyDB:
         yield object()
 
 
-def test_research_step_runs_advance_only_for_configured_job(monkeypatch):
-    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ID", KEY)
+def test_research_step_requires_new_single_key_allowlist_and_exact_fresh_candidate(monkeypatch):
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST", "outreach-v2:inv-fresh-authorized-job")
     monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED", "true")
     inv = {"id": "inv-existing", "candidate_id": "candidate-existing", "website": SITE,
            "company_name": "GeoAIResume", "recipient": "researcher@example.test",
            "reference": "GEO-existing", "consent_status": "AUTHORIZED"}
-    candidate = {"fixture": True, "kind": "company", "industry": "research", "location": "test"}
+    candidate = {"id":"previous-candidate","fixture": True, "kind": "company", "industry": "research", "location": "test"}
     job = {"id": "job-existing", "idempotency_key": KEY, "submission_id": "submission-existing",
            "started_at": None, "property_id": None}
     monkeypatch.setattr(worker, "context", lambda _c, _j: (inv, candidate))
-    transitions = []
-    monkeypatch.setattr(worker, "transition", lambda _c, _id, **values: transitions.append(values))
-    monkeypatch.setattr(worker, "now", lambda: "2026-11-05T00:00:00+00:00")
-
     class Engine:
-        calls = []
-        def reconcile(self, key):
-            self.calls.append(("reconcile", key))
-            return None
-        def start(self, key, payload):
-            self.calls.append(("start", key, payload))
-            return {"status": "QUEUED", "job_id": "engine-existing"}
-        def advance(self, key):
-            self.calls.append(("advance", key))
-            return {"status": "BLOCKED_CONFIGURATION", "job_id": "engine-existing"}
-
-    engine = Engine()
-    worker.research_step(DummyDB(), job, lambda: engine)
-    assert [call[0] for call in engine.calls] == ["reconcile", "start", "advance"]
-    payload = engine.calls[1][2]
-    assert payload["identity"]["website"] == SITE
-    assert payload["consent"]["research_interest"] == payload["consent"]["research_authorization"] == "YES"
-    assert transitions[0]["status"] == "BLOCKED_CONFIGURATION"
+        def __init__(self):pytest.fail('Engine must not be contacted for a non-selected fresh candidate')
+    with pytest.raises(ConfigurationBlocked,match='exact configured job allowlist'):
+        worker.research_step(DummyDB(), job, Engine)
 
 
 def test_research_step_rejects_other_job_before_engine_access(monkeypatch):
-    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ID", KEY)
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST", KEY)
     monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED", "true")
     monkeypatch.setattr(worker, "context", lambda _c, _j: ({"website": SITE}, {}))
     class Engine:
         def __init__(self):
             raise AssertionError("Engine must not be contacted for another job")
-    with pytest.raises(ConfigurationBlocked, match="configured GeoAIResume"):
+    with pytest.raises(ConfigurationBlocked, match="exact configured job allowlist"):
         worker.research_step(DummyDB(), {"idempotency_key": "outreach-v2:inv-other"}, Engine)
 
 
@@ -71,9 +52,9 @@ def test_report_delivery_is_off_by_default_and_never_constructs_sender(monkeypat
     assert worker.report_delivery_enabled() is True
 
 
-def test_claim_reopens_only_the_allowlisted_quarantined_job(tmp_path, monkeypatch):
+def test_fresh_allowlist_never_reopens_previous_completed_quarantined_job(tmp_path, monkeypatch):
     from outreach_v2.db import Database, batches, candidates, invitations, jobs, submissions
-    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ID", KEY)
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST", "outreach-v2:inv-fresh-authorized-job")
     monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED", "true")
     db = Database(f"sqlite:///{tmp_path / 'claim.sqlite'}")
     db.initialize()
@@ -98,9 +79,57 @@ def test_claim_reopens_only_the_allowlisted_quarantined_job(tmp_path, monkeypatc
             status="RETRY_PENDING",stage="RESEARCH",idempotency_key="outreach-v2:inv-other",attempts=39,
             next_attempt_at="2026-10-27T00:00:00+00:00",created_at="2026-10-27T00:00:00+00:00"))
     claimed = worker.claim(db)
-    assert claimed["id"] == "job-85981437cfa04f779348de67"
-    assert claimed["stage"] == "RESEARCH"
+    assert claimed is None
     with db.transaction() as conn:
-        assert conn.scalar(select(jobs.c.stage).where(jobs.c.id==claimed["id"])) == "RESEARCH"
+        old=conn.execute(select(jobs).where(jobs.c.id=="job-85981437cfa04f779348de67")).mappings().one()
         other=conn.execute(select(jobs).where(jobs.c.id=="job-other")).mappings().one()
+        assert old["attempts"]==2 and old["stage"]=="DONE" and old["lease_token"] is None
         assert other["attempts"] == 39 and other["lease_token"] is None
+
+
+def test_exact_job_claim_does_not_mutate_old_delivery_or_unrelated_queue(tmp_path,monkeypatch):
+    from outreach_v2.db import Database,batches,candidates,invitations,jobs,submissions
+    from outreach_v2.migrate import dump
+    from outreach_v2.db import now
+    db=Database(f"sqlite:///{tmp_path/'exact-claim.sqlite'}");db.initialize()
+    with db.transaction() as c:
+        c.execute(batches.insert().values(id='b',request_key='request-key-exact-0001',selection_hash='hash'))
+        for suffix,stage,status in [('old','DELIVERY','COMPLETED'),('target','RESEARCH','QUEUED'),('other','RESEARCH','QUEUED')]:
+            site='https://geo-ai-resume.vercel.app/' if suffix=='target' else f'https://{suffix}.example/'
+            c.execute(candidates.insert().values(id='c-'+suffix,kind='company',name=suffix,website=site,
+                domain=site.split('//')[1].strip('/'),suppressed=False,fixture=suffix=='target',created_at=now(),updated_at=now()))
+            c.execute(invitations.insert().values(id='i-'+suffix,candidate_id='c-'+suffix,batch_id='b',
+                reference='GEO-'+suffix,recipient=f'{suffix}@example.test',website=site,company_name=suffix,consent_status='AUTHORIZED'))
+            c.execute(submissions.insert().values(id='s-'+suffix,invitation_id='i-'+suffix,reference='GEO-'+suffix,status='AUTHORIZED'))
+            c.execute(jobs.insert().values(id='job-'+suffix,invitation_id='i-'+suffix,submission_id='s-'+suffix,
+                status=status,stage=stage,idempotency_key='outreach-v2:inv-'+suffix,attempts=17 if suffix!='target' else 0,
+                created_at=now(),next_attempt_at='2000-01-01T00:00:00+00:00'))
+    with pytest.raises(ValueError,match='RESEARCH or REPORT'):
+        worker.claim(db,job_id='job-target',idempotency_key='outreach-v2:inv-target')
+    assert worker.claim(db,job_id='job-target',idempotency_key='wrong-key',stage='RESEARCH') is None
+    claimed=worker.claim(db,job_id='job-target',idempotency_key='outreach-v2:inv-target',stage='RESEARCH')
+    assert claimed['id']=='job-target'
+    with db.transaction() as c:
+        rows={r['id']:dict(r) for r in c.execute(select(jobs)).mappings()}
+    assert rows['job-old']['attempts']==17 and rows['job-old']['lease_token'] is None and rows['job-old']['stage']=='DELIVERY'
+    assert rows['job-other']['attempts']==17 and rows['job-other']['lease_token'] is None
+    assert rows['job-target']['attempts']==1 and rows['job-target']['lease_token']==claimed['lease_token']
+
+
+def test_report_only_claim_can_only_select_exact_report_stage(tmp_path):
+    from outreach_v2.db import Database,batches,candidates,invitations,jobs,submissions,now
+    db=Database(f"sqlite:///{tmp_path/'exact-report.sqlite'}");db.initialize()
+    with db.transaction() as c:
+        c.execute(batches.insert().values(id='b',request_key='request-key-report-0001',selection_hash='hash'))
+        for suffix,stage in [('old','DELIVERY'),('target','REPORT')]:
+            site=f'https://{suffix}.example/'
+            c.execute(candidates.insert().values(id='c-'+suffix,kind='company',name=suffix,website=site,domain=f'{suffix}.example',suppressed=False,created_at=now(),updated_at=now()))
+            c.execute(invitations.insert().values(id='i-'+suffix,candidate_id='c-'+suffix,batch_id='b',reference='GEO-'+suffix,recipient=f'{suffix}@example.test',website=site,company_name=suffix,consent_status='AUTHORIZED'))
+            c.execute(submissions.insert().values(id='s-'+suffix,invitation_id='i-'+suffix,reference='GEO-'+suffix,status='AUTHORIZED'))
+            c.execute(jobs.insert().values(id='job-'+suffix,invitation_id='i-'+suffix,submission_id='s-'+suffix,status='COMPLETED',stage=stage,idempotency_key='outreach-v2:inv-'+suffix,attempts=4,created_at=now()))
+    claimed=worker.claim(db,job_id='job-target',idempotency_key='outreach-v2:inv-target',stage='REPORT')
+    assert claimed['id']=='job-target' and claimed['stage']=='REPORT'
+    assert worker.claim(db,job_id='job-old',idempotency_key='outreach-v2:inv-old',stage='REPORT') is None
+    with db.transaction() as c:
+        old=c.execute(select(jobs).where(jobs.c.id=='job-old')).mappings().one()
+    assert old['attempts']==4 and old['lease_token'] is None

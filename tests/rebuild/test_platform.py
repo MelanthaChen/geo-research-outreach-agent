@@ -162,6 +162,68 @@ def test_owner_consent_is_automatic_and_duplicate_safe(db):
     assert process(db,row)=='DUPLICATE';row['Timestamp']='10/27/2026 22:31:00'
     assert process(db,row)=='DUPLICATE_CONSENT';assert count(db,jobs)==1
 
+def test_fresh_owner_binding_preserves_distinct_verified_google_and_invitation_accounts(db):
+    from outreach_v2.consent import record_owner_identity_binding
+    from outreach_v2.db import events
+    from outreach_v2.migrate import parse
+    from outreach_v2.db import now
+    candidate_id='geo-e2e-rerun-20261105-neu-owner'
+    invitation_id='inv-e2e-rerun-20261105-neu-owner'
+    reference='GEO-5C95D39DB2AB9BAFA950C7BA99FEE206'
+    website='https://geo-ai-resume.vercel.app/'
+    recipient='yuxuan.chen.1031@outlook.com'
+    respondent='yuxuan.chen.1031@gmail.com'
+    stamp=now()
+    with db.transaction() as c:
+        c.execute(candidates.insert().values(id=candidate_id,kind='company',name='GeoAIResume owner test',website=website,
+            domain='geo-ai-resume.vercel.app',suppressed=False,fixture=True,created_at=stamp,updated_at=stamp))
+        c.execute(batches.insert().values(id='fresh-test-batch',request_key='fresh-test-invitation-key-001',selection_hash='fresh-selection-hash'))
+        authority={'method':'OWNER_BINDING','website':website,'recipient':recipient,'representative':recipient}
+        c.execute(invitations.insert().values(id=invitation_id,candidate_id=candidate_id,batch_id='fresh-test-batch',
+            reference=reference,recipient=recipient,website=website,company_name='GeoAIResume owner test',
+            consent_status='NOT_RECEIVED',authority=dump(authority)))
+    assert record_owner_identity_binding(db,invitation_id,respondent,'chen.yuxuan9@northeastern.edu')=='RECORDED'
+    assert record_owner_identity_binding(db,invitation_id,respondent,'chen.yuxuan9@northeastern.edu')=='ALREADY_RECORDED'
+    row={'Timestamp':'11/05/2026 20:16:00','Invitation Reference':reference,
+        'Is your company interested in participating in this research?':'Yes',
+        'Does your company authorize our research team to conduct the research described above?':'Yes',
+        'Full Name of the Authorized Company Representative':'Yuxuan Chen',
+        'Job Title of the Authorized Company Representative':'CTO',
+        'Business Email Address of the Authorized Company Representative':respondent,
+        'Do you confirm that you are authorized to provide this permission on behalf of your business?':'Yes'}
+    identity={'provider':'GOOGLE_FORMS_VERIFIED','email':respondent,'response_id':'forms-response-real-1','email_collection_type':'VERIFIED'}
+    assert process(db,row,verified_identity=identity)=='AUTHORIZED'
+    assert process(db,row,verified_identity=identity)=='DUPLICATE'
+    with db.transaction() as c:
+        inv=c.execute(select(invitations).where(invitations.c.id==invitation_id)).mappings().one()
+        sub=c.execute(select(submissions).where(submissions.c.invitation_id==invitation_id)).mappings().one()
+        event_rows=c.execute(select(events).where(events.c.entity_id==invitation_id)).mappings().all()
+    binding=parse(inv['authority'])['owner_identity_binding']
+    assert inv['recipient']==recipient and inv['consent_status']=='AUTHORIZED'
+    assert sub['representative_email']==respondent
+    assert sub['identity_verified_email']==respondent and sub['identity_reference']=='forms-response-real-1'
+    assert binding['verified_respondent_email']==respondent and binding['invitation_recipient']==recipient
+    assert binding['website']==website and binding['authorization']=='EXPLICIT_OWNER_CONTROLLED_STAGING_BINDING'
+    audit=[parse(e['detail']) for e in event_rows if e['event']=='AUTHORIZED']
+    assert audit and audit[-1]['verified_respondent_email']==respondent and audit[-1]['invitation_recipient']==recipient
+    assert count(db,jobs)==1
+
+def test_exact_response_tick_processes_only_selected_google_forms_response(db,monkeypatch):
+    from outreach_v2.integrations import VerifiedFormResponse
+    from outreach_v2.worker import tick
+    selected={'Invitation Reference':'GEO-selected','Timestamp':'11/05/2026 20:16:00'}
+    unrelated={'Invitation Reference':'GEO-unrelated','Timestamp':'11/05/2026 20:17:00'}
+    class SheetsFixture:
+        def read(self,*,response_id=None,response_reference=None):
+            assert response_id is None and response_reference=='GEO-selected'
+            return [VerifiedFormResponse(selected,{'response_id':'response-selected'}),
+                    VerifiedFormResponse(unrelated,{'response_id':'response-unrelated'})]
+    processed=[]
+    monkeypatch.setattr('outreach_v2.worker.process',lambda _db,row,verified_identity=None:processed.append((row['Invitation Reference'],verified_identity['response_id'])))
+    result=tick(db,sheets=SheetsFixture(),response_reference='GEO-selected',max_jobs=0)
+    assert result['processed_stages']==0
+    assert processed==[('GEO-selected','response-selected')]
+
 def test_geoairesume_saved_blocked_scope_revalidates_once_and_ordinary_mismatch_stays_blocked(db):
     from outreach_v2.db import events
     candidate(db,ident='geoairesume-owner-test-v1',name='GeoAIResume',fixture=True)
@@ -328,7 +390,7 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     def lock():yield locked
     monkeypatch.setattr(db,'worker_lock',lock)
     observed=[]
-    monkeypatch.setattr('outreach_v2.worker.tick',lambda database,max_jobs:observed.append((database,max_jobs)) or {'worker_run_id':'run-test','status':'COMPLETED','processed_stages':0,'errors':[]})
+    monkeypatch.setattr('outreach_v2.worker.tick',lambda database,**kwargs:observed.append((database,kwargs)) or {'worker_run_id':'run-test','invocation_status':'COMPLETED','status':'COMPLETED','processed_stages':0,'errors':[]})
     client=TestClient(create_app(db))
     assert client.post('/api/internal/worker-tick',json={}).status_code==401
     headers={'Authorization':'Bearer '+token}
@@ -336,11 +398,15 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':11}).status_code==400
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':'1'}).status_code==400
     assert client.post('/api/internal/worker-tick',headers=headers,json={'unexpected':True}).status_code==400
-    response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':4})
+    assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1}).status_code==400
+    response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':0,'response_reference':'GEO-exact-reference'})
     assert response.status_code==200 and response.json()['worker_run_id']=='run-test'
-    assert observed==[(db,4)]
+    assert observed==[(db,{'max_jobs':0,'response_id':None,'response_reference':'GEO-exact-reference','job_id':None,'idempotency_key':None,'stage':None})]
+    response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'})
+    assert response.status_code==200
+    assert observed[-1][1]['job_id']=='job-exact' and observed[-1][1]['idempotency_key']=='outreach-v2:inv-exact' and observed[-1][1]['stage']=='REPORT'
     locked=False
-    assert client.post('/api/internal/worker-tick',headers=headers,json={}).status_code==409
+    assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'}).status_code==409
 
 class EmptySheets:
     def read(self):return []
@@ -399,6 +465,7 @@ def _completed_engine_result(job):
 
 def test_disabled_outreach_reconciles_completed_engine_result_and_creates_docx_without_delivery(db,monkeypatch):
     leased=_authorized_leased_job(db)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',leased['idempotency_key'])
     monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
     engine_result=_completed_engine_result(leased)
     class ExistingCompletedEngine:
@@ -425,6 +492,7 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     from fastapi.testclient import TestClient
     from outreach_v2.app import create_app
     leased=_authorized_leased_job(db)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',leased['idempotency_key'])
     class CompletedEngine:
         def reconcile(self,key):return _completed_engine_result(leased)
     research_step(db,leased,CompletedEngine)
@@ -478,6 +546,7 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     reapproved=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'APPROVED','document_sha256':report['sha256']})
     assert reapproved.status_code==200
+    monkeypatch.setenv('OUTREACH_REPORT_DELIVERY_ENABLED','true')
     delivery_step(db,leased,lambda:mail)
     assert [call[0] for call in mail.calls]==['configure','reconcile','create','send']
     assert mail.calls[0][:4]==('configure','Approved report notice','Your GEO research report for GeoAIResume is ready. Reply to reports-reply@example.org.','reports@example.org')
@@ -652,6 +721,7 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
 
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',leased['idempotency_key'])
     monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
     class ExistingQueuedEngine:
         def reconcile(self,key):return {'status':'QUEUED','job_id':'engine-job-existing','property_id':'property-existing'}

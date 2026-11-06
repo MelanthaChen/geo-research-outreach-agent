@@ -9,31 +9,41 @@ from .migrate import dump,parse,sha
 from .consent import process
 from .integrations import Sheets,Engine,GraphReports,ConfigurationBlocked,OutcomeUncertain,VerifiedFormResponse
 from .template import same_site
+from outreach_agent.google_forms_integration import parse_sheet_row
 
 def later(seconds):return (datetime.now(timezone.utc)+timedelta(seconds=seconds)).isoformat()
 def transition(c,job_id,**values):
     c.execute(jobs.update().where(jobs.c.id==job_id).values(updated_at=now(),**values))
     c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job_id,event=values.get('status') or values.get('stage') or 'UPDATED',detail=dump({k:v for k,v in values.items() if k not in {'result','lease_token'}}),created_at=now()))
 
-def claim(db):
-    recovery_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
+def claim(db,*,job_id=None,idempotency_key=None,stage=None):
     research_only=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').strip().lower()=='true'
     # A live single-job research switch must constrain selection itself. A
     # downstream research_step guard is too late: claiming another queued job
     # mutates its lease/attempt count even when that guard blocks Engine access.
-    if research_only and not recovery_job_id:return None
+    allowed_keys={x.strip() for x in os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST','').split(',') if x.strip()}
+    if research_only and len(allowed_keys)!=1:return None
+    if (job_id or idempotency_key) and stage not in {'RESEARCH','REPORT'}:
+        raise ValueError('Exact-job worker invocation must select RESEARCH or REPORT stage')
+    if job_id and idempotency_key:
+        with db.transaction() as c:
+            if not c.scalar(select(jobs.c.id).where(jobs.c.id==job_id,jobs.c.idempotency_key==idempotency_key)):
+                return None
     with db.transaction(serialized=True) as c:
-        recoverable=and_(jobs.c.idempotency_key==recovery_job_id,jobs.c.status=='BLOCKED_CONFIGURATION',jobs.c.stage=='DONE')
-        eligible=[or_(jobs.c.stage!='DONE',recoverable),jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
+        eligible=[jobs.c.stage!='DONE',jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
                 or_(jobs.c.next_attempt_at.is_(None),jobs.c.next_attempt_at<=now()),
                 or_(jobs.c.lease_until.is_(None),jobs.c.lease_until<now())]
-        if research_only:eligible.append(jobs.c.idempotency_key==recovery_job_id)
+        if research_only:
+            eligible.append(jobs.c.idempotency_key.in_(allowed_keys))
+        if job_id:eligible.append(jobs.c.id==job_id)
+        if idempotency_key:eligible.append(jobs.c.idempotency_key==idempotency_key)
+        if stage:eligible.append(jobs.c.stage==stage)
         row=c.execute(select(jobs).where(*eligible).order_by(jobs.c.created_at).limit(1)).mappings().first()
         if not row:return None
         token=uuid.uuid4().hex
-        stage='RESEARCH' if row['idempotency_key']==recovery_job_id and row['status']=='BLOCKED_CONFIGURATION' and row['stage']=='DONE' else row['stage']
-        c.execute(jobs.update().where(jobs.c.id==row['id']).values(stage=stage,lease_until=later(180),lease_token=token,attempts=row['attempts']+1))
-        return dict(row)|{'stage':stage,'lease_token':token,'attempts':row['attempts']+1}
+        claimed_stage=row['stage']
+        c.execute(jobs.update().where(jobs.c.id==row['id']).values(stage=claimed_stage,lease_until=later(180),lease_token=token,attempts=row['attempts']+1))
+        return dict(row)|{'stage':claimed_stage,'lease_token':token,'attempts':row['attempts']+1}
 
 def context(c,job):
     current=c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one()
@@ -57,13 +67,23 @@ def validate_result(result,inv,job):
 
 def research_step(db,job,engine_factory):
     with db.transaction() as c:inv,candidate=context(c,job)
-    allowed_job_id=os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ID','').strip()
-    exact_key='outreach-v2:inv-9880a65388184eafa7c1075f7bbadb83'
-    if job['idempotency_key']!=exact_key or job['idempotency_key']!=allowed_job_id:
-        raise ConfigurationBlocked('Research is restricted to the configured GeoAIResume test job')
-    if inv['website']!='https://geo-ai-resume.vercel.app/':
+    allowed_job_ids={x.strip() for x in os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST','').split(',') if x.strip()}
+    if len(allowed_job_ids)!=1 or job['idempotency_key'] not in allowed_job_ids:
+        raise ConfigurationBlocked('Research is restricted to the exact configured job allowlist')
+    if inv['website'].rstrip('/')!='https://geo-ai-resume.vercel.app':
         raise ConfigurationBlocked('Research is restricted to the exact authorized GeoAIResume website')
     research_enabled=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').lower()=='true'
+    submission=None;binding=None
+    if candidate['id']=='geo-e2e-rerun-20261105-neu-owner':
+        with db.transaction() as c:
+            submission=c.execute(select(submissions).where(submissions.c.id==job['submission_id'])).mappings().one()
+        binding=parse(inv.get('authority')).get('owner_identity_binding') or {}
+        if (submission['status']!='AUTHORIZED' or submission.get('identity_provider')!='GOOGLE_FORMS_VERIFIED'
+            or not submission.get('identity_reference') or not submission.get('identity_verified_email')
+            or binding.get('id') is None or binding.get('verified_respondent_email','').lower()!=submission['identity_verified_email'].lower()
+            or binding.get('invitation_recipient','').lower()!=inv['recipient'].lower()
+            or binding.get('website')!=inv['website']):
+            raise PermissionError('Fresh GeoAIResume research requires the exact audited binding and verified Google response')
     engine=engine_factory()
     # Reconciliation is a read-only GET. Always allow it so an Engine result
     # completed under its own authorization can advance to report generation.
@@ -74,7 +94,9 @@ def research_step(db,job,engine_factory):
         payload={'profile_id':inv['candidate_id'],'profile_version':inv['id'],
             'profile_type':'owner_controlled_test' if candidate['fixture'] else ('hotel_property' if candidate['kind']=='hotel' else 'business_company'),
             'identity':{'name':inv['company_name'],'website':inv['website'],'industry':candidate['industry'],'location':candidate['location']},
-            'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES'},
+            'consent':{'status':'VERIFIED','consent_id':job['submission_id'],'version':'outreach-consent-v2','research_scope':'Read-only public website analysis and model-based research; no website modifications or monitoring','submission_id':job['submission_id'],'invitation_reference':inv['reference'],'scope_website':inv['website'],'research_interest':'YES','research_authorization':'YES',
+                'verified_identity':({'provider':submission.get('identity_provider'),'email':submission.get('identity_verified_email'),'response_id':submission.get('identity_reference')} if submission else None),
+                'owner_identity_binding':binding},
             'controlled_fixture':False}
         result=engine.start(job['idempotency_key'],payload)
     if research_enabled and result.get('status') in {'QUEUED','RUNNING','RETRY_PENDING','BLOCKED_CONFIGURATION'}:
@@ -179,22 +201,43 @@ def delivery_step(db,job,mail_factory):
         c.execute(deliveries.update().where(deliveries.c.id==delivery['id']).values(status='ACCEPTED',provider_message_id=provider['id'],accepted_at=now(),error=None))
         transition(c,job['id'],stage='DONE',status='COMPLETED',error=None)
 
-def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,renderer=None,max_jobs=20):
+def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,renderer=None,max_jobs=20,
+         response_id=None,response_reference=None,job_id=None,idempotency_key=None,stage=None):
+    response_selector=bool(response_id or response_reference)
+    job_selector=bool(job_id or idempotency_key)
+    if response_id and response_reference:raise ValueError('Select a Forms response by ID or invitation reference, not both')
+    if response_selector and not job_selector and (stage is not None or max_jobs!=0):
+        raise ValueError('Exact-response ingestion-only tick requires max_jobs=0 and no job stage')
+    if job_selector and (not job_id or not idempotency_key or stage not in {'RESEARCH','REPORT'} or max_jobs!=1):
+        raise ValueError('Controlled job tick requires matching job ID/key, RESEARCH or REPORT stage, and max_jobs=1')
+    if response_selector and job_selector:
+        raise ValueError('Ingest the selected response separately before the exact-job invocation')
+    if stage=='REPORT' and not job_id:raise ValueError('Report-only tick requires an exact job ID')
+    if response_selector and job_selector:raise ValueError('A tick cannot ingest and execute at once')
     run_id=uuid.uuid4().hex;errors=[];processed=0
     subsystem_errors={'consent':[],'research':[],'report':[],'delivery':[]}
     with db.transaction() as c:c.execute(worker_runs.insert().values(id=run_id,started_at=now(),status='RUNNING'))
     try:
-        rows=(sheets or Sheets()).read()
+        if response_id or response_reference:
+            rows=(sheets or Sheets()).read(response_id=response_id,response_reference=response_reference)
+        elif not job_selector:
+            rows=(sheets or Sheets()).read()
+        else:
+            rows=[]
         if getattr(rows,'identity_status','VERIFIED')!='VERIFIED':
             warning='Sheets identity verification: '+str(getattr(rows,'identity_error',None) or 'Google Forms verified respondent identity is unavailable')
             errors.append(warning);subsystem_errors['consent'].append(warning)
         for row in rows:
+            if response_reference and parse_sheet_row(row.answers if isinstance(row,VerifiedFormResponse) else row).invitation_reference!=response_reference:
+                continue
+            if response_id and (not isinstance(row,VerifiedFormResponse) or row.identity.get('response_id')!=response_id):
+                continue
             if isinstance(row,VerifiedFormResponse):process(db,row.answers,verified_identity=row.identity)
             else:process(db,row)
     except Exception as e:
         warning='Sheets: '+safe_error(e);errors.append(warning);subsystem_errors['consent'].append(warning)
     for _ in range(max_jobs):
-        job=claim(db)
+        job=claim(db,job_id=job_id if job_selector else None,idempotency_key=idempotency_key if job_selector else None,stage=stage)
         if not job:break
         try:
             stage=job['stage']
@@ -214,7 +257,11 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
         finally:
             with db.transaction() as c:c.execute(jobs.update().where(jobs.c.id==job['id'],jobs.c.lease_token==job['lease_token']).values(lease_until=None,lease_token=None))
     personalization_backfill=None;personalization_error=None
-    try:
+    if response_selector or job_selector:
+        personalization_backfill={'status':'DISABLED','disabled':True,'attempted':0,
+            'reason':'Exact-response/job invocations cannot claim unrelated personalization work.'}
+    else:
+      try:
         # Existing scheduled worker doubles as a bounded, pre-consent V1
         # personalization checkpoint. This path never contacts the GEO Engine.
         from .personalization import backfill
@@ -232,7 +279,7 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
             personalization_backfill={'status':'DISABLED','disabled':True,'attempted':0,
                 'reason':'Personalization is isolated from the recurring full worker.'}
         processed+=personalization_backfill['attempted']
-    except Exception:
+      except Exception:
         personalization_error='Bounded candidate batch failed; claimed candidates remain recoverable'
         errors.append('Personalization backfill: '+personalization_error)
     consent_status='ATTENTION_REQUIRED' if subsystem_errors['consent'] else 'COMPLETED'

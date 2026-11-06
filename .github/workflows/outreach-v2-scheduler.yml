@@ -1,9 +1,6 @@
 name: Outreach V2 consent and research worker
 
 on:
-  schedule:
-    # Offset from the top of the hour, where GitHub reports more schedule delays.
-    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
 
 permissions:

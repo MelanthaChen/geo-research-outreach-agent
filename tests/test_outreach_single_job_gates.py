@@ -43,6 +43,77 @@ def test_research_step_rejects_other_job_before_engine_access(monkeypatch):
         worker.research_step(DummyDB(), {"idempotency_key": "outreach-v2:inv-other"}, Engine)
 
 
+@pytest.mark.parametrize(('suffix','website','recipient','respondent','use_binding'),[
+    ('company-one','https://one.example/','contact@one.example','contact@one.example',False),
+    ('company-two','https://two.example/','contact@two.example','researcher@gmail.com',True),
+])
+def test_two_company_websites_follow_same_verified_research_handoff(monkeypatch,suffix,website,recipient,respondent,use_binding):
+    key='outreach-v2:inv-'+suffix
+    candidate={'id':'candidate-'+suffix,'fixture':False,'kind':'company','industry':'software','location':'US'}
+    invitation={'id':'inv-'+suffix,'candidate_id':candidate['id'],'website':website,
+        'company_name':suffix,'recipient':recipient,'reference':'REF-'+suffix,'consent_status':'AUTHORIZED'}
+    binding={
+        'id':'binding-'+suffix,'candidate_id':candidate['id'],'invitation_id':invitation['id'],
+        'invitation_reference':invitation['reference'],'website':website,
+        'invitation_recipient':recipient,'verified_respondent_email':respondent,
+        'identity_source':'GOOGLE_FORMS_VERIFIED_RESPONDENT_EMAIL',
+        'authorization':'EXPLICIT_OWNER_CONTROLLED_STAGING_BINDING','recorded_at':'2026-11-05T00:00:00Z',
+    } if use_binding else {}
+    invitation['authority']=worker.dump({'owner_identity_binding':binding})
+    submission={'id':'submission-'+suffix,'status':'AUTHORIZED','identity_provider':'GOOGLE_FORMS_VERIFIED',
+        'identity_reference':'forms-'+suffix,'identity_verified_email':respondent,
+        'representative_email':respondent}
+    class Result:
+        def mappings(self):return self
+        def one(self):return submission
+    class Conn:
+        def execute(self,*_args):return Result()
+    class DB:
+        @contextmanager
+        def transaction(self,serialized=False):yield Conn()
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',key)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_ENABLED','true')
+    monkeypatch.setattr(worker,'context',lambda _c,_j:(invitation,candidate))
+    transition_values={}
+    monkeypatch.setattr(worker,'transition',lambda _c,_id,**values:transition_values.update(values))
+    captured={}
+    class Engine:
+        def reconcile(self,_key):return None
+        def start(self,_key,payload):captured.update(payload);return {'status':'QUEUED','job_id':_key}
+        def advance(self,_key):return {'status':'QUEUED','job_id':_key}
+    job={'id':'job-'+suffix,'idempotency_key':key,'submission_id':submission['id'],'started_at':None}
+    worker.research_step(DB(),job,Engine)
+    assert captured['identity']['website']==website
+    assert captured['invitation_id']==invitation['id']
+    assert captured['consent']['verified_identity']['email']==respondent
+    assert captured['consent']['owner_identity_binding']==binding
+    assert transition_values['status']=='QUEUED'
+
+
+def test_research_step_rejects_unverified_or_mismatched_submission_for_any_domain(monkeypatch):
+    key='outreach-v2:inv-generic-company'
+    inv={'id':'inv-generic-company','candidate_id':'candidate-generic','website':'https://company.example/',
+         'company_name':'Company','recipient':'contact@company.example','reference':'REF-generic','authority':'{}'}
+    candidate={'id':'candidate-generic','fixture':False,'kind':'company'}
+    bad={'status':'AUTHORIZED','identity_provider':'SELF_REPORTED','identity_reference':'r',
+        'identity_verified_email':'contact@company.example','representative_email':'contact@company.example'}
+    class Result:
+        def mappings(self):return self
+        def one(self):return bad
+    class Conn:
+        def execute(self,*_args):return Result()
+    class DB:
+        @contextmanager
+        def transaction(self,serialized=False):yield Conn()
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',key)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_ENABLED','true')
+    monkeypatch.setattr(worker,'context',lambda _c,_j:(inv,candidate))
+    class Engine:
+        def __init__(self):pytest.fail('Unverified identity must be rejected before Engine access')
+    with pytest.raises(PermissionError,match='independently verified Google Forms identity'):
+        worker.research_step(DB(),{'id':'job','idempotency_key':key,'submission_id':'s','started_at':None},Engine)
+
+
 def test_report_delivery_is_off_by_default_and_never_constructs_sender(monkeypatch):
     monkeypatch.delenv("OUTREACH_REPORT_DELIVERY_ENABLED", raising=False)
     assert worker.report_delivery_enabled() is False

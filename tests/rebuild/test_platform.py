@@ -56,6 +56,11 @@ def response(db,interest='YES',authorization='YES',id='a',email=None):
       'Business Email Address of the Authorized Company Representative':email or r['recipient'],
       'Do you confirm that you are authorized to provide this permission on behalf of your business?':'Yes'}
 
+def verified_form(row):
+    return {'provider':'GOOGLE_FORMS_VERIFIED',
+        'email':row['Business Email Address of the Authorized Company Representative'],
+        'response_id':'verified-'+sha(dump(row))[:16],'email_collection_type':'VERIFIED'}
+
 def count(db,table):
     with db.transaction() as c:return c.scalar(select(func.count()).select_from(table))
 
@@ -145,12 +150,12 @@ def test_unknown_reference_blocks_and_removed_scope_fields_are_optional(db):
     candidate(db);invite(db);row=response(db);row['Invitation Reference']='GEO-INVALID'
     assert process(db,row)=='BLOCKED_REFERENCE';assert count(db,jobs)==0
     row=response(db);row.pop('Business Name');row.pop('Business Website')
-    assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
+    assert process(db,row,verified_identity=verified_form(row))=='AUTHORIZED';assert count(db,jobs)==1
 
 def test_ordinary_scope_is_resolved_from_invitation_not_self_reported_fields(db):
     candidate(db);invite(db);row=response(db)
     row['Business Name']='An unrelated self-reported name';row['Business Website']='https://other.example'
-    assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
+    assert process(db,row,verified_identity=verified_form(row))=='AUTHORIZED';assert count(db,jobs)==1
 
 def test_historical_reference_does_not_authorize_clean_invitation(db):
     candidate(db);invite(db);row=response(db);row['Invitation Reference']='historical-response-reference'
@@ -158,9 +163,9 @@ def test_historical_reference_does_not_authorize_clean_invitation(db):
 
 def test_owner_consent_is_automatic_and_duplicate_safe(db):
     candidate(db);invite(db);row=response(db)
-    assert process(db,row)=='AUTHORIZED';assert count(db,jobs)==1
-    assert process(db,row)=='DUPLICATE';row['Timestamp']='10/27/2026 22:31:00'
-    assert process(db,row)=='DUPLICATE_CONSENT';assert count(db,jobs)==1
+    assert process(db,row,verified_identity=verified_form(row))=='AUTHORIZED';assert count(db,jobs)==1
+    assert process(db,row,verified_identity=verified_form(row))=='DUPLICATE';row['Timestamp']='10/27/2026 22:31:00'
+    assert process(db,row,verified_identity=verified_form(row))=='DUPLICATE_CONSENT';assert count(db,jobs)==1
 
 def test_fresh_owner_binding_preserves_distinct_verified_google_and_invitation_accounts(db):
     from outreach_v2.consent import record_owner_identity_binding
@@ -208,6 +213,32 @@ def test_fresh_owner_binding_preserves_distinct_verified_google_and_invitation_a
     assert audit and audit[-1]['verified_respondent_email']==respondent and audit[-1]['invitation_recipient']==recipient
     assert count(db,jobs)==1
 
+
+@pytest.mark.parametrize(('ident','website','recipient','respondent'),[
+    ('simulated-company-one','https://one.example/','contact@one.example','owner-one@gmail.com'),
+    ('simulated-company-two','https://two.example/','contact@two.example','owner-two@gmail.com'),
+])
+def test_generic_admin_identity_binding_authorizes_two_distinct_company_scopes(db,ident,website,recipient,respondent):
+    from outreach_v2.consent import record_owner_identity_binding
+    from outreach_v2.migrate import parse
+    candidate(db,ident=ident,email=recipient,website=website,name=ident,fixture=False)
+    invite(db,ids=[ident],key='invitation-'+ident)
+    with db.transaction() as c:
+        invitation=c.execute(select(invitations).where(invitations.c.candidate_id==ident)).mappings().one()
+    assert record_owner_identity_binding(db,invitation['id'],respondent,'admin@example.edu')=='RECORDED'
+    row=response(db,id=ident)
+    verified={'provider':'GOOGLE_FORMS_VERIFIED','email':respondent,
+        'response_id':'forms-'+ident,'email_collection_type':'VERIFIED'}
+    assert process(db,row,verified_identity=verified)=='AUTHORIZED'
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).where(invitations.c.id==invitation['id'])).mappings().one()
+        submission=c.execute(select(submissions).where(submissions.c.invitation_id==invitation['id'])).mappings().one()
+    binding=parse(saved['authority'])['owner_identity_binding']
+    assert saved['consent_status']=='AUTHORIZED'
+    assert saved['website']==website and saved['recipient']==recipient
+    assert submission['identity_verified_email']==respondent
+    assert binding['verified_respondent_email']==respondent and binding['website']==website
+
 def test_exact_response_tick_processes_only_selected_google_forms_response(db,monkeypatch):
     from outreach_v2.integrations import VerifiedFormResponse
     from outreach_v2.worker import tick
@@ -224,8 +255,7 @@ def test_exact_response_tick_processes_only_selected_google_forms_response(db,mo
     assert result['processed_stages']==0
     assert processed==[('GEO-selected','response-selected')]
 
-def test_geoairesume_saved_blocked_scope_revalidates_once_and_ordinary_mismatch_stays_blocked(db):
-    from outreach_v2.db import events
+def test_duplicate_legacy_blocked_scope_does_not_revalidate_without_verified_identity_and_ordinary_mismatch_stays_blocked(db):
     candidate(db,ident='geoairesume-owner-test-v1',name='GeoAIResume',fixture=True)
     invite(db,['geoairesume-owner-test-v1'],key='geoairesume-recovery-test-key')
     ref='GEO-A67A912BDB53E20447BD1E323C935738'
@@ -239,17 +269,14 @@ def test_geoairesume_saved_blocked_scope_revalidates_once_and_ordinary_mismatch_
             representative_name='Yuxuan Chen',representative_role='Owner',representative_email=inv['recipient'],submitted_at=row['Timestamp'],
             received_at=now(),identity_provider=None,identity_verified_email=None,identity_reference=None,status='BLOCKED_SCOPE',
             reason='Declared business identity or website differs from the invitation',raw=dump({'answers':row,'verified_identity':{}})))
-    assert process(db,row)=='AUTHORIZED'
+    assert process(db,row)=='DUPLICATE'
     assert process(db,row)=='DUPLICATE'
     with db.transaction() as c:
         saved=c.execute(select(submissions).where(submissions.c.id==ident)).mappings().one()
         invitation=c.execute(select(invitations).where(invitations.c.reference==ref)).mappings().one()
-        job=c.execute(select(jobs).where(jobs.c.invitation_id==invitation['id'])).mappings().one()
-        history=c.execute(select(events).where(events.c.entity_id==invitation['id'],events.c.event=='AUTHORIZED')).mappings().one()
-        assert saved['status']=='AUTHORIZED' and json.loads(saved['raw'])['answers']==row
-        assert invitation['consent_status']=='AUTHORIZED'
-        assert job['submission_id']==ident and count(db,jobs)==1
-        assert 'Declared business identity' in history['detail']
+        assert saved['status']=='BLOCKED_SCOPE' and json.loads(saved['raw'])['answers']==row
+        assert invitation['consent_status']=='BLOCKED_SCOPE'
+        assert c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitation['id'])) is None
 
     candidate(db,ident='ordinary-company',email='owner@ordinary.example',website='https://ordinary.example',name='Ordinary Company',fixture=False)
     invite(db,['ordinary-company'],key='ordinary-mismatch-test-key')
@@ -327,7 +354,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==8
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==9
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -342,7 +369,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==8
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==9
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
     assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
@@ -351,7 +378,9 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     db.engine.dispose()
 
 def test_conflicting_submission_blocks_queued_job(db):
-    candidate(db);invite(db);process(db,response(db));row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
+    candidate(db);invite(db);first=response(db)
+    process(db,first,verified_identity=verified_form(first))
+    row=response(db,'YES','NO');row['Timestamp']='10/27/2026 22:32:00';process(db,row)
     with db.transaction() as c:assert c.scalar(select(jobs.c.status))=='BLOCKED_CONSENT'
 
 def test_concurrent_requests_create_one_batch(db):
@@ -412,7 +441,7 @@ class EmptySheets:
     def read(self):return []
 
 def test_scheduler_configuration_failure_is_truthful(db):
-    candidate(db);invite(db);process(db,response(db))
+    candidate(db);invite(db);row=response(db);process(db,row,verified_identity=verified_form(row))
     def unavailable():raise ConfigurationBlocked('Engine unavailable for this isolated test')
     result=tick(db,sheets=EmptySheets(),engine_factory=unavailable)
     assert result['status']=='ATTENTION_REQUIRED'
@@ -425,7 +454,9 @@ def test_worker_consent_intake_automatically_creates_job_without_research_execut
     candidate(db);invite(db)
     submitted=response(db)
     class ConsentSheets:
-        def read(self):return [VerifiedFormResponse(submitted,{'provider':'OWNER_BINDING','email':'yuxuan.chen.1031@outlook.com'})]
+        def read(self):return [VerifiedFormResponse(submitted,{'provider':'GOOGLE_FORMS_VERIFIED',
+            'email':'yuxuan.chen.1031@outlook.com','response_id':'google-verified-intake',
+            'email_collection_type':'VERIFIED'})]
     class ReadOnlyEngine:
         def reconcile(self,key):return None
         def start(self,*_):pytest.fail('Research must not start while execution is disabled')
@@ -444,7 +475,10 @@ def test_worker_consent_intake_automatically_creates_job_without_research_execut
     assert count(db,reports)==0 and count(db,deliveries)==0
 
 def _authorized_leased_job(db):
-    candidate(db);invite(db);assert process(db,response(db))=='AUTHORIZED'
+    candidate(db);invite(db);row=response(db)
+    assert process(db,row,verified_identity={'provider':'GOOGLE_FORMS_VERIFIED',
+        'email':row['Business Email Address of the Authorized Company Representative'],
+        'response_id':'forms-authorized-test','email_collection_type':'VERIFIED'})=='AUTHORIZED'
     return claim(db)
 
 def _completed_engine_result(job):
@@ -497,7 +531,12 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
         def reconcile(self,key):return _completed_engine_result(leased)
     research_step(db,leased,CompletedEngine)
     with db.transaction() as c:leased=dict(c.execute(select(jobs).where(jobs.c.id==leased['id'])).mappings().one())|{'lease_token':leased['lease_token']}
-    report_step(db,leased,renderer=lambda _result:b'PK\x03\x04isolated-docx-v1')
+    def genuine_docx(_result):
+        from docx import Document
+        from io import BytesIO
+        document=Document();document.add_paragraph('Research findings for the verified company website.')
+        output=BytesIO();document.save(output);return output.getvalue()
+    report_step(db,leased,renderer=genuine_docx)
     with db.transaction() as c:
         report=dict(c.execute(select(reports).where(reports.c.job_id==leased['id'])).mappings().one())
     class Mail:
@@ -998,7 +1037,8 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
     candidate(db,ident='ordinary-company',email='contact@ordinary.example',
               website='https://ordinary.example',name='Ordinary Company')
     invite(db,[geo_id],key='geoairesume-existing-invitation-123')
-    assert process(db,response(db,id=geo_id))=='AUTHORIZED'
+    geo_response=response(db,id=geo_id)
+    assert process(db,geo_response,verified_identity=verified_form(geo_response))=='AUTHORIZED'
 
     # Exercise the same service call and record relationships that exist in Neon.
     found=list_candidates(db,{'q':'GeoAIResume'})

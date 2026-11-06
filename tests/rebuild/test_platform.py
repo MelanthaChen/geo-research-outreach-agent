@@ -1072,7 +1072,10 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
     assert first['attempted']==1 and first['incomplete']==1 and backend.calls==1
     with db.transaction() as c:
         attempt=c.execute(select(personalization_attempts)).mappings().one()
+        row=c.execute(select(candidates).where(candidates.c.id=='lagoon-ai')).mappings().one()
         assert attempt['status']=='COMPLETED' and attempt['provider_response']
+        assert row['personalization_outcome']=='PERMANENT_EVIDENCE'
+        assert row['personalization_retry_after'] is not None
         c.exec_driver_sql("UPDATE events SET created_at='2000-01-01T00:00:00+00:00' WHERE entity_id='lagoon-ai'")
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_REPROCESS_ENABLED','true')
     second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30,selected_candidate_ids=['lagoon-ai'])

@@ -955,7 +955,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             result['failure_categories']['PREFLIGHT_BLOCKED']=result['failure_categories'].get('PREFLIGHT_BLOCKED',0)+1
             break
         except ValueError as exc:
-            kind=_failure_kind(exc);release(row,'INCOMPLETE',str(exc),retry_kind=kind);result['attempted']+=1;result['incomplete']+=1
+            kind=_failure_kind(exc);release(row,'INCOMPLETE',str(exc),retry_kind=kind,outcome=kind);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1
         except OpenAIRequestError as exc:

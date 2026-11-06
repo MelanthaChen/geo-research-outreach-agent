@@ -36,7 +36,7 @@ concurrency:
 jobs:
   invoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Validate exact selector and invoke one bounded stage
         shell: bash
@@ -80,7 +80,7 @@ jobs:
           PY
           response_file="$RUNNER_TEMP/outreach-exact-response.json"
           status_code="$(curl --silent --show-error --output "$response_file" \
-            --write-out '%{http_code}' --max-time 180 --request POST \
+            --write-out '%{http_code}' --max-time 660 --request POST \
             --header "Authorization: Bearer $WORKER_TOKEN" \
             --header 'Content-Type: application/json' \
             --data-binary "@$payload_file" "${WORKER_URL%/}/api/internal/worker-tick")"

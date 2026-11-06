@@ -198,7 +198,7 @@ class Engine:
         if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine job reconciliation GET failed: HTTP {r.status_code}')
         return r.json()
     def advance(self,key):
-        try:r=self.client.post('/api/v1/integration/outreach-advance/'+quote(key,safe=''))
+        try:r=self.client.post('/api/v1/integration/outreach-advance/'+quote(key,safe=''),timeout=httpx.Timeout(600.0, connect=10.0))
         except httpx.TransportError as e:raise OutcomeUncertain('Engine execution response uncertain; reconcile the durable job') from e
         if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine advance POST authorization denied: HTTP {r.status_code}')
         if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine advance POST failed: HTTP {r.status_code}')

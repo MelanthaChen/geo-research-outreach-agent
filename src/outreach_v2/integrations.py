@@ -109,7 +109,7 @@ def verified_form_rows(form,responses,sheet_headers):
     return output
 
 class Sheets:
-    def read(self):
+    def read(self,*,response_id=None,response_reference=None):
         from google.oauth2 import service_account
         from google.auth.transport.requests import AuthorizedSession
         encoded=os.environ.get('GEO_RESEARCH_SERVICE_ACCOUNT_JSON_B64')
@@ -150,14 +150,28 @@ class Sheets:
                 payload=result.json();responses.extend(payload.get('responses') or [])
                 page_token=payload.get('nextPageToken')
                 if not page_token:break
-            if verified:return SheetRead(verified_form_rows(form,responses,rows[0]),'VERIFIED')
+            if verified:
+                verified_rows=verified_form_rows(form,responses,rows[0])
+                if response_id:
+                    verified_rows=[r for r in verified_rows if r.identity.get('response_id')==response_id]
+                if response_reference:
+                    verified_rows=[r for r in verified_rows if str(r.answers.get('Invitation Reference') or '').strip()==response_reference]
+                if (response_id or response_reference) and len(verified_rows)!=1:
+                    raise ConfigurationBlocked('Exact Google Forms response selector must resolve to exactly one verified response')
+                return SheetRead(verified_rows,'VERIFIED')
             api_counts=Counter(key for item in responses if (key:=_response_timestamp_key(item)) and key>HISTORICAL_RESPONSE_CUTOFF)
             sheet_keys=[_sheet_timestamp_key(item.get('Timestamp'),sheet_timezone) for item in all_sheet_rows]
             sheet_counts=Counter(key for key in sheet_keys if key)
             fresh_rows=[item for item,key in zip(all_sheet_rows,sheet_keys)
                         if key and key>HISTORICAL_RESPONSE_CUTOFF and api_counts[key]==1 and sheet_counts[key]==1]
+            if response_id:
+                raise ConfigurationBlocked('An exact Forms response ID cannot be selected without Google Forms verified identity')
+            if response_reference:
+                fresh_rows=[item for item in fresh_rows if str(item.get('Invitation Reference') or '').strip()==response_reference]
+                if len(fresh_rows)!=1:raise ConfigurationBlocked('Exact invitation reference did not resolve to exactly one response row')
             return SheetRead(fresh_rows,'UNAVAILABLE','Google Form email collection is not VERIFIED')
         except ConfigurationBlocked as exc:
+            if response_id or response_reference:raise
             # Continue processing already-authorized owner fixtures and record
             # ordinary responses as blocked identity, while surfacing the missing
             # verification capability in worker health.

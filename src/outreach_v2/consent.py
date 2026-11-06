@@ -16,6 +16,46 @@ REQUIRED_HEADERS={
 _GEOAIRESUME_FIXTURE_ID='geoairesume-owner-test-v1'
 _GEOAIRESUME_FIXTURE_REFERENCE='GEO-A67A912BDB53E20447BD1E323C935738'
 _GEOAIRESUME_FIXTURE_WEBSITE='https://geo-ai-resume.vercel.app'
+_FRESH_OWNER_TEST={
+    'candidate_id':'geo-e2e-rerun-20261105-neu-owner',
+    'invitation_id':'inv-e2e-rerun-20261105-neu-owner',
+    'reference':'GEO-5C95D39DB2AB9BAFA950C7BA99FEE206',
+    'website':'https://geo-ai-resume.vercel.app/',
+    'recipient':'yuxuan.chen.1031@outlook.com',
+    'respondent':'yuxuan.chen.1031@gmail.com',
+}
+
+def record_owner_identity_binding(db,invitation_id,verified_respondent_email,operator_email):
+    """Persist an audited, explicit cross-account binding for this one staging response."""
+    email=str(verified_respondent_email or '').strip().lower()
+    with db.transaction(serialized=True) as c:
+        inv=c.execute(select(invitations).where(invitations.c.id==invitation_id)).mappings().first()
+        if not inv:raise LookupError('Invitation not found')
+        candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
+        actual=(candidate['id'],inv['id'],inv['reference'],inv['website'],inv['recipient'].lower())
+        expected=(_FRESH_OWNER_TEST['candidate_id'],_FRESH_OWNER_TEST['invitation_id'],_FRESH_OWNER_TEST['reference'],
+                  _FRESH_OWNER_TEST['website'],_FRESH_OWNER_TEST['recipient'])
+        if actual!=expected or host(candidate['website'])!='geo-ai-resume.vercel.app':
+            raise PermissionError('Owner identity binding is restricted to the exact authorized GeoAIResume staging invitation')
+        if email!=_FRESH_OWNER_TEST['respondent']:
+            raise PermissionError('Respondent account does not match the authorized owner-controlled test identity')
+        authority=parse(inv['authority']) or {};binding={
+            'id':'owner-binding-'+sha(inv['id']+':'+email)[:20],
+            'candidate_id':candidate['id'],'invitation_id':inv['id'],'invitation_reference':inv['reference'],
+            'website':inv['website'],'invitation_recipient':inv['recipient'],
+            'verified_respondent_email':email,'identity_source':'GOOGLE_FORMS_VERIFIED_RESPONDENT_EMAIL',
+            'operator':str(operator_email or '').strip().lower(),
+            'authorization':'EXPLICIT_OWNER_CONTROLLED_STAGING_BINDING','recorded_at':now()}
+        prior=authority.get('owner_identity_binding')
+        if prior:
+            if {k:v for k,v in prior.items() if k!='recorded_at'}!={k:v for k,v in binding.items() if k!='recorded_at'}:
+                raise PermissionError('A conflicting owner identity binding is already recorded')
+            return 'ALREADY_RECORDED'
+        authority['owner_identity_binding']=binding
+        c.execute(invitations.update().where(invitations.c.id==inv['id']).values(authority=dump(authority)))
+        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=inv['id'],event='OWNER_TEST_IDENTITY_BOUND',
+            detail=dump(binding),created_at=now()))
+        return 'RECORDED'
 
 def _geoairesume_fixture_name_allowed(inv,candidate,parsed,row,authority):
     """One explicit name alias for the original owner-controlled test invitation."""
@@ -110,6 +150,18 @@ def process(db,row,verified_identity=None):
                 status='BLOCKED_SCOPE';reason='Current company website does not match the invited scope'
             elif authority.get('method')=='OWNER_BINDING' and email==authority.get('representative') and inv['recipient']==authority.get('recipient'):
                 status='AUTHORIZED';reason='Exact established owner identity and website scope'
+            elif (binding:=authority.get('owner_identity_binding') or {}) and \
+                    inv['candidate_id']==_FRESH_OWNER_TEST['candidate_id'] and inv['id']==_FRESH_OWNER_TEST['invitation_id'] and \
+                    inv['reference']==_FRESH_OWNER_TEST['reference'] and inv['website']==_FRESH_OWNER_TEST['website'] and \
+                    inv['recipient'].lower()==_FRESH_OWNER_TEST['recipient'] and \
+                    binding.get('candidate_id')==candidate['id'] and binding.get('invitation_id')==inv['id'] and \
+                    binding.get('invitation_reference')==inv['reference'] and binding.get('website')==inv['website'] and \
+                    binding.get('invitation_recipient','').lower()==inv['recipient'].lower() and \
+                    binding.get('verified_respondent_email','').lower()==str(verification.get('email') or '').lower() and \
+                    binding.get('verified_respondent_email','').lower()==_FRESH_OWNER_TEST['respondent'] and \
+                    verification.get('provider')=='GOOGLE_FORMS_VERIFIED' and \
+                    verification.get('email_collection_type')=='VERIFIED' and bool(verification.get('response_id')):
+                status='AUTHORIZED';reason='Exact audited owner-test binding to Google Forms verified respondent identity'
             elif verification.get('provider')=='GOOGLE_FORMS_VERIFIED' and verification.get('email_collection_type')=='VERIFIED':
                 verified_email=str(verification.get('email') or '').strip().lower()
                 if (verified_email and verification.get('response_id') and verified_email==email==inv['recipient'].lower()):
@@ -135,5 +187,9 @@ def process(db,row,verified_identity=None):
                 _upsert_research_job(c,db,inv,ident,stamp)
             else:
                 c.execute(jobs.update().where(jobs.c.invitation_id==inv['id']).values(status='BLOCKED_CONSENT',error=reason,updated_at=stamp))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=inv['id'],event=status,detail=reason,created_at=stamp))
+            detail={'reason':reason}
+            if status=='AUTHORIZED' and verification.get('provider')=='GOOGLE_FORMS_VERIFIED':
+                detail.update({'response_id':verification.get('response_id'),'verified_respondent_email':verification.get('email'),
+                    'invitation_recipient':inv['recipient'],'website':inv['website'],'identity_binding_id':(authority.get('owner_identity_binding') or {}).get('id')})
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=inv['id'],event=status,detail=dump(detail),created_at=stamp))
         return status

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hmac,json,os,uuid,hashlib,secrets,re,csv,io
 from datetime import datetime,timedelta,timezone
+from decimal import Decimal
 from pathlib import Path
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
@@ -9,7 +10,7 @@ from sqlalchemy import select,func
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
-    personalization_authorizations,candidates as candidate_table)
+    personalization_authorizations,personalization_attempts,candidates as candidate_table)
 from . import auth,service
 from .consent import record_owner_identity_binding
 from .migrate import dump
@@ -18,6 +19,18 @@ from outreach_agent.google_forms_integration import FORM_VIEW_URL,INVITATION_REF
 STATIC=Path(__file__).parent/'static'
 COOKIE='outreach_v2_session';CSRF='outreach_v2_csrf'
 EMAIL_RE=re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+
+def _existing_100_manifest_ids(connection):
+    """Return members of intact persisted 100-ID grants without changing them."""
+    members=set()
+    for grant in connection.execute(select(personalization_authorizations.c.candidate_ids,
+            personalization_authorizations.c.candidate_ids_sha256)).mappings():
+        try: ids=json.loads(grant['candidate_ids'])
+        except (TypeError,ValueError): continue
+        encoded=json.dumps(ids,separators=(',',':'))
+        if len(ids)==100 and len(set(ids))==100 and hashlib.sha256(encoded.encode()).hexdigest()==grant['candidate_ids_sha256']:
+            members.update(ids)
+    return members
 
 def create_app(database=None):
     app=FastAPI(title='GEO Research Outreach',docs_url=None,redoc_url=None,openapi_url=None)
@@ -609,21 +622,8 @@ def create_app(database=None):
             'last_worker_run':dict(run) if run else None}
     @app.post('/api/admin/personalization/run')
     async def admin_personalization_run(request:Request):
-        """Run one explicitly selected, bounded semantic batch under admin auth."""
         auth.require_role(request.state.session,'ADMIN')
-        try: body=await request.json()
-        except Exception: raise ValueError('Invalid personalization request')
-        if not isinstance(body,dict) or set(body)!={'candidate_ids'} or not isinstance(body['candidate_ids'],list):
-            raise ValueError('Provide only an explicit candidate_ids array')
-        ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
-        if not 1<=len(ids)<=5: raise ValueError('Personalization batches must contain 1–5 exact candidate IDs')
-        with db.transaction() as c:
-            found=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids))).scalars().all()
-        if set(found)!=set(ids): raise LookupError('One or more selected candidate IDs were not found')
-        from .personalization import backfill
-        result=await run_in_threadpool(backfill,db,limit=len(ids),concurrency=1,time_budget_seconds=300,
-            authorized_candidate_ids=ids)
-        return result
+        raise ValueError('Direct personalization execution is disabled; an approved persisted budget authorization is required')
     @app.post('/api/admin/personalization/authorizations')
     async def create_personalization_authorization(request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -632,12 +632,14 @@ def create_app(database=None):
         if not isinstance(body,dict) or set(body)!={'candidate_ids','total_budget_usd'} or not isinstance(body['candidate_ids'],list):
             raise ValueError('Provide exact candidate_ids and total_budget_usd')
         ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
-        if len(ids)!=100: raise ValueError('Expanded cohort authorization must name exactly 100 existing candidate IDs')
+        if len(ids)!=len(body['candidate_ids']): raise ValueError('Candidate authorization IDs must be non-empty and unique')
+        if len(ids) not in {1,100}: raise ValueError('Authorization must name exactly one pilot candidate or the existing 100-candidate cohort')
         from decimal import Decimal,InvalidOperation
         try: amount=Decimal(str(body['total_budget_usd']))
         except (InvalidOperation,TypeError): raise ValueError('Budget must be a decimal USD amount')
-        if not amount.is_finite() or not Decimal('0.25')<amount<=Decimal('5.00'):
-            raise ValueError('Expanded cohort budget must be greater than $0.25 and no more than $5.00')
+        one_candidate=len(ids)==1
+        if not amount.is_finite() or (one_candidate and not Decimal('0')<amount<=Decimal('0.05')) or (not one_candidate and not Decimal('0.25')<amount<=Decimal('5.00')):
+            raise ValueError('One-candidate pilot authorization must be at most $0.05; 100-candidate authorization must be greater than $0.25 and no more than $5.00')
         with db.transaction() as c:
             rows=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
                 candidate_table.c.fixture.is_(False),candidate_table.c.suppressed.is_(False),
@@ -646,6 +648,24 @@ def create_app(database=None):
             if set(rows)!=set(ids): raise ValueError('Every authorized ID must be an existing, unsuppressed, verified eligible company or hotel')
             if c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id.in_(ids))):
                 raise ValueError('Candidates with existing invitations cannot enter a personalization grant')
+            if one_candidate:
+                candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0])).mappings().one()
+                if candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0':
+                    raise ValueError('Semolina Kitchen + Bar is excluded from new provider attempts')
+                if candidate['personalization_status']=='READY' or candidate['personalization_analysis_version']=='semantic-openai-v1':
+                    raise ValueError('Candidate already has successful semantic personalization')
+                if candidate['personalization_retry_after'] and candidate['personalization_retry_after']>now():
+                    raise ValueError('Candidate has a future retry restriction')
+                if candidate['personalization_lease_until'] and candidate['personalization_lease_until']>now():
+                    raise ValueError('Candidate has an active personalization lease')
+                attempts=c.execute(select(personalization_attempts.c.status).where(personalization_attempts.c.candidate_id==ids[0])).scalars().all()
+                if any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts):
+                    raise ValueError('Candidate has unresolved provider spend or an open reservation')
+                manifest_member=c.execute(select(pilot_members.c.candidate_id).join(pilot_cohorts,
+                    pilot_cohorts.c.id==pilot_members.c.cohort_id).where(pilot_members.c.candidate_id==ids[0],
+                    pilot_cohorts.c.target_size==100)).first()
+                if not manifest_member or ids[0] not in _existing_100_manifest_ids(c):
+                    raise ValueError('Candidate is not a member of a saved 100-candidate cohort manifest')
         ident='personalization-auth-'+uuid.uuid4().hex
         encoded=json.dumps(ids,separators=(',',':'))
         digest=hashlib.sha256(encoded.encode()).hexdigest()
@@ -654,9 +674,30 @@ def create_app(database=None):
                 candidate_ids_sha256=digest,total_budget_usd=str(amount),status='PENDING',
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
-                detail=json.dumps({'candidate_count':100,'candidate_ids_sha256':digest,'total_budget_usd':str(amount),
+                detail=json.dumps({'candidate_count':len(ids),'scope':'ONE_CANDIDATE' if one_candidate else 'COHORT_100',
+                    'candidate_ids_sha256':digest,'total_budget_usd':str(amount),
                     'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
-        return {'id':ident,'candidate_count':100,'candidate_ids_sha256':digest,'total_budget_usd':str(amount),'status':'PENDING'}
+        return {'id':ident,'candidate_count':len(ids),'candidate_ids_sha256':digest,'total_budget_usd':str(amount),'status':'PENDING'}
+    @app.get('/api/admin/personalization/eligible-pilot-candidates')
+    def eligible_personalization_pilot_candidates(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        with db.transaction() as c:
+            rows=c.execute(select(candidate_table.c.id,candidate_table.c.name,candidate_table.c.website,
+                candidate_table.c.kind).join(pilot_members,pilot_members.c.candidate_id==candidate_table.c.id)
+                .join(pilot_cohorts,pilot_cohorts.c.id==pilot_members.c.cohort_id)
+                .where(pilot_cohorts.c.target_size==100,candidate_table.c.fixture.is_(False),
+                    candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
+                    candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidate_table.c.kind.in_(['company','hotel']),
+                    candidate_table.c.personalization_status!='READY',candidate_table.c.personalization_analysis_version.is_(None),
+                    candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
+                    (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
+                    (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
+                    ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists(),
+                    ~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
+                        personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists())
+                .order_by(candidate_table.c.id)).mappings().all()
+            saved_members=_existing_100_manifest_ids(c)
+        return {'rows':[dict(row) for row in rows if row['id'] in saved_members]}
     @app.post('/api/admin/personalization/authorizations/{ident}/approve')
     async def approve_personalization_authorization(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -667,6 +708,25 @@ def create_app(database=None):
             row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
             if not row: raise LookupError('Personalization authorization not found')
             if row['status']!='PENDING': raise ValueError('Authorization is no longer pending')
+            ids=json.loads(row['candidate_ids'])
+            if len(ids) not in {1,100} or len(set(ids))!=len(ids) or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=row['candidate_ids_sha256']:
+                raise ValueError('Authorization candidate manifest is invalid')
+            budget=Decimal(row['total_budget_usd'])
+            if not budget.is_finite() or (len(ids)==1 and not Decimal('0')<budget<=Decimal('0.05')) or (len(ids)==100 and not Decimal('0.25')<budget<=Decimal('5.00')):
+                raise ValueError('Authorization spending limit is invalid for its candidate scope')
+            if len(ids)==1:
+                candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0]).with_for_update()).mappings().first()
+                attempts=c.execute(select(personalization_attempts.c.status).where(personalization_attempts.c.candidate_id==ids[0])).scalars().all()
+                if (not candidate or candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0'
+                    or candidate['fixture'] or candidate['suppressed'] or candidate['website_status']!='VERIFIED'
+                    or candidate['qualification'] not in {'ELIGIBLE','QUALIFIED'} or candidate['kind'] not in {'company','hotel'}
+                    or candidate['personalization_status']=='READY' or candidate['personalization_analysis_version']=='semantic-openai-v1'
+                    or (candidate['personalization_retry_after'] and candidate['personalization_retry_after']>now())
+                    or (candidate['personalization_lease_until'] and candidate['personalization_lease_until']>now())
+                    or any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts)
+                    or c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id==ids[0]))
+                    or ids[0] not in _existing_100_manifest_ids(c)):
+                    raise ValueError('One-candidate pilot eligibility changed; authorization cannot be approved')
             c.execute(personalization_authorizations.update().where(personalization_authorizations.c.id==ident).values(
                 status='APPROVED',approved_by=request.state.session['email'],approved_at=now()))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED',
@@ -683,18 +743,32 @@ def create_app(database=None):
                 personalization_authorizations.c.status=='APPROVED')).mappings().first()
             if not grant: raise LookupError('Approved personalization budget authorization not found')
         ids=json.loads(grant['candidate_ids'])
+        if len(ids) not in {1,100}: raise ValueError('Persisted authorization has an invalid candidate scope')
         if hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=grant['candidate_ids_sha256']:
             raise ValueError('Approved candidate manifest integrity check failed')
+        single_pilot=len(ids)==1
+        grant_budget=Decimal(grant['total_budget_usd'])
+        if not grant_budget.is_finite() or (single_pilot and not Decimal('0')<grant_budget<=Decimal('0.05')) or (not single_pilot and not Decimal('0.25')<grant_budget<=Decimal('5.00')):
+            raise ValueError('Persisted authorization has an invalid spending limit for its candidate scope')
         with db.transaction() as c:
             pending=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
                 candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
                 candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
                 candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
                 candidate_table.c.personalization_status!='READY',
+                candidate_table.c.personalization_analysis_version.is_(None),
                 (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
                 (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
-                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()
-                ).order_by(candidate_table.c.id).limit(5)).scalars().all()
+                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists(),
+                (candidate_table.c.id.in_(ids) if single_pilot else True),
+                candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
+                (select(pilot_members.c.candidate_id).join(pilot_cohorts,pilot_cohorts.c.id==pilot_members.c.cohort_id)
+                    .where(pilot_members.c.candidate_id==candidate_table.c.id,pilot_cohorts.c.target_size==100).exists()),
+                (~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
+                    personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists())
+                ).order_by(candidate_table.c.id).limit(1 if single_pilot else 5)).scalars().all()
+            if single_pilot and ids[0] not in _existing_100_manifest_ids(c):
+                raise ValueError('Authorized candidate is no longer part of an intact saved 100-ID manifest')
         if not pending:return {'status':'COMPLETED','attempted':0,'completed':0,'remaining':0,'invitations_created':0}
         from .personalization import backfill
         result=await run_in_threadpool(backfill,db,limit=len(pending),concurrency=1,time_budget_seconds=300,
@@ -702,7 +776,7 @@ def create_app(database=None):
         result['invitations_created']=0
         with db.transaction() as c:
             ready=c.scalar(select(func.count()).select_from(candidate_table).where(candidate_table.c.id.in_(ids),candidate_table.c.personalization_status=='READY'))
-            result['remaining']=100-ready
+            result['remaining']=len(ids)-ready if single_pilot else 100-ready
             result['eligible_remaining']=c.scalar(select(func.count()).select_from(candidate_table).where(
                 candidate_table.c.id.in_(ids),candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
                 candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',

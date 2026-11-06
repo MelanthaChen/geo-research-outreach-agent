@@ -1280,3 +1280,94 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     after={t.name:count(db,t) for t in (invitations,batches,submissions,jobs)}
     assert after=={'invitations':1,'batches':1,'submissions':0,'jobs':0}
     assert all(after[t.name]-before[t.name] == (1 if t in (invitations,batches) else 0) for t in (invitations,batches,submissions,jobs))
+
+def test_scoped_one_candidate_authorization_create_approve_and_run_requires_persisted_approval(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import pilot_cohorts,personalization_authorizations,personalization_attempts
+    candidate(db,ident='manifest-pilot',name='Eligible Pilot',fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(pilot_cohorts.insert().values(id='saved-100',name='Saved exact manifest',target_size=100,
+            created_by='owner@example.org',created_at=now()))
+        c.execute(pilot_members.insert().values(cohort_id='saved-100',candidate_id='manifest-pilot',position=1,eligibility_snapshot='{}'))
+        manifest=['manifest-pilot']+[f'manifest-member-{i:03}' for i in range(99)]
+        manifest_encoded=dump(manifest)
+        manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
+        c.execute(personalization_authorizations.insert().values(id='pending-five',candidate_ids=manifest_encoded,
+            candidate_ids_sha256=manifest_hash,total_budget_usd='5.00',status='PENDING',created_by='owner@example.org',created_at=now()))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    assert TestClient(create_app(db)).post('/api/admin/personalization/run',json={'candidate_ids':['manifest-pilot']}).status_code==401
+    assert client.post('/api/admin/personalization/authorizations',json={
+        'candidate_ids':['manifest-pilot'],'total_budget_usd':'0.05'}).status_code==403
+    listed=client.get('/api/admin/personalization/eligible-pilot-candidates')
+    assert listed.status_code==200 and [x['id'] for x in listed.json()['rows']]==['manifest-pilot']
+    # The former direct execution path is explicitly closed.
+    assert client.post('/api/admin/personalization/run',headers=headers,json={'candidate_ids':['manifest-pilot']}).status_code==422
+    pending=client.post('/api/admin/personalization/authorizations',headers=headers,json={
+        'candidate_ids':['manifest-pilot'],'total_budget_usd':'0.05'})
+    assert pending.status_code==200 and pending.json()['candidate_count']==1 and pending.json()['status']=='PENDING'
+    grant_id=pending.json()['id']
+    with db.transaction() as c:
+        row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==grant_id)).mappings().one()
+        five=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id=='pending-five')).mappings().one()
+    assert row['candidate_ids']=='["manifest-pilot"]' and row['candidate_ids_sha256']==pending.json()['candidate_ids_sha256']
+    assert row['created_by']=='chen.yuxuan9@northeastern.edu' and row['status']=='PENDING'
+    assert five['status']=='PENDING' and five['total_budget_usd']=='5.00' and len(json.loads(five['candidate_ids']))==100
+    # Pending authorization cannot execute.
+    assert client.post(f'/api/admin/personalization/authorizations/{grant_id}/run',headers=headers,json={}).status_code==404
+    too_large=client.post('/api/admin/personalization/authorizations',headers=headers,json={
+        'candidate_ids':['manifest-pilot'],'total_budget_usd':'0.0501'})
+    assert too_large.status_code==422
+    wrong_scope=client.post('/api/admin/personalization/authorizations',headers=headers,json={
+        'candidate_ids':['manifest-pilot']*100,'total_budget_usd':'0.05'})
+    assert wrong_scope.status_code==422
+    approved=client.post(f'/api/admin/personalization/authorizations/{grant_id}/approve',headers=headers,json={'confirm_budget':True})
+    assert approved.status_code==200 and approved.json()['status']=='APPROVED'
+    def fake_backfill(_db,**kwargs):
+        assert kwargs['limit']==1 and kwargs['authorized_candidate_ids']==['manifest-pilot']
+        assert kwargs['approved_cumulative_budget_usd']=='0.05'
+        return {'status':'COMPLETED','attempted':1,'completed':1,'actual_cost_usd':'0.02'}
+    import outreach_v2.personalization as personalization
+    monkeypatch.setattr(personalization,'backfill',fake_backfill)
+    result=client.post(f'/api/admin/personalization/authorizations/{grant_id}/run',headers=headers,json={})
+    assert result.status_code==200 and result.json()['attempted']==1 and result.json()['invitations_created']==0
+    assert count(db,personalization_attempts)==0 and count(db,invitations)==0
+    with db.transaction() as c:
+        approved_row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==grant_id)).mappings().one()
+    assert approved_row['approved_by']=='chen.yuxuan9@northeastern.edu' and approved_row['approved_at']
+
+
+def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import pilot_cohorts,personalization_attempts,personalization_runs,personalization_authorizations
+    candidate(db,ident='unknown-spend-pilot',name='Unknown Spend Candidate',fixture=False,personalization=False)
+    candidate(db,ident='osm:0049f46cc4ea2f170b9628b0',name='Semolina Kitchen + Bar',fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(pilot_cohorts.insert().values(id='saved-100',name='Saved exact manifest',target_size=100,
+            created_by='owner@example.org',created_at=now()))
+        for i,ident in enumerate(['unknown-spend-pilot','osm:0049f46cc4ea2f170b9628b0']):
+            c.execute(pilot_members.insert().values(cohort_id='saved-100',candidate_id=ident,position=i+1,eligibility_snapshot='{}'))
+        c.execute(personalization_runs.insert().values(id='prior-run',started_at=now(),status='ATTENTION_REQUIRED',candidate_limit=1,
+            run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',actual_cost_usd='0',detail='{}'))
+        c.execute(personalization_attempts.insert().values(id='unknown-attempt',candidate_id='unknown-spend-pilot',run_id='prior-run',
+            evidence_fingerprint='fp',operation_id='old',model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',
+            reserved_usd='0.05',created_at=now()))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    eligible=client.get('/api/admin/personalization/eligible-pilot-candidates').json()['rows']
+    assert not eligible
+    for ident in ['unknown-spend-pilot','osm:0049f46cc4ea2f170b9628b0']:
+        response=client.post('/api/admin/personalization/authorizations',headers=headers,json={
+            'candidate_ids':[ident],'total_budget_usd':'0.05'})
+        assert response.status_code==422
+    assert count(db,personalization_authorizations)==0 and count(db,personalization_attempts)==1

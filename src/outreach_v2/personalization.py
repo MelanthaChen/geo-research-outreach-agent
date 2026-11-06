@@ -696,10 +696,11 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     if approved_cumulative is not None:
         # Larger lifetime budgets are accepted only from a separately persisted
         # administrator-approved grant; the per-run and per-candidate caps stay fixed.
-        if not Decimal(MAX_PILOT_SPEND_USD) < approved_cumulative <= Decimal('5.00'):
+        if not Decimal('0') < approved_cumulative <= Decimal('5.00'):
             return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
-                'reason':'Approved cumulative authorization must be greater than $0.25 and no more than $5.00.'}
+                'reason':'Approved cumulative authorization must be positive and no more than $5.00.'}
         cumulative_budget=approved_cumulative
+        run_budget=min(run_budget,approved_cumulative)
     configured_limit = int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit)))
     if not 1 <= configured_limit <= MAX_PILOT_CANDIDATES:
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,

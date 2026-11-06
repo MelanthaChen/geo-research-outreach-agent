@@ -91,8 +91,11 @@ def host(url):
 def same_site(a,b):
     return bool(host(a)) and host(a)==host(b)
 
-def validate(personalization, website):
+def validate(personalization, website, record=None):
     if not isinstance(personalization,dict): raise ValueError('Personalization must be an object')
+    from .owner_test_fixtures import synthetic_fixture_copy
+    if synthetic_fixture_copy(record,personalization):
+        return personalization
     if personalization.get('data_classification') != 'OBSERVED':
         raise ValueError('Observed personalization is missing')
     for field in REQUIRED:
@@ -127,7 +130,7 @@ def validate(personalization, website):
     return personalization
 
 def render(name, website, p, form_url, reference, record=None, identity=None, template_config=None):
-    validate(p,website)
+    validate(p,website,record=record)
     identity=identity or {}
     template_config=template_config or {}
     researcher=(identity.get('researcher_name') or template_config.get('researcher_name') or os.getenv('OUTREACH_RESEARCHER_NAME') or '').strip()
@@ -141,13 +144,18 @@ def render(name, website, p, form_url, reference, record=None, identity=None, te
     description=str(p.get('business_description') or '')
     is_fixture=bool(record and record.get('fixture') is True and record.get('id') and
                     record.get('name')==name and record.get('website')==website)
-    label='OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n' if is_fixture else ''
+    from .owner_test_fixtures import synthetic_fixture_copy
+    synthetic_fixture=synthetic_fixture_copy(record,p)
+    label=('OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n'
+           'SYNTHETIC PERSONALIZATION - NOT VERIFIED WEBSITE EVIDENCE\n\n' if synthetic_fixture else
+           'OWNER-CONTROLLED STAGING TEST - NOT PRODUCTION OUTREACH\n\n' if is_fixture else '')
     copy=p.get('recipient_copy') or {}
     business_summary=copy.get('business_summary') or ''
     distinctive_detail=copy.get('distinctive_detail') or ''
     research_relevance=copy.get('research_relevance') or ''
     observation=(f'One detail that stood out: {copy.get("supported_observation")}\n\n'
-                 if copy.get('supported_observation') else '')
+                 if copy.get('supported_observation') else
+                 'No website observation is asserted for this synthetic test fixture.\n\n' if synthetic_fixture else '')
     subject_template=template_config.get('subject') or DEFAULT_INVITATION_SUBJECT
     body_template=template_config.get('body') or DEFAULT_INVITATION_BODY
     validate_invitation_template(subject_template,body_template,sender=sender,reply_to=reply_to,
@@ -165,6 +173,8 @@ def render(name, website, p, form_url, reference, record=None, identity=None, te
     }
     body=render_template(body_template,values)
     subject=render_template(subject_template,values)
+    if synthetic_fixture:
+        return subject,body
     from .quality import quality_decisions
     decisions=quality_decisions(p,body,record=record,candidate_name=name,website=website)
     if not decisions['OUTREACH_REVIEW_READY']['passed']:

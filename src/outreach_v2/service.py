@@ -4,6 +4,7 @@ from sqlalchemy import select,func,and_,or_,exists
 from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
+from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, synthetic_fixture_copy
 from outreach_agent.google_forms_integration import prefilled_form_url
 
 FILTERS={'kind','industry','location','website_status','contact','eligibility','personalization_status','invitation_status','consent_status','research_status','q'}
@@ -18,12 +19,22 @@ def email_contacts():
                 ~exists(select(suppressions.c.email).where(suppressions.c.email==contacts.c.email)))
 
 def readiness():
+    standard_copy=and_(candidates.c.personalization_quality_status=='PASS',
+        candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0,
+        select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()==1)
+    fixture_copies=[]
+    for ident, fixture in OWNER_TEST_FIXTURES.items():
+        authorized_owner=exists(select(contacts.c.id).where(contacts.c.candidate_id==candidates.c.id,
+            contacts.c.email==fixture['recipient'],contacts.c.verification=='OWNER_AUTHORIZED',
+            contacts.c.suppressed.is_(False),
+            ~exists(select(suppressions.c.email).where(suppressions.c.email==contacts.c.email))))
+        fixture_copies.append(and_(candidates.c.id==ident,candidates.c.website==fixture['website'],
+            candidates.c.fixture.is_(True),candidates.c.personalization.like('%'+SYNTHETIC_CLASSIFICATION+'%'),
+            select(func.count()).where(contacts.c.candidate_id==candidates.c.id).correlate(candidates).scalar_subquery()==1,
+            authorized_owner))
+    safe_copy=or_(standard_copy,*fixture_copies)
     return and_(candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
-        candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',
-        candidates.c.personalization_quality_status=='PASS',
-        candidates.c.personalization_analysis_version=='semantic-openai-v1',
-        candidates.c.personalization_version>0,
-        select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()==1,
+        candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',safe_copy,
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
 
 def predicates(filters):
@@ -59,6 +70,11 @@ def list_candidates(db,filters=None,page=1,page_size=50):
         query=select(candidates,readiness().label('eligible')).where(*clauses).order_by(candidates.c.name,candidates.c.id).limit(page_size).offset((page-1)*page_size)
         rows=[dict(r) for r in c.execute(query).mappings()]
         for row in rows:
+            p=parse(row['personalization'])
+            row['owner_test_fixture_ready']=bool(row['eligible'] and synthetic_fixture_copy(row,p))
+            standard_personalization=(row.get('personalization_quality_status')=='PASS' and
+                row.get('personalization_analysis_version')=='semantic-openai-v1' and int(row.get('personalization_version') or 0)>0)
+            row['eligible']=bool(row['eligible'] and (row['owner_test_fixture_ready'] or standard_personalization))
             row.pop('personalization',None)
             row['contacts']=[dict(x) for x in c.execute(select(contacts.c.email,contacts.c.url,contacts.c.verification).where(contacts.c.candidate_id==row['id'])).mappings()]
             row['invitation']=c.execute(select(invitations.c.id,invitations.c.send_status,invitations.c.consent_status,invitations.c.exported_at).where(invitations.c.candidate_id==row['id'])).mappings().first()
@@ -101,15 +117,17 @@ def detail(db,ident):
 
 def eligible_recipient(c,row):
     reasons=[]
-    if row.get('personalization_analysis_version')!='semantic-openai-v1' or int(row.get('personalization_version') or 0)<1:
+    personalization=parse(row['personalization'])
+    synthetic_fixture=synthetic_fixture_copy(row,personalization)
+    if not synthetic_fixture and (row.get('personalization_analysis_version')!='semantic-openai-v1' or int(row.get('personalization_version') or 0)<1):
         reasons.append('Personalization is legacy, missing, or outdated; current semantic version required')
     if row['suppressed']:reasons.append('Candidate suppressed or withdrawn')
     if row['website_status']!='VERIFIED':reasons.append('Official website not verified')
     if row['qualification'] not in {'ELIGIBLE','QUALIFIED'}:reasons.append('Candidate not qualified')
     if c.scalar(select(invitations.c.id).where(invitations.c.candidate_id==row['id'])):reasons.append('Invitation already exists; download its saved batch')
-    try:validate(parse(row['personalization']),row['website'])
+    try:validate(personalization,row['website'],record=row)
     except ValueError as e:reasons.append(str(e))
-    if row.get('personalization_quality_status')!='PASS':
+    if not synthetic_fixture and row.get('personalization_quality_status')!='PASS':
         reasons.append('Personalization quality is '+str(row.get('personalization_quality_status') or 'UNVERIFIED')+
                        (': '+str(row.get('personalization_quality_errors') or 'quality audit required') if row.get('personalization_quality_errors') else ''))
     emails=set()
@@ -122,6 +140,10 @@ def eligible_recipient(c,row):
         if any(x in (contact['purpose'] or '').lower() for x in ('privacy','career','recruit','personal','legal','abuse')):continue
         emails.add(email)
     if len(emails)!=1:reasons.append('No single valid first-party business email' if not emails else 'Multiple recipient emails; no unambiguous recipient')
+    if synthetic_fixture:
+        expected=OWNER_TEST_FIXTURES[row['id']]['recipient']
+        if len(emails)==1 and next(iter(emails))!=expected:
+            reasons.append('Synthetic test copy is restricted to its exact owner-authorized recipient')
     return (next(iter(emails)) if len(emails)==1 else None),reasons
 
 def select_pilot_cohort(c, limit=100):

@@ -8,7 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select,func
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
-    admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,candidates as candidate_table)
+    admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
+    personalization_authorizations,candidates as candidate_table)
 from . import auth,service
 from .consent import record_owner_identity_binding
 from .migrate import dump
@@ -586,6 +587,109 @@ def create_app(database=None):
             'reply_to':os.environ.get('OUTREACH_REPLY_TO'),
             'report_delivery_configured':all(os.environ.get(k) for k in ['OUTREACH_REPORT_SENDER','OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET']),
             'last_worker_run':dict(run) if run else None}
+    @app.post('/api/admin/personalization/run')
+    async def admin_personalization_run(request:Request):
+        """Run one explicitly selected, bounded semantic batch under admin auth."""
+        auth.require_role(request.state.session,'ADMIN')
+        try: body=await request.json()
+        except Exception: raise ValueError('Invalid personalization request')
+        if not isinstance(body,dict) or set(body)!={'candidate_ids'} or not isinstance(body['candidate_ids'],list):
+            raise ValueError('Provide only an explicit candidate_ids array')
+        ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
+        if not 1<=len(ids)<=5: raise ValueError('Personalization batches must contain 1–5 exact candidate IDs')
+        with db.transaction() as c:
+            found=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids))).scalars().all()
+        if set(found)!=set(ids): raise LookupError('One or more selected candidate IDs were not found')
+        from .personalization import backfill
+        result=await run_in_threadpool(backfill,db,limit=len(ids),concurrency=1,time_budget_seconds=300,
+            authorized_candidate_ids=ids)
+        return result
+    @app.post('/api/admin/personalization/authorizations')
+    async def create_personalization_authorization(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        try: body=await request.json()
+        except Exception: raise ValueError('Invalid personalization authorization')
+        if not isinstance(body,dict) or set(body)!={'candidate_ids','total_budget_usd'} or not isinstance(body['candidate_ids'],list):
+            raise ValueError('Provide exact candidate_ids and total_budget_usd')
+        ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
+        if len(ids)!=100: raise ValueError('Expanded cohort authorization must name exactly 100 existing candidate IDs')
+        from decimal import Decimal,InvalidOperation
+        try: amount=Decimal(str(body['total_budget_usd']))
+        except (InvalidOperation,TypeError): raise ValueError('Budget must be a decimal USD amount')
+        if not amount.is_finite() or not Decimal('0.25')<amount<=Decimal('5.00'):
+            raise ValueError('Expanded cohort budget must be greater than $0.25 and no more than $5.00')
+        with db.transaction() as c:
+            rows=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
+                candidate_table.c.fixture.is_(False),candidate_table.c.suppressed.is_(False),
+                candidate_table.c.website_status=='VERIFIED',candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+                candidate_table.c.kind.in_(['company','hotel']))).scalars().all()
+            if set(rows)!=set(ids): raise ValueError('Every authorized ID must be an existing, unsuppressed, verified eligible company or hotel')
+            if c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id.in_(ids))):
+                raise ValueError('Candidates with existing invitations cannot enter a personalization grant')
+        ident='personalization-auth-'+uuid.uuid4().hex
+        encoded=json.dumps(ids,separators=(',',':'))
+        digest=hashlib.sha256(encoded.encode()).hexdigest()
+        with db.transaction(serialized=True) as c:
+            c.execute(personalization_authorizations.insert().values(id=ident,candidate_ids=encoded,
+                candidate_ids_sha256=digest,total_budget_usd=str(amount),status='PENDING',
+                created_by=request.state.session['email'],created_at=now()))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
+                detail=json.dumps({'candidate_count':100,'candidate_ids_sha256':digest,'total_budget_usd':str(amount),
+                    'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
+        return {'id':ident,'candidate_count':100,'candidate_ids_sha256':digest,'total_budget_usd':str(amount),'status':'PENDING'}
+    @app.post('/api/admin/personalization/authorizations/{ident}/approve')
+    async def approve_personalization_authorization(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or body.get('confirm_budget') is not True:
+            raise ValueError('Explicit budget confirmation is required')
+        with db.transaction(serialized=True) as c:
+            row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
+            if not row: raise LookupError('Personalization authorization not found')
+            if row['status']!='PENDING': raise ValueError('Authorization is no longer pending')
+            c.execute(personalization_authorizations.update().where(personalization_authorizations.c.id==ident).values(
+                status='APPROVED',approved_by=request.state.session['email'],approved_at=now()))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED',
+                detail=json.dumps({'candidate_ids_sha256':row['candidate_ids_sha256'],'total_budget_usd':row['total_budget_usd'],
+                    'approved_by':request.state.session['email']},sort_keys=True),created_at=now()))
+        return {'id':ident,'status':'APPROVED','total_budget_usd':row['total_budget_usd'],'candidate_ids_sha256':row['candidate_ids_sha256']}
+    @app.post('/api/admin/personalization/authorizations/{ident}/run')
+    async def run_personalization_authorization(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or set(body): raise ValueError('No request fields are accepted')
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==ident,
+                personalization_authorizations.c.status=='APPROVED')).mappings().first()
+            if not grant: raise LookupError('Approved personalization budget authorization not found')
+        ids=json.loads(grant['candidate_ids'])
+        if hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=grant['candidate_ids_sha256']:
+            raise ValueError('Approved candidate manifest integrity check failed')
+        with db.transaction() as c:
+            pending=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
+                candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
+                candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
+                candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+                candidate_table.c.personalization_status!='READY',
+                (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
+                (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
+                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()
+                ).order_by(candidate_table.c.id).limit(5)).scalars().all()
+        if not pending:return {'status':'COMPLETED','attempted':0,'completed':0,'remaining':0,'invitations_created':0}
+        from .personalization import backfill
+        result=await run_in_threadpool(backfill,db,limit=len(pending),concurrency=1,time_budget_seconds=300,
+            authorized_candidate_ids=pending,approved_cumulative_budget_usd=grant['total_budget_usd'])
+        result['invitations_created']=0
+        with db.transaction() as c:
+            ready=c.scalar(select(func.count()).select_from(candidate_table).where(candidate_table.c.id.in_(ids),candidate_table.c.personalization_status=='READY'))
+            result['remaining']=100-ready
+            result['eligible_remaining']=c.scalar(select(func.count()).select_from(candidate_table).where(
+                candidate_table.c.id.in_(ids),candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
+                candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
+                candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidate_table.c.personalization_status!='READY',
+                (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
+                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()))
+        return result
     @app.post('/api/internal/worker-tick')
     async def scheduled_worker_tick(request:Request):
         expected=os.environ.get('OUTREACH_WORKER_TOKEN','')

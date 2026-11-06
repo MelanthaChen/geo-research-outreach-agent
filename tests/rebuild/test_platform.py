@@ -861,6 +861,39 @@ def test_semantic_backfill_fails_closed_without_exact_authorized_cohort(db, monk
     assert count(db,personalization_runs)==0 and count(db,personalization_attempts)==0
 
 
+@pytest.mark.parametrize('kind',['company','hotel'])
+def test_semantic_business_analysis_does_not_require_a_verified_email_and_includes_hotels(db,monkeypatch,kind):
+    from outreach_v2.personalization import backfill
+    from outreach_v2.semantic_openai import PreflightError
+    from test_semantic_openai_adapter import profile
+    import outreach_v2.personalization as module
+    candidate(db,ident='contactless-'+kind,email=None,website='https://www.lagoonny.com/',name='Lagoon New York',
+        personalization=False,fixture=False)
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='contactless-'+kind).values(kind=kind))
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='contactless-'+kind))
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.20')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
+    class Backend:
+        calls=0
+        def analyze_once(self,*args,**kwargs):
+            self.calls+=1
+            raise PreflightError('test-only stop after proving eligible analysis path')
+    backend=Backend()
+    result=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['contactless-'+kind],
+        backend_factory=lambda:backend,token_count=lambda _:1000,time_budget_seconds=30)
+    assert result['attempted']==0 and backend.calls==1, result
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id=='contactless-'+kind)).mappings().one()
+    assert row['personalization_attempts']==0
+    # Invitation readiness retains the exactly-one verified first-party contact gate.
+    assert list_candidates(db,{'q':'Lagoon New York'})['eligible_matching']==0
+
+
 def test_semantic_backfill_never_expands_explicit_cohort_across_repeated_runs(db, monkeypatch):
     from outreach_v2.db import personalization_runs, personalization_attempts
     from outreach_v2.personalization import backfill

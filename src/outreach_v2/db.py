@@ -104,6 +104,11 @@ personalization_attempts = table('personalization_attempts', col('id', String, p
     col('actual_cost_usd', String), col('request_id', String), col('usage', Text),
     col('provider_response', Text), col('error_code', String), col('created_at', nullable=False), col('finished_at'),
     UniqueConstraint('candidate_id', 'evidence_fingerprint', 'operation_id', name='uq_personalization_attempt_operation'))
+personalization_authorizations = table('personalization_authorizations', col('id', String, primary_key=True),
+    col('candidate_ids', Text, nullable=False), col('candidate_ids_sha256', String, nullable=False),
+    col('total_budget_usd', String, nullable=False), col('status', String, nullable=False),
+    col('created_by', String, nullable=False), col('created_at', nullable=False),
+    col('approved_by'), col('approved_at'))
 sessions = table('sessions', col('token_hash', String, primary_key=True), col('csrf_hash'), col('email'),
     col('expires_at'), col('created_at'))
 auth_attempts = table('auth_attempts', col('id', String, primary_key=True), col('source', String, index=True),

@@ -344,6 +344,17 @@ def observe(url, html, stamp, name=None, truncated=False, additional_pages=(), f
     """
     raw_pages=[(url,html,truncated),*additional_pages]
     pages=[_page_profile(page_url,source,cut) for page_url,source,cut in raw_pages]
+    return observe_profiles(pages, stamp, name=name, failed_pages=failed_pages)
+
+
+def observe_profiles(pages, stamp, name=None, failed_pages=()):
+    """Use previously captured extractor profiles without reconstructing HTML.
+
+    The same evidence/claim producer serves both live and cached captures.
+    Callers must validate the cache checksum and candidate identity first.
+    """
+    if not pages:
+        raise ValueError('No captured first-party page profiles are available')
     source_urls=[page['url'] for page in pages]
     facts=[]
     paragraphs=[]
@@ -512,7 +523,8 @@ def observe(url, html, stamp, name=None, truncated=False, additional_pages=(), f
             'claim_support':{'business_description':[description_fact['id']],
                              'company_strength':[strength_fact['id']]},
             'evidence_profile':{'pages':[{**{k:page[k] for k in ('url','type','title','headings','truncated')},
-                                          'links':page['links'][:100]}
+                                          'links':page['links'][:100],
+                                          **{k:page[k] for k in ('retrieved_at','content_hash','source_evidence_id') if page.get(k)}}
                                          for page in pages],
                                 'facts':profile_facts,'relationships':relationships},
             'evidence':{'description_quote':description_fact['evidence_excerpt'],
@@ -603,8 +615,6 @@ def _safe_json(value):
 
 
 def _eligible_query(stamp, selected_ids=()):
-    first_party_email_count = select(func.count(func.distinct(contacts.c.email))).where(
-        email_contacts()).correlate(candidates).scalar_subquery()
     no_prior_invitation = ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id))
     personalization_state = candidates.c.personalization_status != 'READY'
     if selected_ids:
@@ -614,11 +624,11 @@ def _eligible_query(stamp, selected_ids=()):
         personalization_state = or_(personalization_state, legacy_selected)
     retry_state=or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp)
     if selected_ids: retry_state=or_(retry_state,candidates.c.id.in_(selected_ids))
-    return and_(candidates.c.kind == 'company', candidates.c.fixture.is_(False),
+    return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), personalization_state, retry_state,
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until < stamp),
-        first_party_email_count == 1, no_prior_invitation)
+        no_prior_invitation)
 
 
 def _analysis_fingerprint(selection):
@@ -628,7 +638,7 @@ def _analysis_fingerprint(selection):
 
 def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_seconds=240,
              authorized_candidate_ids=None, selected_candidate_ids=None,
-             backend_factory=None, token_count=None):
+             backend_factory=None, token_count=None, approved_cumulative_budget_usd=None):
     """Run the real semantic pipeline; paid execution is disabled unless explicitly configured.
 
     Candidate websites are fetched and attributed before an OpenAI request is possible.
@@ -677,11 +687,19 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     run_budget = _money_env('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD')
     cumulative_budget = _money_env('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD')
     per_candidate_cap = _money_env('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD')
+    approved_cumulative=(Decimal(str(approved_cumulative_budget_usd)) if approved_cumulative_budget_usd is not None else None)
     if not (Decimal('0') < run_budget <= Decimal(MAX_PILOT_SPEND_USD) and
             Decimal('0') < cumulative_budget <= Decimal(MAX_PILOT_SPEND_USD) and
             Decimal('0') < per_candidate_cap <= Decimal(str(MAX_ESTIMATED_USD))):
         return {'status': 'BLOCKED_CONFIGURATION', 'disabled': True, 'attempted': 0,
                 'reason': 'Run and cumulative budgets must be positive and no greater than the authorized $0.25 pilot ceiling; per-candidate cap must remain within $0.05.'}
+    if approved_cumulative is not None:
+        # Larger lifetime budgets are accepted only from a separately persisted
+        # administrator-approved grant; the per-run and per-candidate caps stay fixed.
+        if not Decimal(MAX_PILOT_SPEND_USD) < approved_cumulative <= Decimal('5.00'):
+            return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
+                'reason':'Approved cumulative authorization must be greater than $0.25 and no more than $5.00.'}
+        cumulative_budget=approved_cumulative
     configured_limit = int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit)))
     if not 1 <= configured_limit <= MAX_PILOT_CANDIDATES:
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
@@ -706,7 +724,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     lease_token = uuid.uuid4().hex
     lease_until = (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).isoformat()
     eligible = _eligible_query(stamp, selected_ids)
-    backlog = and_(candidates.c.kind == 'company', candidates.c.fixture.is_(False),
+    backlog = and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), candidates.c.personalization_status != 'READY',
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id)))

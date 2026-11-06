@@ -63,7 +63,7 @@ jobs:
           if mode=='ingest_response':
               response_id=os.environ.get('RESPONSE_ID','').strip()
               reference=os.environ.get('RESPONSE_REFERENCE','').strip()
-              if bool(response_id)==bool(reference) or os.environ.get('JOB_ID','').strip() or os.environ.get('IDEMPOTENCY_KEY','').strip() or os.environ.get('STAGE','').strip():
+              if bool(response_id)==bool(reference) or os.environ.get('JOB_ID','').strip() or os.environ.get('IDEMPOTENCY_KEY','').strip():
                   raise SystemExit('Ingestion mode requires exactly one response selector and no job selector.')
               body={'max_jobs':0}
               if response_id: body['response_id']=response_id

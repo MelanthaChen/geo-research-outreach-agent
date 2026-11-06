@@ -72,7 +72,14 @@ OPENAI_ANALYSIS_SCHEMA: Mapping[str, Any] = _obj({
     "recommendation_decision": {"type": "string", "enum": ["RECOMMEND", "ABSTAIN"]},
 })
 
-SYSTEM_INSTRUCTION = """Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification."""
+SYSTEM_INSTRUCTION = """Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. In products_services, cite evidence explicitly classified PRODUCT_OR_SERVICE; do not substitute identity, audience, or general capability evidence. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification."""
+
+_UNSUPPORTED_COMPARATIVE_RE = re.compile(
+    r"\b(?:best|largest|smallest|leading|only|unique|first(?![-‐‑‒–— ]party\b)|most)\b", re.I)
+
+
+def _has_unsupported_comparative(text: str) -> bool:
+    return bool(_UNSUPPORTED_COMPARATIVE_RE.search(text))
 
 
 class PreflightError(RuntimeError):
@@ -668,7 +675,8 @@ def validate_openai_response(raw: Mapping[str, Any], evidence: Mapping[str, Any]
         for value in re.findall(number_pattern, claim_text):
             if value.casefold().replace(" ", "") not in evidence_text.casefold().replace(" ", ""):
                 raise ValueError(f"Claim {cid} introduces an unsupported numerical claim")
-        for comparative in re.findall(r"\b(?:best|largest|smallest|leading|only|unique|first|most)\b", claim_text, re.I):
+        for match in _UNSUPPORTED_COMPARATIVE_RE.finditer(claim_text):
+            comparative = match.group(0)
             if not re.search(rf"\b{re.escape(comparative)}\b", evidence_text, re.I):
                 raise ValueError(f"Claim {cid} introduces an unsupported comparative claim")
         # Claim entailment, contradiction, and numerical/comparative validity
@@ -761,12 +769,11 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
         cited = [facts.get(ref) for ref in refs]
         excerpt = " ".join(item.get("exact_excerpt", "") for item in cited if item)
         text = str(claim.get("text") or "")
-        unsupported_comparison = bool(re.search(
-            r"\b(?:not\s+just|more\s+than|less\s+than|better\s+than|worse\s+than|"
-            r"best|largest|smallest|only|unique|leading|most|first)\b", text, re.I))
-        if unsupported_comparison and not re.search(
-                r"\b(?:not\s+just|more\s+than|less\s+than|better\s+than|worse\s+than|"
-                r"best|largest|smallest|only|unique|leading|most|first)\b", excerpt, re.I):
+        unsupported_comparison = _has_unsupported_comparative(text) or bool(re.search(
+            r"\b(?:not\s+just|more\s+than|less\s+than|better\s+than|worse\s+than)\b", text, re.I))
+        supported_comparison = _has_unsupported_comparative(excerpt) or bool(re.search(
+            r"\b(?:not\s+just|more\s+than|less\s+than|better\s+than|worse\s+than)\b", excerpt, re.I))
+        if unsupported_comparison and not supported_comparison:
             status = "EXCLUDED_UNSUPPORTED_COMPARISON"
             reason = "The cited first-party excerpts do not establish the comparative baseline or superlative."
         else:

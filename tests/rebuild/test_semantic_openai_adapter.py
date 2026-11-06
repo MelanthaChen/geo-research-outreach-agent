@@ -11,6 +11,7 @@ from outreach_v2.semantic_openai import (
     MAX_OUTPUT_TOKENS,
     MODEL,
     OPENAI_ANALYSIS_SCHEMA,
+    SYSTEM_INSTRUCTION,
     OpenAIRequestError,
     OpenAIResponsesBackend,
     PreflightError,
@@ -330,6 +331,22 @@ def test_unsupported_numbers_and_comparatives_are_rejected():
     raw["proposed_claims"][0]["text"] = "Lagoon New York has 42 stores."
     with pytest.raises(ValueError, match="unsupported numerical"):
         validate_openai_response(raw, selection.to_input())
+
+
+def test_first_party_is_not_mistaken_for_unsupported_superlative():
+    selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
+    raw = response()
+    raw["proposed_claims"][0]["text"] = "Lagoon New York's first-party website describes its concept store."
+    assert validate_openai_response(raw, selection.to_input()) is None
+
+    raw = response()
+    raw["proposed_claims"][0]["text"] = "Lagoon New York is the first provider in Brooklyn."
+    with pytest.raises(ValueError, match="unsupported comparative"):
+        validate_openai_response(raw, selection.to_input())
+
+
+def test_prompt_requires_product_service_evidence_for_offerings():
+    assert "products_services, cite evidence explicitly classified PRODUCT_OR_SERVICE" in SYSTEM_INSTRUCTION
 
 
 def test_tokenizer_failure_fails_closed_before_any_request():

@@ -12,6 +12,20 @@ from docx import Document
 REQUIRED = ("Research scope", "Observed website evidence", "Proposed optimizations",
             "Research sources", "Model-generated interpretations", "Research questions", "Real baseline measurements",
             "Post-deployment measurements", "Limitations and next steps")
+MIN_INTERMEDIATE_PAGE_WORDS = 50
+MIN_INTERMEDIATE_PAGE_CHARS = 250
+
+
+def validate_intermediate_page_density(page_texts: list[str]) -> None:
+    """Reject near-empty pages between substantive pages in rendered output."""
+    for index, page in enumerate(page_texts[1:-1], start=2):
+        normalized = page.strip()
+        words = re.findall(r"\b\w+\b", normalized)
+        if len(words) < MIN_INTERMEDIATE_PAGE_WORDS or len(normalized) < MIN_INTERMEDIATE_PAGE_CHARS:
+            raise ValueError(
+                f"Rendered intermediate page {index} is nearly empty "
+                f"({len(words)} words, {len(normalized)} characters)"
+            )
 
 
 def check(path: Path, render: bool = True) -> int:
@@ -71,9 +85,15 @@ def check(path: Path, render: bool = True) -> int:
                 raise SystemExit("PDF page count does not match rendered page images")
             page_text = subprocess.run(["pdftotext", "-layout", str(pdf), "-"], check=True,
                                        capture_output=True, text=True).stdout.split("\f")
+            if len(page_text) < count:
+                raise SystemExit("Rendered PDF text page count is incomplete")
             for index, page in enumerate(page_text[:count], 1):
                 if len(page.strip()) < 40:
                     raise SystemExit(f"Rendered page {index} is nearly empty")
+            try:
+                validate_intermediate_page_density(page_text[:count])
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
             print(f"DOCX_RENDER_QA=PASS pages={count}")
             return count
     print("DOCX_STRUCTURAL_QA=PASS")

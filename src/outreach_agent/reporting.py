@@ -245,8 +245,10 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     doc.add_heading("Research questions", level=1)
     _add_table(doc, ["Question", "Evidence basis"], [[q, "Derived from rendered page content and stated demo scope"] for q in result.get("questions") or []])
 
+    # Let the section flow after the research-question table. An unconditional
+    # page break stranded that short table by itself on an intermediate page
+    # in Microsoft Word, even though the next section fit immediately after it.
     baseline_heading = doc.add_heading("Real baseline measurements", level=1)
-    baseline_heading.paragraph_format.page_break_before = True
     baseline = result.get("baseline") or {}
     _add_table(doc, ["Measure", "Observed value"], [
         ["Provider", _text(baseline.get("provider"), "Not run")],

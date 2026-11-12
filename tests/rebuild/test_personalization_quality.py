@@ -163,6 +163,20 @@ def test_structured_profile_ignores_hidden_and_embedded_builder_paragraphs():
     assert 'imaginary services' not in profile['visible_text']
     assert all('Builder payload' not in fact['value'] for fact in profile['structured_facts'])
 
+def test_structured_profile_extracts_visible_paragraphless_leaf_blocks_only():
+    from outreach_v2.personalization import _page_profile
+    html='''<html><head><title>Example Services</title></head><body>
+    <nav><div>Navigation links and unrelated menu text long enough to look like a claim.</div></nav>
+    <main><h1>Example Services</h1><section><div>Our team installs and maintains commercial fireproofing systems for structural steel projects across the region.</div>
+    <ul><li>Spray-applied fire-resistive materials for interior and exterior steel.</li><li>Intumescent coatings for exposed structural members.</li></ul></section></main>
+    <footer><div>Subscribe to our newsletter for updates from our company and partners.</div></footer></body></html>'''
+    profile=_page_profile('https://example.test/services',html)
+    facts=' '.join(profile['paragraphs'])
+    assert 'installs and maintains commercial fireproofing systems' in facts
+    assert 'Spray-applied fire-resistive materials' in facts
+    assert 'Intumescent coatings' in facts
+    assert 'Navigation links' not in facts and 'Subscribe to our newsletter' not in facts
+
 def test_generic_descriptions_strengths_and_recommendations_are_rejected():
     p={'data_classification':'OBSERVED','business_description':'The bounded sample contains factual business and service information.',
        'company_strength':'The bounded sample contains factual business and service information.',

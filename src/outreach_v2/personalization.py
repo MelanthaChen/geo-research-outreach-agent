@@ -153,8 +153,9 @@ def _evidence_urls(home_url, html):
     # Keep the site's own information architecture: links are selected from
     # actual visible labels and same-site URLs, including editorial and event
     # pages that are relevant for non-commerce companies.
-    priorities = ('about', 'event', 'staff', 'service', 'product', 'solution',
-                  'library', 'faq', 'question', 'pricing', 'menu', 'book')
+    priorities = ('about', 'contact', 'mission', 'community', 'program', 'event',
+                  'staff', 'service', 'product', 'solution', 'library', 'faq',
+                  'question', 'pricing', 'menu', 'book')
     found = []
     for link in soup.find_all('a', href=True):
         target = urljoin(home_url, link['href'].strip())
@@ -186,6 +187,33 @@ def _page_profile(page_url, html, truncated=False):
             text = ' '.join(node.get_text(' ', strip=True).split())
             if len(text) >= 35 and not re.search(r'newsletter|leave this field empty|follow us', text, re.I):
                 sections.append({'heading': active_heading, 'text': text})
+    # Wix, catalog, and storefront pages often publish their visible claims in
+    # div/span/list blocks rather than <p>. Preserve those on-page statements
+    # as evidence, but select only leaf-like blocks so parent containers do not
+    # duplicate the same copy. The HTML was already pruned of nav, footer,
+    # hidden, script, and embedded content above.
+    block_tags = {'li', 'div', 'section', 'article', 'main', 'span', 'td', 'dd'}
+    existing_text = {section['text'] for section in sections}
+    for node in visible_soup.find_all(True):
+        if re.fullmatch(r'h[1-6]', node.name or ''):
+            active_heading = ' '.join(node.get_text(' ', strip=True).split()) or title
+            continue
+        if node.name not in block_tags:
+            continue
+        if node.find_parent('p'):
+            continue
+        text = ' '.join(node.get_text(' ', strip=True).split())
+        if len(text) < 35 or text in existing_text or re.search(r'newsletter|leave this field empty|follow us', text, re.I):
+            continue
+        if any(child.name in block_tags and len(' '.join(child.get_text(' ', strip=True).split())) >= 35
+               for child in node.find_all(True)):
+            continue
+        # A block containing a paragraph already has a more exact evidence
+        # boundary and must not become a second, broader claim.
+        if node.name != 'li' and node.find('p'):
+            continue
+        sections.append({'heading': active_heading, 'text': text})
+        existing_text.add(text)
     links = []
     for a in visible_soup.find_all('a', href=True):
         label = ' '.join(a.get_text(' ', strip=True).split())
@@ -216,7 +244,7 @@ def _page_profile(page_url, html, truncated=False):
         try: walk(json.loads(script.string or script.get_text()))
         except (ValueError, TypeError): continue
 
-    useful_paragraphs = [p for p in paragraphs if len(p) >= 35 and not re.search(r'newsletter|leave this field empty|follow us', p, re.I)]
+    useful_paragraphs = [section['text'] for section in sections[:100]]
     path = urlparse(page_url).path.casefold()
     if 'event' in path: page_type = 'events'
     elif 'staff' in path or 'pick' in path: page_type = 'editorial'
@@ -686,7 +714,9 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                      candidates.c.personalization_error.not_in([
                          'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
                          'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
-                         'Website robots policy could not be checked']))),
+                         'Website robots policy could not be checked',
+                         'A grounded business description cannot yet be established from the sampled same-site pages',
+                         'No visible first-party business claims were available in the permitted page sample']))),
             saved_response, no_unresolved_attempt)
         no_attempt = ~exists(select(personalization_attempts.c.id).where(
             personalization_attempts.c.candidate_id == candidates.c.id))
@@ -701,6 +731,18 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                 'Website robots policy could not be checked']),
             candidates.c.personalization_outcome.in_(['PERMANENT_EVIDENCE', 'TRANSIENT_HTTP']),
             no_attempt)
+        evidence_refresh_no_attempt = ~exists(select(personalization_attempts.c.id).where(
+            personalization_attempts.c.candidate_id == candidates.c.id))
+        evidence_refresh_not_used = ~exists(select(events.c.id).where(
+            events.c.entity_id == candidates.c.id,
+            events.c.event == 'PERSONALIZATION_FIRST_PARTY_EVIDENCE_REFRESH_V1'))
+        first_party_evidence_refresh = and_(
+            candidates.c.id.in_(retry_candidate_ids),
+            candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+            candidates.c.personalization_error.in_([
+                'A grounded business description cannot yet be established from the sampled same-site pages',
+                'No visible first-party business claims were available in the permitted page sample']),
+            evidence_refresh_no_attempt, evidence_refresh_not_used)
         replayable_local_rejection = and_(
             or_(and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
                      candidates.c.personalization_error.in_([
@@ -719,6 +761,7 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                          'No model-cited, first-party target-business description is available')),
             saved_response, no_unresolved_attempt)
         retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
+                        first_party_evidence_refresh,
                         replayable_local_rejection)
     return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         or_(candidates.c.personalization_outcome.is_(None),
@@ -944,6 +987,32 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             result['budget_stopped']=True
             break
         try:
+            if (row.get('personalization_outcome') == 'PERMANENT_EVIDENCE'
+                    and row.get('personalization_error') in {
+                        'A grounded business description cannot yet be established from the sampled same-site pages',
+                        'No visible first-party business claims were available in the permitted page sample'}):
+                # One bounded evidence-only refresh is permitted for records
+                # that failed before any provider attempt. The durable event
+                # prevents repeatedly crawling the same unchanged candidate
+                # after another insufficient-evidence result.
+                with db.transaction(serialized=True) as c:
+                    prior_attempt = c.execute(select(personalization_attempts.c.id).where(
+                        personalization_attempts.c.candidate_id == row['id']).limit(1)).first()
+                    prior_refresh = c.execute(select(events.c.id).where(
+                        events.c.entity_id == row['id'],
+                        events.c.event == 'PERSONALIZATION_FIRST_PARTY_EVIDENCE_REFRESH_V1').limit(1)).first()
+                    if prior_attempt or prior_refresh:
+                        c.execute(candidates.update().where(
+                            candidates.c.id == row['id'],
+                            candidates.c.personalization_lease_token == lease_token).values(
+                                personalization_lease_token=None, personalization_lease_until=None))
+                        result['skipped_existing_attempt'] += 1
+                        continue
+                    c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=row['id'],
+                        event='PERSONALIZATION_FIRST_PARTY_EVIDENCE_REFRESH_V1',
+                        detail=_safe_json({'extractor_version':'visible-blocks-v1',
+                            'reason':'retry first-party page extraction after preserving verified visible div/list content',
+                            'provider_attempts_before_refresh':0}), created_at=now()))
             observed=_sample(fetcher,row['website'],now(),row.get('name'))
             selection=select_evidence(observed,company_name=row['name'],website=row['website'])
             # Keep the existing synchronous worker endpoint within its bounded

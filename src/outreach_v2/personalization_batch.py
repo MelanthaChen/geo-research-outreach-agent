@@ -53,7 +53,9 @@ def eligibility(ids, stamp=None):
                  candidates.c.personalization_error.not_in([
                      'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
                      'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
-                     'Website robots policy could not be checked']))),
+                     'Website robots policy could not be checked',
+                     'A grounded business description cannot yet be established from the sampled same-site pages',
+                     'No visible first-party business claims were available in the permitted page sample']))),
         replayable_response)
     repaired_service_classification = and_(
         candidates.c.personalization_outcome.in_([
@@ -93,6 +95,18 @@ def eligibility(ids, stamp=None):
             'Website robots policy could not be checked']),
         candidates.c.personalization_outcome.in_(['PERMANENT_EVIDENCE', 'TRANSIENT_HTTP']),
         no_provider_attempt)
+    evidence_refresh_no_attempt = ~exists(select(personalization_attempts.c.id).where(
+        personalization_attempts.c.candidate_id == candidates.c.id))
+    evidence_refresh_not_used = ~exists(select(events.c.id).where(
+        events.c.entity_id == candidates.c.id,
+        events.c.event == 'PERSONALIZATION_FIRST_PARTY_EVIDENCE_REFRESH_V1'))
+    first_party_evidence_refresh = and_(
+        candidates.c.id.in_(ids),
+        candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+        candidates.c.personalization_error.in_([
+            'A grounded business description cannot yet be established from the sampled same-site pages',
+            'No visible first-party business claims were available in the permitted page sample']),
+        evidence_refresh_no_attempt, evidence_refresh_not_used)
     # A known-cost response is replayed only for deterministic repairs that
     # changed the validation contract. A replay that has already failed the
     # current contract is not itself a reason to become eligible again: doing
@@ -115,7 +129,7 @@ def eligibility(ids, stamp=None):
                       corrected_validation_outcome, repaired_service_classification,
                       repaired_cited_description,
                       legacy_no_geo_recommendation,
-                      redirect_or_http_repair)
+                      redirect_or_http_repair, first_party_evidence_refresh)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
         or_(candidates.c.personalization_outcome.is_(None),

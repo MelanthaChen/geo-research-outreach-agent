@@ -1192,6 +1192,15 @@ def test_personalization_expands_to_three_grounded_same_site_pages():
     assert all(url.startswith('https://example.test/') for url in urls)
     assert not any('external.example' in url for url in urls)
 
+def test_evidence_url_selection_prioritizes_about_contact_and_mission_within_page_cap():
+    from outreach_v2.personalization import _evidence_urls
+    html='''<a href="/events">Events</a><a href="/contact">Contact</a>
+        <a href="/about">About</a><a href="/mission">Our Mission</a>
+        <a href="https://other.example/community">Community</a>'''
+    urls=_evidence_urls('https://example.test/',html)
+    assert len(urls)==3
+    assert set(urls)=={'https://example.test/about','https://example.test/contact','https://example.test/mission'}
+
 def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_response(db, monkeypatch):
     from outreach_v2.db import personalization_attempts, personalization_versions, personalization_runs
     from outreach_v2.personalization import backfill
@@ -1957,6 +1966,54 @@ def test_batch_retry_override_is_limited_to_no_attempt_v1_recommendation_deferra
         manifest=[exact,paid,other,redirect,redirect_attempted]+[f'unused-{i}' for i in range(95)]
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
     assert set(eligible_ids)=={exact,redirect}
+
+
+def test_one_time_first_party_evidence_refresh_only_selects_no_attempt_exact_failures(db):
+    from outreach_v2.db import events, personalization_attempts, personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    from outreach_v2.personalization import _eligible_query
+    exact_errors={
+        'description':'A grounded business description cannot yet be established from the sampled same-site pages',
+        'visible':'No visible first-party business claims were available in the permitted page sample'}
+    allowed=list(exact_errors)
+    cases=allowed+['attempted','refreshed','different-error','identity','unknown','no-auto']
+    for ident in cases:
+        candidate(db,ident='refresh-'+ident,name=ident,fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='refresh-run',started_at=now(),status='COMPLETED',
+            candidate_limit=5,run_budget_usd='0.25',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0',detail='{}'))
+        for ident in allowed:
+            c.execute(candidates.update().where(candidates.c.id=='refresh-'+ident).values(
+                personalization_outcome='PERMANENT_EVIDENCE',personalization_error=exact_errors[ident],
+                personalization_retry_after=future,personalization_attempts=1))
+        for ident,error,outcome in (
+                ('attempted',exact_errors['description'],'PERMANENT_EVIDENCE'),
+                ('refreshed',exact_errors['description'],'PERMANENT_EVIDENCE'),
+                ('different-error','Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
+                ('identity','Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
+                ('unknown',exact_errors['visible'],'PERMANENT_EVIDENCE'),
+                ('no-auto',exact_errors['description'],'NO_AUTOMATIC_RETRY')):
+            c.execute(candidates.update().where(candidates.c.id=='refresh-'+ident).values(
+                personalization_outcome=outcome,personalization_error=error,
+                personalization_retry_after=future,personalization_attempts=1))
+        c.execute(personalization_attempts.insert().values(id='attempt-refresh-attempted',
+            candidate_id='refresh-attempted',run_id='refresh-run',evidence_fingerprint='old',
+            operation_id='paid-op',model='gpt-5.4-mini-2026-03-17',status='COMPLETED',
+            reserved_usd='0.05',actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='attempt-refresh-unknown',
+            candidate_id='refresh-unknown',run_id='refresh-run',evidence_fingerprint='old',
+            operation_id='unknown-op',model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',
+            reserved_usd='0.05',actual_cost_usd='0',provider_response=None,created_at=now()))
+        c.execute(events.insert().values(id='refresh-used-event',entity_id='refresh-refreshed',
+            event='PERSONALIZATION_FIRST_PARTY_EVIDENCE_REFRESH_V1',detail='{}',created_at=now()))
+        manifest=['refresh-'+ident for ident in cases]+[f'manifest-{i}' for i in range(100-len(cases))]
+        selected=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
+        inner=c.execute(select(candidates.c.id).where(_eligible_query(now(),retry_candidate_ids=[
+            'refresh-'+ident for ident in cases]))).scalars().all()
+    assert set(selected)=={'refresh-description','refresh-visible'}
+    assert set(inner)=={'refresh-description','refresh-visible'}
 
 
 def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repair(db):

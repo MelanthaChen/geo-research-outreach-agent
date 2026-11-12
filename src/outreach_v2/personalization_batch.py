@@ -63,8 +63,17 @@ def eligibility(ids, stamp=None):
             'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
             # v3 recognizes explicit first-party English catalog and Spanish
             # offer statements on otherwise ordinary About/Home pages.
-            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2']),
+            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2',
+            # This repair separately checks cited first-party description
+            # facts for direct offering language and selects existing
+            # BUSINESS_DESCRIPTION claims when their citations overlap exact
+            # identity evidence. It does not alter the archived prompt.
+            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3']),
         candidates.c.personalization_error == 'No concise, cited first-party service statement is available',
+        replayable_response)
+    repaired_cited_description = and_(
+        candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+        candidates.c.personalization_error == 'No model-cited, first-party target-business description is available',
         replayable_response)
     # These are narrow, deterministic repairs. The legacy V1 error was raised
     # before website evidence or a provider request existed; it is safe to run
@@ -104,6 +113,7 @@ def eligibility(ids, stamp=None):
     retry_state = or_(candidates.c.personalization_retry_after.is_(None),
                       candidates.c.personalization_retry_after <= stamp,
                       corrected_validation_outcome, repaired_service_classification,
+                      repaired_cited_description,
                       legacy_no_geo_recommendation,
                       redirect_or_http_repair)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),

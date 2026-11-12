@@ -82,6 +82,66 @@ def _has_unsupported_comparative(text: str) -> bool:
     return bool(_UNSUPPORTED_COMPARATIVE_RE.search(text))
 
 
+_OFFERING_TERMS = re.compile(
+    r"\b(?:accommodations?|amenities|breakfast|brunch|classes|cleaning|coffee|coffees|"
+    r"cafe|cafes|cocktails?|cuisine|delivery|dining|dishes|drinks|events?|fabrication|"
+    r"films?|food|gatherings?|glass|laundry|lunch|lodging|meals?|menu|mirrors?|"
+    r"nightlife|office space|packages?|performances?|products?|rentals?|resilvering|"
+    r"rooms?|rugs?|services?|shows?|specials|sports bars?|suites?|tacos?|tastings?|"
+    r"theater|weddings?|wine|workspace|workspaces)\b", re.I)
+_OFFERING_ACTIONS = re.compile(
+    r"\b(?:offer(?:s|ing)?|provide(?:s|d)?|serve(?:s|d|ing)?|sell(?:s|ing)?|"
+    r"include(?:s|d)?|feature(?:s|d)?|brew(?:s|ing)?|roast(?:s|ing)?|"
+    r"prepare(?:s|d)?|cook(?:s|ing)?|host(?:s|ed|ing)?|rent(?:s|ed|ing)?|"
+    r"repair(?:s|ed|ing)?|clean(?:s|ed|ing)?|launder(?:s|ed|ing)?|"
+    r"fabricate(?:s|d|ing)?|resilver(?:s|ed|ing)?|deliver(?:s|ed|ing)?|"
+    r"order(?:s|ed|ing)?|available|open|feature(?:s|d)?|have)\b", re.I)
+
+
+def _direct_offering_fact(fact: Mapping[str, Any], company_name: str) -> bool:
+    """Recognize explicit first-party offerings without changing provenance labels.
+
+    Some sites describe what they sell or host in company-description copy,
+    menus, hotel room descriptions, and catalog cards rather than on a URL
+    named /services. The existing TARGET_BUSINESS classification still
+    protects identity checks; this narrower, separate predicate is used only
+    to choose a cited offering for recipient personalization.
+    """
+    if fact.get("classification") == "PRODUCT_OR_SERVICE":
+        return True
+    if fact.get("classification") != "TARGET_BUSINESS":
+        return False
+    text = " ".join(str(fact.get("exact_excerpt") or fact.get("text") or "").split())
+    if not text or not _OFFERING_TERMS.search(text):
+        return False
+    # The extractor has already excluded customer quotes, event participants,
+    # third parties, cross-site URLs, and ambiguous material. Require direct
+    # company voice, a named-business anchor, or a category-specific service
+    # description before treating the passage as an offering.
+    company_tokens = [token for token in re.findall(r"[A-Za-z0-9]+", company_name)
+                      if len(token) >= 4 and token.casefold() not in {"company", "incorporated"}]
+    named = any(re.search(rf"\b{re.escape(token)}\b", text, re.I) for token in company_tokens)
+    company_voice = bool(re.search(r"\b(?:we|our|us)\b", text, re.I))
+    if not (named or company_voice):
+        return False
+    if _OFFERING_ACTIONS.search(text):
+        return True
+    # Compact catalog and hospitality copy often omits an explicit verb:
+    # “COLLECTION ... Persian rugs” and “guest rooms ... accommodations”.
+    if re.search(
+        r"\b(?:collection|catalog(?:ue)?|menu|guest rooms?|rooms?|suites?|"
+        r"accommodations?|membership|office space|meeting rooms?)\b.{0,160}"
+        r"\b(?:rugs?|food|dishes|meals?|coffee|coffees|beer|wine|"
+        r"amenities|lodging|stays?|events?|classes|performances?|"
+        r"products?|services?|office space|meeting rooms?)\b", text, re.I):
+        return True
+    # Verified first-party pages often use concise catalog or venue copy without
+    # an offer verb (“our guest rooms,” “coffee delivered,” “a sports bar”).
+    # Require an explicit product, service, room, food, drink, or event term
+    # plus a named-business or first-person attribution anchor.
+    return bool(_OFFERING_TERMS.search(text))
+
+
 class PreflightError(RuntimeError):
     """A fail-closed validation error before any network request."""
 
@@ -1063,6 +1123,23 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     if description_fact is None:
         description_fact = next((facts[ref] for ref in identity_refs
                                  if ref in facts and facts[ref].get("classification") == "TARGET_BUSINESS"), None)
+    description_claim = None
+    if description_fact is None:
+        # A response may cite a first-party offering for both the exact entity
+        # identity and its concise business-description claim. Keep the exact
+        # name/domain checks above; only recover copy from a cited description
+        # whose references overlap identity evidence and remain same-site facts.
+        for claim in claims:
+            refs = [str(value) for value in claim.get("evidence_ids", [])]
+            text = str(claim.get("text") or "").strip()
+            cited_identity = [ref for ref in refs if ref in identity_refs and ref in facts]
+            if (claim.get("role") == "BUSINESS_DESCRIPTION" and text and cited_identity
+                    and len(text) <= 500
+                    and all(ref in facts and facts[ref].get("classification")
+                            in {"TARGET_BUSINESS", "PRODUCT_OR_SERVICE"} for ref in refs)):
+                description_fact = facts[cited_identity[0]]
+                description_claim = claim
+                break
     if description_fact is None:
         raise ValueError("No model-cited, first-party target-business description is available")
 
@@ -1071,6 +1148,7 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     # the extractor's concise statement attached to that exact source.
     service_fact = None
     service_summary = None
+    service_summary_refs = None
     for entry in raw.get("products_services", []):
         refs = [str(value) for value in entry.get("evidence_ids", [])]
         summary = str(entry.get("summary") or "").strip()
@@ -1078,8 +1156,8 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
             continue
         candidates = [facts.get(ref) for ref in refs]
         candidates = [item for item in candidates if item
-                      and item.get("classification") == "PRODUCT_OR_SERVICE"
-                      and item.get("attribution") in {"COMPANY_STATED", "PUBLISHED_STRUCTURED_DATA"}]
+                      and item.get("attribution") in {"COMPANY_STATED", "PUBLISHED_STRUCTURED_DATA"}
+                      and _direct_offering_fact(item, company_name=selection.target_company)]
         for item in candidates:
             statement = str(item.get("text") or "").strip()
             if statement:
@@ -1088,6 +1166,25 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
                 break
         if service_fact:
             break
+    if service_fact is None:
+        # Some structured outputs omit products_services but still cite an
+        # explicit offering in a BUSINESS_DESCRIPTION or
+        # COMPANY_CHARACTERISTIC claim. Recover only from those cited claims;
+        # never infer a service from uncited page text.
+        for claim in claims:
+            if claim.get("role") not in {"BUSINESS_DESCRIPTION", "COMPANY_CHARACTERISTIC"}:
+                continue
+            refs = [str(value) for value in claim.get("evidence_ids", [])]
+            cited = [facts.get(ref) for ref in refs]
+            supported = [item for item in cited if item
+                         and item.get("attribution") in {"COMPANY_STATED", "PUBLISHED_STRUCTURED_DATA"}
+                         and _direct_offering_fact(item, company_name=selection.target_company)]
+            text = str(claim.get("text") or "").strip()
+            if refs and supported and len(text) <= 260 and all(item is not None for item in cited):
+                service_fact = supported[0]
+                service_summary = text
+                service_summary_refs = refs
+                break
     if service_fact is None:
         raise ValueError("No concise, cited first-party service statement is available")
 
@@ -1111,6 +1208,9 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
         return None, None
 
     summary, summary_refs = claim_copy("BUSINESS_DESCRIPTION", str(description_fact["id"]))
+    if not summary and description_claim is not None:
+        summary = str(description_claim.get("text") or "").strip()
+        summary_refs = [str(value) for value in description_claim.get("evidence_ids", [])]
     if not summary:
         summary, summary_refs = claim_copy("BUSINESS_DESCRIPTION")
     if not summary:
@@ -1123,7 +1223,8 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
             detail, detail_refs = text, refs
             break
     if not detail:
-        detail, detail_refs = strength, [str(service_fact["id"])]
+        detail = strength
+        detail_refs = service_summary_refs or [str(service_fact["id"])]
     relevance, relevance_refs = claim_copy("RESEARCH_RELEVANCE")
     if not relevance:
         relevance = (

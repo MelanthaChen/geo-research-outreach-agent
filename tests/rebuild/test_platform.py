@@ -1965,10 +1965,10 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
     allowed='known-local-validation-rejection'
     prior_repair='known-local-validation-prior-repair'
     v2_replay='known-local-validation-v2-replay'
-    v3_terminal='known-local-validation-v3-terminal'
+    v4_terminal='known-local-validation-v4-terminal'
     identity='known-identity-mismatch'
     transient='transient-local-validation-rejection'
-    for ident in (allowed,prior_repair,v2_replay,v3_terminal,identity,transient):
+    for ident in (allowed,prior_repair,v2_replay,v4_terminal,identity,transient):
         candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
     future='2099-01-01T00:00:00+00:00'
     with db.transaction() as c:
@@ -1978,7 +1978,7 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
         for ident,error,outcome in ((allowed,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED'),
                             (prior_repair,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR'),
                             (v2_replay,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'),
-                            (v3_terminal,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'),
+                            (v4_terminal,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V4'),
                             (identity,'Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
                             (transient,'No concise, cited first-party service statement is available','TRANSIENT_HTTP')):
             c.execute(candidates.update().where(candidates.c.id==ident).values(
@@ -1988,10 +1988,10 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
                 run_id='local-replay-run',evidence_fingerprint='fp',operation_id='op-'+ident,
                 model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
                 actual_cost_usd='0.01',provider_response='{}',created_at=now()))
-        manifest=[allowed,prior_repair,v2_replay,v3_terminal,identity,transient]+[f'unused-{i}' for i in range(94)]
+        manifest=[allowed,prior_repair,v2_replay,v4_terminal,identity,transient]+[f'unused-{i}' for i in range(94)]
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
-    # One offline replay is admitted per deterministic classifier version;
-    # V3 is terminal, identity mismatch is excluded, and unknown spend is not
+    # The targeted V3 citation-selection repair adds one offline replay;
+    # V4 is terminal, identity mismatch is excluded, and unknown spend is not
     # eligible for reuse.
     assert set(eligible_ids)=={allowed,prior_repair,v2_replay}
 
@@ -2054,6 +2054,133 @@ def test_service_classifier_repair_admits_only_known_cost_saved_response(db):
         ids=[repaired,unknown]+[f'service-repair-unused-{i}' for i in range(98)]
         selected=c.execute(select(candidates.c.id).where(eligibility(ids))).scalars().all()
     assert selected==[repaired]
+
+
+def test_cited_business_claim_repairs_restore_only_known_cost_service_and_description_replays(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    service='known-v3-service-repair'
+    description='known-cited-description-repair'
+    unresolved='unresolved-v3-service-repair'
+    for ident in (service,description,unresolved):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='v3-cited-claim-run',started_at=now(),status='COMPLETED',
+            candidate_limit=3,run_budget_usd='0.15',cumulative_budget_usd='5.00',reserved_usd='0.10',
+            actual_cost_usd='0.02',detail='{}'))
+        failures=(
+            (service,'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3',
+             'No concise, cited first-party service statement is available'),
+            (description,'KNOWN_RESPONSE_REPLAY_REJECTED',
+             'No model-cited, first-party target-business description is available'),
+            (unresolved,'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3',
+             'No concise, cited first-party service statement is available'),
+        )
+        for ident,outcome,error in failures:
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_status='INCOMPLETE',personalization_analysis_version='FAIL',
+                personalization_quality_status='FAIL',personalization_outcome=outcome,
+                personalization_error=error,personalization_retry_after='2099-01-01T00:00:00+00:00',
+                personalization_attempts=2))
+            c.execute(personalization_attempts.insert().values(id='saved-'+ident,candidate_id=ident,
+                run_id='v3-cited-claim-run',evidence_fingerprint='saved-fp',operation_id='saved-op-'+ident,
+                model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+                actual_cost_usd='0.01',provider_response='{"raw_response":{}}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='unknown-v3-cited-claim',candidate_id=unresolved,
+            run_id='v3-cited-claim-run',evidence_fingerprint='unknown-fp',operation_id='unknown-op',
+            model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',reserved_usd='0.05',
+            actual_cost_usd='0',provider_response=None,created_at=now()))
+        manifest=[service,description,unresolved]+[f'v3-cited-unused-{i}' for i in range(97)]
+        selected=set(c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars())
+    assert selected=={service,description}
+
+
+def test_personalization_claim_selection_recovers_explicit_offering_and_cited_description_without_weakening_gates():
+    from outreach_v2.personalization import observe
+    from outreach_v2.semantic_openai import select_evidence, build_automated_personalization, _direct_offering_fact
+    url='https://example.test/'
+    name='Hop Farm Brewing Company'
+    observed=observe(url,
+        '<title>Hop Farm Brewing Company</title><h1>Hop Farm Brewing Company</h1>'
+        '<p>Hop Farm Brewing Company is a neighborhood brewery in Pittsburgh.</p>'
+        '<p>Our private party packages offer options for small gatherings.</p>',
+        '2026-11-12T00:00:00+00:00',name=name)
+    selection=select_evidence(observed,company_name=name,website=url)
+    description=next(x for x in selection.facts if x['id']=='p0_s0')
+    offering=next(x for x in selection.facts if x['id']=='p0_s1')
+    assert description['classification']=='TARGET_BUSINESS'
+    assert offering['classification']=='TARGET_BUSINESS'  # provenance label is not weakened
+    assert _direct_offering_fact(offering,name)
+    assert not _direct_offering_fact({**offering,'exact_excerpt':'We are proud of the team and our welcoming community.'},name)
+    assert not _direct_offering_fact({**offering,'classification':'CUSTOMER_OR_TESTIMONIAL'},name)
+    raw={
+        'version':'structured-company-analysis-v1',
+        'entity_identity':{'name':name,'website':url,'identity_status':'IDENTIFIED','evidence_ids':['p0_s1']},
+        'products_services':[{'summary':'Private party packages for small gatherings.','evidence_ids':['p0_s1'],'attribution':'COMPANY_STATED'}],
+        'target_audiences':[],'capabilities_characteristics':[],
+        'proposed_claims':[
+            {'id':'c1','text':'Hop Farm Brewing Company provides private party packages for small gatherings.','evidence_ids':['p0_s1'],
+             'attribution':'COMPANY_STATED','role':'BUSINESS_DESCRIPTION'},
+            {'id':'c2','text':'The company offers private party packages for small gatherings.','evidence_ids':['p0_s1'],
+             'attribution':'COMPANY_STATED','role':'COMPANY_CHARACTERISTIC'},
+            {'id':'c3','text':'Its public descriptions provide a case for examining how AI search connects a local business with its offerings.',
+             'evidence_ids':['p0_s0','p0_s1'],'attribution':'ANALYTICAL_INTERPRETATION','role':'RESEARCH_RELEVANCE'},
+        ],
+        'evidence_limitations':[],'observed_relationships':[],'potential_geo_implications':[],
+        'unsupported_or_unresolved_claims':[],'recommendation_decision':'ABSTAIN',
+    }
+    # The identity references an offering fact, while the BUSINESS_DESCRIPTION
+    # claim cites that same fact. Its exact name and website remain mandatory.
+    raw['entity_identity']['evidence_ids']=['p0_s1']
+    result,_audit=build_automated_personalization(raw,selection,stamp='2026-11-12T00:00:00+00:00')
+    assert result['recipient_copy']['business_summary']==raw['proposed_claims'][0]['text']
+    assert result['recipient_copy']['distinctive_detail']=='Private party packages for small gatherings.'
+    assert result['claim_support']['company_strength']==['p0_s1']
+
+
+def test_direct_offering_selection_covers_first_party_hospitality_retail_and_service_copy():
+    from outreach_v2.semantic_openai import _direct_offering_fact
+    examples=(
+        ('Hotel 1868','Hotel 1868 describes contemporary accommodations and thoughtful amenities at its hotel.'),
+        ('Hop Farm Brewing Company','Our private party packages offer options for small gatherings.'),
+        ('Shashlik Uzn1','Our diverse menu features kebabs and Uzbek dishes.'),
+        ("Walter's Mirror",'Our services include antique mirror fabrication and resilvering.'),
+        ('Nejad Oriental Rugs',"Nejad's collection includes Persian area rugs."),
+        ('Field Day','Field Day membership includes private office space and meeting rooms.'),
+        ("Mary Pat's Provisions",'Mary Pat’s Provisions serves breakfast and lunch.'),
+    )
+    for name,text in examples:
+        assert _direct_offering_fact({'classification':'TARGET_BUSINESS','text':text,
+            'exact_excerpt':text,'source_url':'https://first-party.example/','attribution':'COMPANY_STATED'},name),name
+
+
+def test_personalization_description_fallback_requires_claim_overlap_with_identity_refs():
+    from outreach_v2.semantic_openai import EvidenceSelection, build_automated_personalization
+    name='DogLeggs'; url='https://dogleggs.example/'
+    facts=(
+        {'id':'identity_offer','text':'DogLeggs makes canine support products.','exact_excerpt':'DogLeggs makes canine support products.',
+         'source_content':'DogLeggs makes canine support products.','source_url':url,'source_title':'Products','section':'Products',
+         'attribution':'COMPANY_STATED','classification':'PRODUCT_OR_SERVICE','assertion_type':'FIRST_PARTY_PAGE_CLAIM','field':''},
+    )
+    selection=EvidenceSelection(name,url,({'url':url,'type':'products','title':'Products','heading_count':0,'link_count':0,'truncated':False},),
+        facts,{'identity_offer':'PRODUCT_OR_SERVICE'},{},{},())
+    raw={
+        'version':'structured-company-analysis-v1',
+        'entity_identity':{'name':name,'website':url,'identity_status':'IDENTIFIED','evidence_ids':['identity_offer']},
+        'products_services':[{'summary':'Canine support products.','evidence_ids':['identity_offer'],'attribution':'COMPANY_STATED'}],
+        'target_audiences':[],'capabilities_characteristics':[],
+        'proposed_claims':[
+            {'id':'c1','text':'DogLeggs sells canine support products for pets.','evidence_ids':['identity_offer'],
+             'attribution':'COMPANY_STATED','role':'BUSINESS_DESCRIPTION'},
+            {'id':'c2','text':'The cited product details let researchers assess how AI search describes the business.',
+             'evidence_ids':['identity_offer'],'attribution':'ANALYTICAL_INTERPRETATION','role':'RESEARCH_RELEVANCE'},
+        ],
+        'evidence_limitations':[],'observed_relationships':[],'potential_geo_implications':[],
+        'unsupported_or_unresolved_claims':[],'recommendation_decision':'ABSTAIN',
+    }
+    result,_=build_automated_personalization(raw,selection,stamp='2026-11-12T00:00:00+00:00')
+    assert result['recipient_copy']['business_summary']==raw['proposed_claims'][0]['text']
+    assert result['recipient_copy']['support']['business_summary']==['identity_offer']
 
 
 def test_bounded_runner_releases_local_launch_guard_for_next_scheduler_tick(db,monkeypatch):

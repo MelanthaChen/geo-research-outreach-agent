@@ -711,8 +711,12 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                     'KNOWN_RESPONSE_REPLAY_REJECTED',
                     'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
                     'TRANSIENT_HTTP',
-                    'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2']),
-                     candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
+                    'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2',
+                    'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3']),
+                     candidates.c.personalization_error == 'No concise, cited first-party service statement is available'),
+                and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+                     candidates.c.personalization_error ==
+                         'No model-cited, first-party target-business description is available')),
             saved_response, no_unresolved_attempt)
         retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
                         replayable_local_rejection)
@@ -1098,12 +1102,17 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
             error=str(exc)
             if replaying_saved_response and error=='No concise, cited first-party service statement is available':
-                # Each deterministic classifier repair gets one offline replay.
-                # Version the terminal outcome so a failed replay cannot loop.
-                outcome = ('KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
-                    if row.get('personalization_outcome') ==
-                        'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
+                # Each targeted selector repair gets at most one additional
+                # offline replay; keep versioning monotonic to prevent loops.
+                prior = str(row.get('personalization_outcome') or '')
+                outcome = ('KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V4'
+                    if prior == 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
+                    else 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
+                    if prior == 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
                     else 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2')
+            elif (replaying_saved_response and
+                  error == 'No model-cited, first-party target-business description is available'):
+                outcome = 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_DESCRIPTION_CITATION_REPAIR'
             release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1

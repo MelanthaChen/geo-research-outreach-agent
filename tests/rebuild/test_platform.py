@@ -1762,6 +1762,17 @@ def test_batch_eligibility_includes_legacy_ready_records_without_semantic_versio
     assert eligible_ids==[ident]
 
 
+def test_batch_eligibility_includes_legacy_ready_records_with_historical_fail_version(db):
+    from outreach_v2.personalization_batch import eligibility
+    ident='legacy-ready-historical-fail-version'
+    candidate(db,ident=ident,name='Legacy Ready Fail Version',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_status='READY',personalization_analysis_version='FAIL'))
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
+    assert eligible_ids==[ident]
+
+
 def test_known_quality_failure_with_saved_paid_response_is_replay_eligible(db):
     from outreach_v2.db import personalization_attempts,personalization_runs
     from outreach_v2.personalization_batch import eligibility
@@ -1782,4 +1793,29 @@ def test_known_quality_failure_with_saved_paid_response_is_replay_eligible(db):
             provider_response='{"diagnostic_version":1,"provider_response":{"status":"completed"}}',
             created_at=now()))
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
+    assert eligible_ids==[ident]
+
+
+def test_inner_claim_selector_allows_known_cost_quality_response_replay(db):
+    from outreach_v2.db import personalization_attempts,personalization_runs
+    from outreach_v2.personalization import _eligible_query
+    ident='inner-known-quality-replay'
+    candidate(db,ident=ident,name='Inner Known Quality Replay',fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='inner-quality-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_analysis_version='semantic-openai-v1',personalization_quality_status='FAIL',
+            personalization_outcome='SEMANTIC_QUALITY_REJECTED',personalization_retry_after=future,
+            personalization_attempts=1))
+        c.execute(personalization_attempts.insert().values(id='inner-paid-quality-response',
+            candidate_id=ident,run_id='inner-quality-run',evidence_fingerprint='inner-quality-fp',
+            operation_id='inner-paid-operation',model='gpt-5.4-mini-2026-03-17',status='COMPLETED',
+            reserved_usd='0.05',actual_cost_usd='0.01',
+            provider_response='{"diagnostic_version":1,"provider_response":{"status":"completed"}}',
+            created_at=now()))
+        eligible_ids=c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),selected_ids=[ident],retry_candidate_ids=[ident]))).scalars().all()
     assert eligible_ids==[ident]

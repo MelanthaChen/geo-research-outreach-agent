@@ -643,7 +643,8 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
             candidates.c.personalization_outcome.in_([
                 'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
                 'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
-                'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE']),
+                'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE',
+                'SEMANTIC_QUALITY_REJECTED']),
             saved_response, no_unresolved_attempt)
         retry_state=or_(retry_state,replayable_outcome)
     return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),

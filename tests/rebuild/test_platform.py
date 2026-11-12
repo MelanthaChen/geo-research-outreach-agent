@@ -1242,8 +1242,11 @@ def test_failed_saved_response_replay_is_marked_rejected_and_not_retried(db, mon
         backend_factory=lambda:backend,token_count=lambda _text:1000,time_budget_seconds=30)
     assert first['attempted']==1 and backend.calls==1
     monkeypatch.setattr(semantic_module,'build_automated_personalization',real_build)
-    monkeypatch.setattr(semantic_module,'replay_saved_provider_attempt',
-        lambda *args,**kwargs: (_ for _ in ()).throw(ValueError('saved evidence reference rejected')))
+    def quality_reject_saved_copy(raw,selection,*,stamp):
+        personalization,audit=real_build(raw,selection,stamp=stamp)
+        personalization['recipient_copy']['business_summary']='too short'
+        return personalization,audit
+    monkeypatch.setattr(semantic_module,'build_automated_personalization',quality_reject_saved_copy)
 
     second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=[ident],
         retry_candidate_ids=[ident],backend_factory=lambda:backend,
@@ -1746,3 +1749,37 @@ def test_batch_retry_window_allows_known_validation_replay_but_not_unknown_or_fu
             personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED'))
         after_rejected_replay=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
     assert after_rejected_replay==[]
+
+
+def test_batch_eligibility_includes_legacy_ready_records_without_semantic_version(db):
+    from outreach_v2.personalization_batch import eligibility
+    ident='legacy-ready-no-gpt-version'
+    candidate(db,ident=ident,name='Legacy Ready',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_status='READY',personalization_analysis_version=None))
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
+    assert eligible_ids==[ident]
+
+
+def test_known_quality_failure_with_saved_paid_response_is_replay_eligible(db):
+    from outreach_v2.db import personalization_attempts,personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    ident='known-quality-failure'
+    candidate(db,ident=ident,name='Known Quality Failure',fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='known-quality-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_outcome='SEMANTIC_QUALITY_REJECTED',
+            personalization_retry_after=future,personalization_attempts=1))
+        c.execute(personalization_attempts.insert().values(id='paid-quality-response',
+            candidate_id=ident,run_id='known-quality-run',evidence_fingerprint='quality-fp',
+            operation_id='paid-operation',model='gpt-5.4-mini-2026-03-17',status='COMPLETED',
+            reserved_usd='0.05',actual_cost_usd='0.01',
+            provider_response='{"diagnostic_version":1,"provider_response":{"status":"completed"}}',
+            created_at=now()))
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
+    assert eligible_ids==[ident]

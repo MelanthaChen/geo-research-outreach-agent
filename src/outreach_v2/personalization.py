@@ -797,7 +797,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
         'replayed':0,'skipped_existing_attempt':0,'budget_stopped':False,'elapsed_seconds':0,
         'remaining_backlog':0,'failure_categories':{},'failure_reasons':{}}
 
-    def commit_outcome(row, personalization, quality_status, quality_errors, fp, attempt, outcome, error=None):
+    def commit_outcome(row, personalization, quality_status, quality_errors, fp, attempt, outcome, error=None,
+                       *, rejected_replay=False):
         at=now(); passed=quality_status=='PASS'
         status='READY' if passed else 'INCOMPLETE'
         with db.transaction(serialized=True) as c:
@@ -828,7 +829,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             values={'personalization':encoded,'personalization_status':status,'personalization_quality_status':quality_status,
                 'personalization_quality_errors':_safe_json(quality_errors),'personalization_at':at,
                 'personalization_error':None if passed else ','.join(quality_errors)[:300],
-                'personalization_outcome':'SEMANTIC_READY' if passed else 'SEMANTIC_QUALITY_REJECTED',
+                'personalization_outcome':('SEMANTIC_READY' if passed else
+                    'KNOWN_RESPONSE_REPLAY_REJECTED' if rejected_replay else 'SEMANTIC_QUALITY_REJECTED'),
                 'personalization_retry_after':None if passed else _retry_time('PERMANENT_EVIDENCE',int(row.get('personalization_attempts') or 0)+1,at),
                 'personalization_attempts':int(row.get('personalization_attempts') or 0)+1,
                 'personalization_version':new_version,'personalization_analysis_version':'semantic-openai-v1',
@@ -974,7 +976,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             except (TypeError,ValueError) as exc:
                 errors=quality_reasons(normalized) or [str(exc)[:180] or 'QUALITY_VALIDATION_FAILED']
             quality_status='PASS' if not errors else 'FAIL'
-            if commit_outcome(row,normalized,quality_status,errors,fp,attempt,provider_result):
+            if commit_outcome(row,normalized,quality_status,errors,fp,attempt,provider_result,
+                              rejected_replay=replaying_saved_response and quality_status!='PASS'):
                 result['attempted']+=1
                 if quality_status=='PASS': result['completed']+=1
                 else:

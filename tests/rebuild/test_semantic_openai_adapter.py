@@ -70,7 +70,7 @@ def response():
         "version": CONTRACT_VERSION,
         "entity_identity": {"name": "Lagoon New York", "website": "https://www.lagoonny.com/",
                             "identity_status": "INPUT_CANDIDATE", "evidence_ids": ["about1"]},
-        "products_services": [{"summary": "Concept retail and custom design", "evidence_ids": ["about1", "service1"], "attribution": "COMPANY_STATED"}],
+        "products_services": [{"summary": "Concept retail paired with custom design for clients", "evidence_ids": ["about1", "service1"], "attribution": "COMPANY_STATED"}],
         "target_audiences": [],
         "capabilities_characteristics": [{"summary": "Custom silhouette selection", "evidence_ids": ["service1"], "attribution": "COMPANY_STATED"}],
         "proposed_claims": [
@@ -198,7 +198,7 @@ def test_model_claim_status_is_audit_metadata_not_an_approval_queue():
     assert not contract.final_personalization_claim_ids
     assert all(item.status is SupportStatus.NOT_VERIFIABLE_FROM_SAMPLE for item in contract.claim_reviews)
     assert all(item.reviewer == "AUTOMATED_FILTERING_ONLY" for item in contract.claim_reviews)
-    assert all("excluded from recipient copy" in item.rationale for item in contract.claim_reviews)
+    assert all("not prove semantic entailment" in item.rationale for item in contract.claim_reviews)
     assert "semantic entailment" in contract.claim_reviews[0].rationale
 
 
@@ -319,16 +319,59 @@ def test_automated_copy_uses_grounded_source_facts_and_excludes_uncertain_model_
     raw["proposed_claims"][1]["text"] = "It is not just a single-product shop."
     personalization, audit = build_automated_personalization(raw, selection, stamp="2026-10-28T00:00:00Z")
     copy = personalization["recipient_copy"]
-    assert copy["business_summary"] == selection.facts[0]["text"]
-    assert copy["distinctive_detail"] == selection.facts[1]["text"]
+    assert copy["business_summary"] == "Lagoon New York combines a concept store, gallery, and creation space."
+    assert copy["distinctive_detail"] == "Concept retail paired with custom design for clients"
     recipient_text = " ".join(copy[key] for key in ("business_summary", "distinctive_detail", "research_relevance"))
     assert "not just" not in recipient_text.casefold()
     assert "single-product" not in recipient_text.casefold()
     assert personalization["assessment"]["claim_by_claim_approval_required"] is False
     assert personalization["assessment"]["final_invitation_review_required_before_sending"] is True
     assert next(item for item in audit if item["id"] == "strength")["status"] == "EXCLUDED_UNSUPPORTED_COMPARISON"
-    assert next(item for item in audit if item["id"] == "relevance")["status"] == "RECOMPOSED_FROM_CITED_SOURCE_FACTS"
+    assert next(item for item in audit if item["id"] == "relevance")["status"] == "USED_IN_RECIPIENT_COPY_WITH_EVIDENCE_REFERENCES"
     assert personalization["assessment"]["geo_observation"] == "NOT_ESTABLISHED"
+
+
+def test_long_first_party_excerpts_use_cited_semantic_copy_without_copying_source_text():
+    from outreach_v2.quality import quality_decisions
+    source = profile()
+    long_about = ("Lagoon New York is a Brooklyn concept store, gallery, and creation space "
+        "that brings together wearable art, curated housewares, jewelry, and community programming "
+        "in a setting connected to sustainability and the natural environment.")
+    long_service = ("The founders offer custom design and let clients select a silhouette, size, "
+        "fabric, and colors for made-to-order garments developed for individual projects, "
+        "including looks prepared to meet the needs of a particular event or production.")
+    source["evidence_profile"]["facts"][0].update(statement=long_about, evidence_excerpt=long_about,
+        source_content="About: " + long_about)
+    source["evidence_profile"]["facts"][1].update(statement=long_service, evidence_excerpt=long_service,
+        source_content="Services: " + long_service)
+    selection = select_evidence(source, company_name="Lagoon New York", website="https://www.lagoonny.com/")
+    raw = response()
+    raw["products_services"][0]["summary"] = (
+        "Made-to-order custom design lets clients choose garment details for their project.")
+    personalization, _ = build_automated_personalization(raw, selection, stamp="2026-11-12T00:00:00Z")
+    copy = personalization["recipient_copy"]
+    result = quality_decisions(personalization, record={"fixture": False},
+        candidate_name="Lagoon New York", website="https://www.lagoonny.com/")
+    assert len(long_about) > 180 and len(long_service) > 180
+    assert copy["business_summary"] != long_about
+    assert copy["distinctive_detail"] != long_service
+    assert copy["support"]["business_summary"] == ["about1"]
+    assert copy["support"]["distinctive_detail"] == ["about1", "service1"]
+    assert result["OUTREACH_REVIEW_READY"]["passed"] is True
+
+
+def test_structured_first_party_offerings_are_not_misclassified_as_ambiguous():
+    source = profile()
+    source["evidence_profile"]["facts"].append({
+        "id": "hotel-amenities", "statement": "The property offers guest rooms and a seasonal pool.",
+        "evidence_excerpt": "The property offers guest rooms and a seasonal pool.",
+        "source_content": "Hotel data: The property offers guest rooms and a seasonal pool.",
+        "source_urls": ["https://www.lagoonny.com/about"], "source_title": "Property details",
+        "section_heading": "Property details", "assertion_type": "STRUCTURED_FIRST_PARTY_DATA",
+        "attribution": "PUBLISHED_STRUCTURED_DATA", "field": "amenityFeature",
+    })
+    selected = select_evidence(source, company_name="Lagoon New York", website="https://lagoonny.com/")
+    assert selected.classifications["hotel-amenities"] == "PRODUCT_OR_SERVICE"
 
 
 def test_single_post_request_uses_strict_json_schema_no_tools_and_no_retry_path():

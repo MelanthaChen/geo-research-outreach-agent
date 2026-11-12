@@ -48,7 +48,8 @@ def eligibility(ids, stamp=None):
         candidates.c.personalization_outcome.in_([
             'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
             'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
-            'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE']),
+            'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE',
+            'SEMANTIC_QUALITY_REJECTED']),
         replayable_response)
     retry_state = or_(candidates.c.personalization_retry_after.is_(None),
                       candidates.c.personalization_retry_after <= stamp,
@@ -56,7 +57,9 @@ def eligibility(ids, stamp=None):
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
-        candidates.c.personalization_status != 'READY', candidates.c.personalization_analysis_version.is_(None),
+        # READY is also the historical legacy personalization state. Only a
+        # persisted semantic version is complete for this GPT cohort.
+        candidates.c.personalization_analysis_version.is_(None),
         retry_state,
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until <= stamp),
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id)),

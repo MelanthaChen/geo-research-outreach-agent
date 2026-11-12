@@ -163,7 +163,16 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str) -
     typ = str(item.get("assertion_type") or "").upper()
     if typ == "STRUCTURED_FIRST_PARTY_DATA":
         field = str(item.get("field") or "").casefold()
-        return "TARGET_BUSINESS" if field in {"name", "description", "address", "openinghours", "email", "telephone"} else "AMBIGUOUS"
+        if field in {"name", "description", "address", "openinghours", "email", "telephone"}:
+            return "TARGET_BUSINESS"
+        # Offerings and hotel amenities often appear as JSON-LD properties on
+        # the business object, without a dedicated /services URL.
+        if field in {"offers", "makesoffer", "hasoffercatalog", "offereditem",
+                     "itemoffered", "service", "servicetype", "product",
+                     "productcategory", "amenityfeature", "numberofrooms",
+                     "roomtype", "hasamenity"}:
+            return "PRODUCT_OR_SERVICE"
+        return "AMBIGUOUS"
     if any(word in path for word in ("service", "product", "collection")):
         return "PRODUCT_OR_SERVICE"
     # About pages may be the canonical source for an offering (as in the
@@ -882,7 +891,7 @@ def to_evidence_contract(raw: Mapping[str, Any], selection: EvidenceSelection) -
                    for x in raw["proposed_claims"])
     reviews = tuple(ClaimReview(
         claim_id=x.id, status=SupportStatus.NOT_VERIFIABLE_FROM_SAMPLE,
-        rationale="Structural provenance passed, but semantic entailment is not established automatically; model wording is excluded from recipient copy unless separately grounded by application composition.",
+        rationale="Structural provenance passed; automated citations do not prove semantic entailment. Recipient copy may reuse the cited model wording and remains subject to human review.",
         evidence_ids=x.evidence_ids, reviewer="AUTOMATED_FILTERING_ONLY") for x in claims)
     relationships = tuple(SiteRelationship(
         id=str(x["id"]), description=str(x["description"]),
@@ -987,10 +996,38 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     service_assertion = str(service_fact["text"]).strip().rstrip(".")
     if service_assertion:
         service_assertion = service_assertion[0].lower() + service_assertion[1:]
-    relevance = (
-        f"The site's description of {company} alongside the specific detail that {service_assertion} "
-        "makes it a useful case for studying how AI-powered search connects a business identity with its offerings."
-    )
+    # Use the concise semantic analysis for recipient copy when the response
+    # cites the exact source facts. Keep extracted source statements in the
+    # evidence profile, but avoid copying long website passages verbatim.
+    def claim_copy(role: str, required_fact_id: str | None = None):
+        for claim in claims:
+            refs = [str(value) for value in claim.get("evidence_ids", [])]
+            text = str(claim.get("text") or "").strip()
+            if (claim.get("role") == role and text and refs and
+                    (required_fact_id is None or required_fact_id in refs) and
+                    all(ref in facts for ref in refs)):
+                return text, refs
+        return None, None
+
+    summary, summary_refs = claim_copy("BUSINESS_DESCRIPTION", str(description_fact["id"]))
+    if not summary:
+        summary, summary_refs = description, [str(description_fact["id"])]
+    detail, detail_refs = None, None
+    for entry in raw.get("products_services", []):
+        refs = [str(value) for value in entry.get("evidence_ids", [])]
+        text = str(entry.get("summary") or "").strip()
+        if service_fact["id"] in refs and text and all(ref in facts for ref in refs):
+            detail, detail_refs = text, refs
+            break
+    if not detail:
+        detail, detail_refs = strength, [str(service_fact["id"])]
+    relevance, relevance_refs = claim_copy("RESEARCH_RELEVANCE")
+    if not relevance:
+        relevance = (
+            f"The site's description of {company} alongside the specific detail that {service_assertion} "
+            "makes it a useful case for studying how AI-powered search connects a business identity with its offerings."
+        )
+        relevance_refs = [str(description_fact["id"]), str(service_fact["id"])]
     # Keep every fetched page in the provenance set. Some sampled pages may
     # yield no eligible fact, but remain part of the recorded evidence limits.
     all_urls = list(dict.fromkeys(str(page.get("url")) for page in selection.pages if page.get("url")))
@@ -1009,13 +1046,13 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
         "business_description": description, "company_strength": strength,
         "introduction": "We are conducting a university study about how AI-powered search represents businesses and their offerings.",
         "recipient_copy": {
-            "business_summary": description,
-            "distinctive_detail": strength,
+            "business_summary": summary,
+            "distinctive_detail": detail,
             "research_relevance": relevance,
             "supported_observation": "",
-            "support": {"business_summary": [str(description_fact["id"])],
-                        "distinctive_detail": [str(service_fact["id"])],
-                        "research_relevance": [str(description_fact["id"]), str(service_fact["id"])]},
+            "support": {"business_summary": summary_refs,
+                        "distinctive_detail": detail_refs,
+                        "research_relevance": relevance_refs},
         },
         "source_urls": all_urls, "retrieved_at": stamp, "recommendations": [],
         "assessment": {
@@ -1028,7 +1065,7 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
                 {"id": item["id"], "status": item["status"], "reason": item["reason"]}
                 for item in audit if item["status"] == "EXCLUDED_UNSUPPORTED_COMPARISON"
             ],
-            "interpretation": "Uncertain model prose is excluded; recipient claims use source-derived statements.",
+            "interpretation": "Recipient wording uses the semantic analysis and its evidence IDs; extracted source facts remain separately available for review.",
         },
         "claim_support": {"business_description": [str(description_fact["id"])],
                           "company_strength": [str(service_fact["id"]) ]},
@@ -1038,16 +1075,26 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     }
     for item in audit:
         if item["role"] == "BUSINESS_DESCRIPTION":
-            item["status"] = "REPLACED_WITH_DIRECT_SOURCE_DESCRIPTION"
-            item["reason"] = "The final description uses the model-cited source statement to avoid adding paraphrase detail."
-            item["deterministic_transformation"] = {"evidence_id": str(description_fact["id"]),
-                                                    "text": description}
+            if summary_refs and item["original_text"] == summary:
+                item["status"] = "USED_IN_RECIPIENT_COPY_WITH_EVIDENCE_REFERENCES"
+                item["reason"] = "Recipient summary uses this cited semantic claim; citation validity is not independent entailment verification."
+                item["deterministic_transformation"] = {"evidence_ids": summary_refs, "text": summary}
+            else:
+                item["status"] = "REPLACED_WITH_DIRECT_SOURCE_DESCRIPTION"
+                item["reason"] = "No validated concise business-description claim was selected for recipient copy."
+                item["deterministic_transformation"] = {"evidence_id": str(description_fact["id"]),
+                                                        "text": description}
         elif item["role"] == "RESEARCH_RELEVANCE":
-            item["status"] = "RECOMPOSED_FROM_CITED_SOURCE_FACTS"
-            item["reason"] = "Recipient relevance is composed from the cited page relationship, not copied from analyst prose."
-            item["deterministic_transformation"] = {"evidence_ids": [str(description_fact["id"]),
-                                                                          str(service_fact["id"])],
-                                                    "text": relevance}
+            if relevance_refs and item["original_text"] == relevance:
+                item["status"] = "USED_IN_RECIPIENT_COPY_WITH_EVIDENCE_REFERENCES"
+                item["reason"] = "Recipient relevance uses this cited semantic claim; citation validity is not independent entailment verification."
+                item["deterministic_transformation"] = {"evidence_ids": relevance_refs, "text": relevance}
+            else:
+                item["status"] = "RECOMPOSED_FROM_CITED_SOURCE_FACTS"
+                item["reason"] = "No validated concise research-relevance claim was selected for recipient copy."
+                item["deterministic_transformation"] = {"evidence_ids": [str(description_fact["id"]),
+                                                                              str(service_fact["id"])],
+                                                        "text": relevance}
     return personalization, audit
 
 

@@ -208,7 +208,7 @@ def test_forced_report_regeneration_versions_same_result_without_inheriting_appr
     new=next(row for row in rows if row["is_active"])
     assert old["is_active"] is False and old["sha256"]==sha256(old_doc).hexdigest()
     assert new["result_id"]==RESULT_ID and new["id"]!=old["id"] and new["sha256"]!=old["sha256"]
-    assert new["renderer_version"]=="geo-report-v3" and new["regenerated_from"]==old["id"]
+    assert new["renderer_version"]=="geo-report-v4" and new["regenerated_from"]==old["id"]
     with db.transaction() as c:
         prior_review=c.execute(select(report_reviews).where(report_reviews.c.id=="review-old-approved")).mappings().one()
         assert prior_review["report_id"]==old["id"] and prior_review["document_sha256"]==old["sha256"]

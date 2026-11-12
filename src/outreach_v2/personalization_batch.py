@@ -11,6 +11,7 @@ from decimal import Decimal
 from sqlalchemy import and_, exists, func, or_, select
 
 from .db import candidates, events, invitations, now, personalization_attempts, personalization_authorizations
+from .replay_policy import replay_allowed_for_contract
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
@@ -72,7 +73,8 @@ def eligibility(ids, stamp=None):
             # identity evidence. It does not alter the archived prompt.
             'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3']),
         candidates.c.personalization_error == 'No concise, cited first-party service statement is available',
-        replayable_response)
+        replayable_response,
+        replay_allowed_for_contract(candidates.c.id, candidates.c.personalization_outcome))
     repaired_cited_description = and_(
         candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
         candidates.c.personalization_error == 'No model-cited, first-party target-business description is available',
@@ -339,7 +341,10 @@ def _run_locked(db, ident):
                             created_at=now()))
                     return
                 current_progress = progress(db, current, ids)
-                final = 'ATTENTION_REQUIRED' if Decimal(current_progress['unresolved_reserved_usd']) > 0 else 'COMPLETED'
+                final = ('ATTENTION_REQUIRED'
+                    if (Decimal(current_progress['unresolved_reserved_usd']) > 0
+                        or current_progress['processed'] < current_progress['candidate_count'])
+                    else 'COMPLETED')
                 _set_status(db, ident, final, 'PERSONALIZATION_BATCH_FINISHED', current_progress, only_running=True)
                 return
 
@@ -368,9 +373,9 @@ def _run_locked(db, ident):
             if (result.get('attempted', 0) > 0 and result.get('completed', 0) == 0
                     and result.get('replayed', 0) >= result.get('attempted', 0)
                     and Decimal(str(result.get('actual_cost_usd', '0'))) == 0):
-                # Rejected known-cost responses are made ineligible by the
-                # repair-specific outcome. Let the scheduler advance to other
-                # IDs instead of resetting or endlessly replaying this chunk.
+                # Re-evaluate the durable selectors. Other candidates can
+                # proceed in this bounded tick; if none remain, the next loop
+                # iteration records an accurate terminal/attention state.
                 with db.transaction() as c:
                     c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
                         event='PERSONALIZATION_BATCH_HEARTBEAT',
@@ -378,7 +383,7 @@ def _run_locked(db, ident):
                             'reason':'OFFLINE_REPLAY_CHUNK_COMPLETE',
                             'candidate_ids':list(next_ids)},sort_keys=True,separators=(',',':')),
                         created_at=now()))
-                return
+                continue
             if result.get('attempted', 0) == 0 and result.get('completed', 0) == 0:
                 if result.get('skipped_existing_attempt', 0) > 0:
                     with db.transaction() as c:

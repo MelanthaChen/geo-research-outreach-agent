@@ -2019,13 +2019,15 @@ def test_one_time_first_party_evidence_refresh_only_selects_no_attempt_exact_fai
 def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repair(db):
     from outreach_v2.db import personalization_attempts, personalization_runs
     from outreach_v2.personalization_batch import eligibility
+    from outreach_v2.personalization import _eligible_query
     allowed='known-local-validation-rejection'
     prior_repair='known-local-validation-prior-repair'
     v2_replay='known-local-validation-v2-replay'
+    v3_exhausted='known-local-validation-v3-exhausted'
     v4_terminal='known-local-validation-v4-terminal'
     identity='known-identity-mismatch'
     transient='transient-local-validation-rejection'
-    for ident in (allowed,prior_repair,v2_replay,v4_terminal,identity,transient):
+    for ident in (allowed,prior_repair,v2_replay,v3_exhausted,v4_terminal,identity,transient):
         candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
     future='2099-01-01T00:00:00+00:00'
     with db.transaction() as c:
@@ -2035,6 +2037,7 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
         for ident,error,outcome in ((allowed,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED'),
                             (prior_repair,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR'),
                             (v2_replay,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'),
+                            (v3_exhausted,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'),
                             (v4_terminal,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V4'),
                             (identity,'Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
                             (transient,'No concise, cited first-party service statement is available','TRANSIENT_HTTP')):
@@ -2045,12 +2048,57 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
                 run_id='local-replay-run',evidence_fingerprint='fp',operation_id='op-'+ident,
                 model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
                 actual_cost_usd='0.01',provider_response='{}',created_at=now()))
-        manifest=[allowed,prior_repair,v2_replay,v4_terminal,identity,transient]+[f'unused-{i}' for i in range(94)]
+        manifest=[allowed,prior_repair,v2_replay,v3_exhausted,v4_terminal,identity,transient]+[f'unused-{i}' for i in range(93)]
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
-    # The targeted V3 citation-selection repair adds one offline replay;
-    # V4 is terminal, identity mismatch is excluded, and unknown spend is not
-    # eligible for reuse.
+        inner_ids=c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=manifest))).scalars().all()
+    # V3 is exhausted under the current validator contract. Both selector
+    # layers admit only candidates that have not already failed that contract.
     assert set(eligible_ids)=={allowed,prior_repair,v2_replay}
+    assert set(inner_ids)==set(eligible_ids)
+
+
+def test_exhausted_offline_replay_reopens_only_for_new_contract_once(db,monkeypatch):
+    from outreach_v2.db import personalization_attempts, personalization_runs, events
+    from outreach_v2.personalization_batch import eligibility
+    from outreach_v2.personalization import _eligible_query
+    import outreach_v2.replay_policy as replay_policy
+    ident='hot-metal-exhausted-replay'
+    candidate(db,ident=ident,name='Hot Metal Transfers',fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='hot-metal-replay-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.01',
+            actual_cost_usd='0.01',detail='{}'))
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3',
+            personalization_error='No concise, cited first-party service statement is available',
+            personalization_retry_after='2099-01-01T00:00:00+00:00',personalization_attempts=3))
+        c.execute(personalization_attempts.insert().values(id='hot-metal-paid-attempt',candidate_id=ident,
+            run_id='hot-metal-replay-run',evidence_fingerprint='saved-evidence-fingerprint',
+            operation_id='hot-metal-original-operation',model='gpt-5.4-mini-2026-03-17',status='COMPLETED',
+            reserved_usd='0.05',actual_cost_usd='0.01',provider_response='{"raw_response":{}}',created_at=now()))
+    manifest=[ident]+[f'hot-metal-unused-{i}' for i in range(99)]
+
+    def selected():
+        with db.transaction() as c:
+            outer=set(c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars())
+            inner=set(c.execute(select(candidates.c.id).where(
+                _eligible_query(now(),retry_candidate_ids=manifest))).scalars())
+        assert outer==inner
+        return outer
+
+    assert selected()==set()
+
+    # An explicit contract ID change is the only way to reopen the legacy V3
+    # row; once that contract fails, the durable event prevents another replay.
+    monkeypatch.setattr(replay_policy,'OFFLINE_REPLAY_CONTRACT_ID','service-statement-citation-v4')
+    assert selected()=={ident}
+    with db.transaction() as c:
+        c.execute(events.insert().values(id='hot-metal-v4-rejected',entity_id=ident,
+            event='PERSONALIZATION_OFFLINE_REPLAY_REJECTED',
+            detail='{"evidence_fingerprint":"new-evidence-fingerprint","validator_contract":"service-statement-citation-v4"}',
+            created_at=now()))
+    assert selected()==set()
 
 
 def test_backfill_admits_v1_classifier_replay_selected_by_batch_without_unresolved_spend(db):
@@ -2149,7 +2197,9 @@ def test_cited_business_claim_repairs_restore_only_known_cost_service_and_descri
             actual_cost_usd='0',provider_response=None,created_at=now()))
         manifest=[service,description,unresolved]+[f'v3-cited-unused-{i}' for i in range(97)]
         selected=set(c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars())
-    assert selected=={service,description}
+    # Service V3 is exhausted under the current citation contract; the
+    # separate description-citation repair remains eligible once.
+    assert selected=={description}
 
 
 def test_personalization_claim_selection_recovers_explicit_offering_and_cited_description_without_weakening_gates():
@@ -2269,6 +2319,7 @@ def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
     from outreach_v2.db import personalization_authorizations,events
     import outreach_v2.personalization as personalization
     import outreach_v2.personalization_batch as batch
+    from outreach_v2.replay_policy import OFFLINE_REPLAY_CONTRACT_ID
     candidate(db,ident='stuck-replay',name='Stuck Replay',fixture=False,personalization=False)
     manifest=['stuck-replay']+[f'stuck-member-{i:03}' for i in range(99)]
     digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
@@ -2279,6 +2330,16 @@ def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
     calls=[]
     def no_progress(*_args,**kwargs):
         calls.append(list(kwargs['authorized_candidate_ids']))
+        with db.transaction() as c:
+            c.execute(candidates.update().where(candidates.c.id=='stuck-replay').values(
+                personalization_status='INCOMPLETE',
+                personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3',
+                personalization_error='No concise, cited first-party service statement is available',
+                personalization_retry_after='2099-01-01T00:00:00+00:00'))
+            c.execute(events.insert().values(id='stuck-replay-contract-failure',entity_id='stuck-replay',
+                event='PERSONALIZATION_OFFLINE_REPLAY_REJECTED',
+                detail=json.dumps({'validator_contract':OFFLINE_REPLAY_CONTRACT_ID,
+                    'evidence_fingerprint':'same-evidence','error':'service statement absent'}),created_at=now()))
         return {'run_id':'offline-run','attempted':len(kwargs['authorized_candidate_ids']),'completed':0,
             'incomplete':len(kwargs['authorized_candidate_ids']),'replayed':len(kwargs['authorized_candidate_ids']),
             'actual_cost_usd':'0','unresolved_reserved_usd':'0','status':'COMPLETED'}
@@ -2289,8 +2350,9 @@ def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
             personalization_authorizations.c.id=='stuck-batch')).mappings().one()
         event_names=c.execute(select(events.c.event).where(events.c.entity_id=='stuck-batch')).scalars().all()
     assert calls==[['stuck-replay']]
-    assert grant['status']=='RUNNING'
+    assert grant['status']=='ATTENTION_REQUIRED'
     assert 'PERSONALIZATION_BATCH_HEARTBEAT' in event_names
+    assert 'PERSONALIZATION_BATCH_FINISHED' in event_names
 
 
 def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides(db):
@@ -2331,7 +2393,9 @@ def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides
             actual_cost_usd='0.01',provider_response='{}',created_at=now()))
         selected=c.execute(select(candidates.c.id).where(_eligible_query(
             now(),retry_candidate_ids=[old,replay,redirect,transient,terminal]))).scalars().all()
-    assert set(selected)=={old,replay,redirect,transient}
+    # A TRANSIENT_HTTP row follows the ordinary cooldown policy and is not
+    # admitted as a saved-response validation replay.
+    assert set(selected)=={old,replay,redirect}
 
 
 def test_changed_evidence_for_a_paid_operation_never_issues_second_provider_call(db,monkeypatch):

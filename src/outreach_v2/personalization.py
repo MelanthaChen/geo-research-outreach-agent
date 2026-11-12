@@ -20,6 +20,7 @@ from .migrate import dump
 from .service import email_contacts
 from .template import same_site, validate
 from .quality import CODE_MARKERS
+from .replay_policy import replay_allowed_for_contract
 
 MAX_PAGE_BYTES = 512_000
 MAX_PILOT_CANDIDATES = 5
@@ -717,7 +718,8 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                          'Website robots policy could not be checked',
                          'A grounded business description cannot yet be established from the sampled same-site pages',
                          'No visible first-party business claims were available in the permitted page sample']))),
-            saved_response, no_unresolved_attempt)
+            saved_response, no_unresolved_attempt,
+            replay_allowed_for_contract(candidates.c.id, candidates.c.personalization_outcome))
         no_attempt = ~exists(select(personalization_attempts.c.id).where(
             personalization_attempts.c.candidate_id == candidates.c.id))
         legacy_no_geo = and_(
@@ -752,14 +754,14 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                 and_(candidates.c.personalization_outcome.in_([
                     'KNOWN_RESPONSE_REPLAY_REJECTED',
                     'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
-                    'TRANSIENT_HTTP',
                     'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2',
                     'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3']),
                      candidates.c.personalization_error == 'No concise, cited first-party service statement is available'),
                 and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
                      candidates.c.personalization_error ==
                          'No model-cited, first-party target-business description is available')),
-            saved_response, no_unresolved_attempt)
+            saved_response, no_unresolved_attempt,
+            replay_allowed_for_contract(candidates.c.id, candidates.c.personalization_outcome))
         retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
                         first_party_evidence_refresh,
                         replayable_local_rejection)
@@ -789,7 +791,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     """
     import json, os
     from decimal import Decimal
-    from .semantic_openai import (MODEL, MAX_ESTIMATED_USD, OpenAIResponsesBackend,
+    from .semantic_openai import (MODEL, MAX_ESTIMATED_USD, OFFLINE_REPLAY_CONTRACT_ID,
+        OpenAIResponsesBackend,
         build_preflight, select_evidence, build_automated_personalization,
         OpenAIRequestError, PreflightError, attempt_failure_accounting,
         replay_saved_provider_attempt)
@@ -968,7 +971,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     'source_urls':personalization.get('source_urls',[])}),created_at=at))
         return True
 
-    def release(row, status='INCOMPLETE', reason='', retry_kind='TRANSIENT_HTTP', outcome='TRANSIENT_HTTP'):
+    def release(row, status='INCOMPLETE', reason='', retry_kind='TRANSIENT_HTTP', outcome='TRANSIENT_HTTP',
+                replay_contract_id=None, evidence_fingerprint=None):
         at=now(); attempts=int(row.get('personalization_attempts') or 0)+1
         with db.transaction(serialized=True) as c:
             c.execute(candidates.update().where(candidates.c.id==row['id'],candidates.c.personalization_lease_token==lease_token)
@@ -978,6 +982,12 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     personalization_lease_token=None,personalization_lease_until=None))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row['id'],event='PERSONALIZATION_'+status,
                 detail=_safe_json({'classification':outcome,'error':reason[:200]}),created_at=at))
+            if replay_contract_id:
+                c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=row['id'],
+                    event='PERSONALIZATION_OFFLINE_REPLAY_REJECTED',
+                    detail=_safe_json({'validator_contract': replay_contract_id,
+                        'evidence_fingerprint': evidence_fingerprint, 'error': reason[:200]}),
+                    created_at=at))
 
     for index,row in enumerate(claimed):
         replaying_saved_response=False
@@ -1171,18 +1181,16 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
             error=str(exc)
             if replaying_saved_response and error=='No concise, cited first-party service statement is available':
-                # Each targeted selector repair gets at most one additional
-                # offline replay; keep versioning monotonic to prevent loops.
-                prior = str(row.get('personalization_outcome') or '')
-                outcome = ('KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V4'
-                    if prior == 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
-                    else 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
-                    if prior == 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
-                    else 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2')
+                # Keep the failure state stable. A future, identifiable
+                # validator/evidence-contract change can reopen it once.
+                outcome = 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
             elif (replaying_saved_response and
                   error == 'No model-cited, first-party target-business description is available'):
                 outcome = 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_DESCRIPTION_CITATION_REPAIR'
-            release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
+            release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome,
+                replay_contract_id=OFFLINE_REPLAY_CONTRACT_ID if replaying_saved_response else None,
+                evidence_fingerprint=locals().get('fp') if replaying_saved_response else None)
+            result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1
         except OpenAIRequestError as exc:

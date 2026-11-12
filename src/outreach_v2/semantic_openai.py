@@ -28,6 +28,10 @@ from .semantic_analysis import (
     validate_contract,
 )
 
+# Shared with both retry selectors. Bump only alongside a material
+# service-statement citation/evidence-contract correction.
+OFFLINE_REPLAY_CONTRACT_ID = 'service-statement-citation-v3'
+
 MODEL = "gpt-5.4-mini-2026-03-17"
 API_URL = "https://api.openai.com/v1/responses"
 PRICE_INPUT_PER_MILLION = 0.75

@@ -40,7 +40,7 @@ def create_app(database=None):
     async def protect(request,call_next):
         path=request.url.path
         try:
-            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/admin/invites/accept'}:
+            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/personalization-batch-tick','/api/admin/invites/accept'}:
                 current=auth.session(db,request.cookies.get(COOKIE))
                 if not current:return JSONResponse({'error':'Your administrator session has expired. Please sign in.'},401)
                 request.state.session=current
@@ -827,11 +827,6 @@ def create_app(database=None):
             if len(ids)!=100 or not set(ids).issubset(_existing_100_manifest_ids(c)):
                 raise ValueError('The saved authorization does not match an intact 100-candidate manifest')
         current=progress(db,grant,ids)
-        with db.transaction() as c:
-            current['next_retry_at']=c.scalar(select(func.min(candidate_table.c.personalization_retry_after)).where(
-                candidate_table.c.id.in_(ids),candidate_table.c.personalization_outcome=='TRANSIENT_HTTP',
-                candidate_table.c.personalization_attempts<5,
-                candidate_table.c.personalization_retry_after.is_not(None)))
         current['eligible_count']=current['eligible_remaining']
         current['estimated_max_cost_usd']=str(min(MAX_PER_CANDIDATE_USD*current['eligible_remaining'],Decimal('5.00')))
         return current
@@ -973,4 +968,48 @@ def create_app(database=None):
                 job_id=body.get('job_id'),idempotency_key=body.get('idempotency_key'),stage=body.get('stage'),
                 force_report_regeneration=force_regeneration)
         return result
+    @app.post('/api/internal/personalization-batch-tick')
+    async def scheduled_personalization_batch_tick(request:Request):
+        expected=os.environ.get('OUTREACH_WORKER_TOKEN','')
+        supplied=request.headers.get('authorization','')
+        if len(expected)<32 or not hmac.compare_digest(supplied,'Bearer '+expected):
+            raise HTTPException(status_code=401,detail='Worker authentication required')
+        if not db.postgres:
+            raise HTTPException(status_code=503,detail='Personalization recovery requires PostgreSQL locking')
+        try:
+            raw=bytearray()
+            async for chunk in request.stream():
+                if len(raw)+len(chunk)>1024:
+                    raise HTTPException(status_code=413,detail='Worker request is too large')
+                raw.extend(chunk)
+            body=json.loads(raw or b'{}')
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400,detail='Invalid worker request')
+        if body not in ({},None):
+            raise HTTPException(status_code=400,detail='Personalization tick accepts no request fields')
+        from .personalization_batch import _manifest,launch
+        with db.transaction() as c:
+            rows=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.status=='RUNNING',
+                personalization_authorizations.c.total_budget_usd=='5.00',
+                personalization_authorizations.c.approved_by.is_not(None),
+                personalization_authorizations.c.approved_at.is_not(None))).mappings().all()
+            grants=[]
+            for row in rows:
+                try:
+                    ids=_manifest(row)
+                except (TypeError,ValueError):
+                    continue
+                if len(ids)==100:
+                    grants.append((row,ids))
+        if not grants:
+            return {'status':'IDLE','runner_active':db.personalization_batch_active()}
+        if len(grants)!=1:
+            raise HTTPException(status_code=409,detail='Multiple approved RUNNING 100-candidate batches require administrator review')
+        grant,ids=grants[0]
+        active=db.personalization_batch_active()
+        launched=False if active else launch(db,grant['id'])
+        return {'status':'RUNNER_ACTIVE' if active else ('RECOVERY_LAUNCHED' if launched else 'RECOVERY_ALREADY_LOCAL'),
+            'authorization_id':grant['id'],'candidate_ids_sha256':grant['candidate_ids_sha256'],
+            'candidate_count':len(ids),'runner_active':active or launched}
     return app

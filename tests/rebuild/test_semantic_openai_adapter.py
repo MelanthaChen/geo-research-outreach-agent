@@ -98,6 +98,57 @@ def test_evidence_filter_deduplicates_and_excludes_events_and_third_parties():
     assert selected.excluded_counts["THIRD_PARTY_OR_PARTNER"] == 1
 
 
+def test_about_page_food_and_beverage_offerings_are_citable_services_and_build_copy():
+    from outreach_v2.quality import quality_decisions
+    source = {"evidence_profile": {
+        "pages": [
+            {"url":"https://teliagreek.com/", "type":"home", "title":"Telia", "headings":[], "links":[]},
+            {"url":"https://teliagreek.com/about/", "type":"about", "title":"About Telia", "headings":[], "links":[]},
+        ],
+        "facts": [
+            {"id":"about1", "statement":"Telia is a fine dining Mediterranean restaurant in Wyomissing.",
+             "evidence_excerpt":"Locally owned and operated, Telia is Berks County’s fine dining Mediterranean restaurant in Wyomissing.",
+             "source_content":"Locally owned and operated, Telia is Berks County’s fine dining Mediterranean restaurant in Wyomissing.", "source_urls":["https://teliagreek.com/about/"],
+             "source_title":"About Telia", "section_heading":"About",
+             "assertion_type":"ATTRIBUTED_COMPANY_DESCRIPTION", "attribution":"COMPANY_STATED"},
+            {"id":"service1", "statement":"The menu includes Greek appetizers, chops, seafood, and pasta.",
+             "evidence_excerpt":"Whether it’s one of our shareable Greek appetizers, delicately chosen chops, fresh seafood, or creative pasta, everything we serve at Telia reflects the kitchen’s approach.",
+             "source_content":"Whether it’s one of our shareable Greek appetizers, delicately chosen chops, fresh seafood, or creative pasta, everything we serve at Telia reflects the kitchen’s approach.", "source_urls":["https://teliagreek.com/about/"],
+             "source_title":"About Telia", "section_heading":"About",
+             "assertion_type":"ATTRIBUTED_COMPANY_STRENGTH", "attribution":"COMPANY_STATED"},
+        ]}}
+    selection = select_evidence(source, company_name="Telia", website="https://teliagreek.com/")
+    assert selection.classifications["service1"] == "PRODUCT_OR_SERVICE"
+    assert selection.legacy_classifications == {"service1":"TARGET_BUSINESS"}
+    legacy_input = selection.prior_classification_input()
+    assert next(x for x in legacy_input["facts"] if x["id"]=="service1")["classification"] == "TARGET_BUSINESS"
+
+    raw = {
+        "version":CONTRACT_VERSION,
+        "entity_identity":{"name":"Telia","website":"https://teliagreek.com/",
+            "identity_status":"IDENTIFIED","evidence_ids":["about1"]},
+        "products_services":[{"summary":"Greek dining with shareable appetizers, chops, seafood, and pasta.",
+            "evidence_ids":["service1"],"attribution":"COMPANY_STATED"}],
+        "target_audiences":[],"capabilities_characteristics":[],
+        "proposed_claims":[
+            {"id":"description","text":"Telia is a fine dining Mediterranean restaurant in Wyomissing.",
+             "evidence_ids":["about1"],"attribution":"COMPANY_STATED","role":"BUSINESS_DESCRIPTION"},
+            {"id":"relevance","text":"Telia’s first-party description connects its restaurant identity with specific dining offerings, making it a useful case for studying how AI systems represent local businesses.",
+             "evidence_ids":["about1","service1"],"attribution":"ANALYTICAL_INTERPRETATION","role":"RESEARCH_RELEVANCE"}],
+        "evidence_limitations":["Only the cited first-party pages were examined."],
+        "observed_relationships":[],"potential_geo_implications":[],
+        "unsupported_or_unresolved_claims":["No search visibility or performance claims are made."],
+        "recommendation_decision":"ABSTAIN"}
+    personalization, _ = build_automated_personalization(
+        raw, selection, stamp="2026-11-12T00:00:00Z")
+    copy = personalization["recipient_copy"]
+    assert copy["business_summary"] and copy["distinctive_detail"] and copy["research_relevance"]
+    assert set(copy["support"]["distinctive_detail"]) == {"service1"}
+    quality = quality_decisions(personalization, record={"fixture":False},
+        candidate_name="Telia", website="https://teliagreek.com/")
+    assert quality["OUTREACH_REVIEW_READY"]["reasons"] == []
+
+
 def test_quoted_first_person_review_on_service_page_is_not_company_evidence():
     source = profile()
     service_url = "https://www.lagoonny.com/services/dentistry"

@@ -511,6 +511,7 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     with db.worker_lock() as acquired:assert acquired is False
     offline=TestClient(create_app(db))
     assert offline.post('/api/internal/worker-tick',headers={'Authorization':'Bearer '+token},json={}).status_code==503
+    assert offline.post('/api/internal/personalization-batch-tick',headers={'Authorization':'Bearer '+token},json={}).status_code==503
     db.postgres=True
     locked=True
     @contextmanager
@@ -1797,7 +1798,7 @@ def test_gpt_personalization_batch_preview_requires_one_explicit_saved_grant_app
     assert count(db,personalization_attempts)==0
 
 
-def test_batch_runner_resumes_safe_transient_and_skips_unknown_spend(db,monkeypatch):
+def test_batch_runner_processes_one_bounded_chunk_and_preserves_unknown_spend(db,monkeypatch):
     from datetime import datetime,timedelta,timezone
     from outreach_v2.db import personalization_authorizations,personalization_runs,personalization_attempts
     import outreach_v2.personalization as personalization
@@ -1821,40 +1822,23 @@ def test_batch_runner_resumes_safe_transient_and_skips_unknown_spend(db,monkeypa
         calls.append(list(authorized_candidate_ids))
         assert authorized_candidate_ids==['transient-retry']
         with db.transaction() as c:
-            if len(calls)==1:
-                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
-                    personalization_status='INCOMPLETE',personalization_outcome='TRANSIENT_HTTP',
-                    personalization_attempts=1,
-                    personalization_retry_after=(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()))
-            else:
-                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
-                    personalization_status='READY',personalization_analysis_version='semantic-openai-v1',
-                    personalization_quality_status='PASS',personalization_outcome='SEMANTIC_READY',
-                    personalization_retry_after=None))
+            c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
+                personalization_status='INCOMPLETE',personalization_outcome='TRANSIENT_HTTP',
+                personalization_attempts=1,
+                personalization_retry_after=(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()))
         return {'status':'COMPLETED','attempted':1,'completed':1 if len(calls)>1 else 0,
             'incomplete':0 if len(calls)>1 else 1,'budget_stopped':False,'run_id':f'run-{len(calls)}',
             'actual_cost_usd':'0.01','unresolved_reserved_usd':'0'}
     monkeypatch.setattr(personalization,'backfill',fake_backfill)
-    retry_checks=[]
-    def retry_wait(_db,ids):
-        retry_checks.append(True)
-        if len(retry_checks)==1:
-            with db.transaction() as c:
-                c.execute(candidates.update().where(candidates.c.id=='transient-retry').values(
-                    personalization_retry_after=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()))
-            return 0
-        return None
-    monkeypatch.setattr(batch,'_retry_wait',retry_wait)
-    monkeypatch.setattr(batch,'_sleep_while_running',lambda *_args:True)
     batch._run(db,'running-batch')
-    assert len(calls)==2 and calls==[['transient-retry'],['transient-retry']]
+    assert len(calls)==1 and calls==[['transient-retry']]
     with db.transaction() as c:
         auth_row=c.execute(select(personalization_authorizations).where(
             personalization_authorizations.c.id=='running-batch')).mappings().one()
         untouched=c.execute(select(candidates).where(candidates.c.id=='unknown-never')).mappings().one()
         unknown=c.execute(select(personalization_attempts).where(
             personalization_attempts.c.id=='unknown-never-attempt')).mappings().one()
-    assert auth_row['status']=='ATTENTION_REQUIRED'
+    assert auth_row['status']=='RUNNING'
     assert untouched['personalization_status']=='INCOMPLETE'
     assert unknown['status']=='UNKNOWN_SPEND' and unknown['reserved_usd']=='0.05'
 
@@ -1954,7 +1938,7 @@ def test_batch_retry_override_is_limited_to_no_attempt_v1_recommendation_deferra
     assert set(eligible_ids)=={exact,redirect}
 
 
-def test_known_response_replay_rejection_override_excludes_identity_mismatch(db):
+def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repair(db):
     from outreach_v2.db import personalization_attempts, personalization_runs
     from outreach_v2.personalization_batch import eligibility
     allowed='known-local-validation-rejection'
@@ -1979,7 +1963,92 @@ def test_known_response_replay_rejection_override_excludes_identity_mismatch(db)
                 actual_cost_usd='0.01',provider_response='{}',created_at=now()))
         manifest=[allowed,identity,transient]+[f'unused-{i}' for i in range(97)]
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
-    assert set(eligible_ids)=={allowed,transient}
+    # Only the exact known-cost first-party service-classification failure is
+    # eligible for deterministic offline replay; identity/transient failures stay out.
+    assert set(eligible_ids)=={allowed}
+
+
+def test_service_classifier_repair_admits_only_known_cost_saved_response(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    repaired='known-service-classifier-repair'
+    unknown='unknown-service-classifier-repair'
+    for ident in (repaired,unknown):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='service-repair-run',started_at=now(),status='COMPLETED',
+            candidate_limit=2,run_budget_usd='0.10',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        for ident in (repaired,unknown):
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_status='INCOMPLETE',personalization_analysis_version='FAIL',
+                personalization_quality_status='FAIL',personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED',
+                personalization_error='No concise, cited first-party service statement is available',
+                personalization_retry_after='2099-01-01T00:00:00+00:00',personalization_attempts=1))
+        c.execute(personalization_attempts.insert().values(id='known-service-attempt',candidate_id=repaired,
+            run_id='service-repair-run',evidence_fingerprint='old-fp',operation_id='initial',
+            model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{"preflight":{"prompt_sha256":"known"}}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='unknown-service-attempt',candidate_id=unknown,
+            run_id='service-repair-run',evidence_fingerprint='unknown-fp',operation_id='initial',
+            model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',reserved_usd='0.05',
+            actual_cost_usd='0',provider_response=None,created_at=now()))
+        ids=[repaired,unknown]+[f'service-repair-unused-{i}' for i in range(98)]
+        selected=c.execute(select(candidates.c.id).where(eligibility(ids))).scalars().all()
+    assert selected==[repaired]
+
+
+def test_bounded_runner_releases_local_launch_guard_for_next_scheduler_tick(db,monkeypatch):
+    import threading,time
+    import outreach_v2.personalization_batch as batch
+    runs=[]
+    completed=threading.Event()
+    def one_tick(_db,ident):
+        runs.append(ident)
+        completed.set()
+    monkeypatch.setattr(batch,'_run_locked',one_tick)
+    assert batch.launch(db,'recoverable-runner') is True
+    assert completed.wait(2)
+    deadline=time.monotonic()+2
+    while batch.is_active('recoverable-runner') and time.monotonic()<deadline:
+        time.sleep(.01)
+    assert batch.is_active('recoverable-runner') is False
+    completed.clear()
+    assert batch.launch(db,'recoverable-runner') is True
+    assert completed.wait(2)
+    deadline=time.monotonic()+2
+    while batch.is_active('recoverable-runner') and time.monotonic()<deadline:
+        time.sleep(.01)
+    assert runs==['recoverable-runner','recoverable-runner']
+    assert batch.is_active('recoverable-runner') is False
+
+
+def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
+    from outreach_v2.db import personalization_authorizations,events
+    import outreach_v2.personalization as personalization
+    import outreach_v2.personalization_batch as batch
+    candidate(db,ident='stuck-replay',name='Stuck Replay',fixture=False,personalization=False)
+    manifest=['stuck-replay']+[f'stuck-member-{i:03}' for i in range(99)]
+    digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id='stuck-batch',candidate_ids=dump(manifest),
+            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@example.org',
+            approved_by='admin@example.org',approved_at=now(),created_at=now()))
+    calls=[]
+    def no_progress(*_args,**kwargs):
+        calls.append(list(kwargs['authorized_candidate_ids']))
+        return {'run_id':'offline-run','attempted':len(kwargs['authorized_candidate_ids']),'completed':0,
+            'incomplete':len(kwargs['authorized_candidate_ids']),'replayed':len(kwargs['authorized_candidate_ids']),
+            'actual_cost_usd':'0','unresolved_reserved_usd':'0','status':'COMPLETED'}
+    monkeypatch.setattr(personalization,'backfill',no_progress)
+    batch._run(db,'stuck-batch')
+    with db.transaction() as c:
+        grant=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='stuck-batch')).mappings().one()
+        event_names=c.execute(select(events.c.event).where(events.c.entity_id=='stuck-batch')).scalars().all()
+    assert calls==[['stuck-replay']]
+    assert grant['status']=='RUNNING'
+    assert 'PERSONALIZATION_BATCH_HEARTBEAT' in event_names
 
 
 def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides(db):

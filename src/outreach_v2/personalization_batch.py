@@ -55,6 +55,10 @@ def eligibility(ids, stamp=None):
                      'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
                      'Website robots policy could not be checked']))),
         replayable_response)
+    repaired_service_classification = and_(
+        candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+        candidates.c.personalization_error == 'No concise, cited first-party service statement is available',
+        replayable_response)
     # These are narrow, deterministic repairs. The legacy V1 error was raised
     # before website evidence or a provider request existed; it is safe to run
     # under the same manifest authorization. Rejected saved responses are
@@ -73,15 +77,13 @@ def eligibility(ids, stamp=None):
             'Website robots policy could not be checked']),
         candidates.c.personalization_outcome.in_(['PERMANENT_EVIDENCE', 'TRANSIENT_HTTP']),
         no_provider_attempt)
-    replayable_local_rejection = and_(
-        or_(and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
-                 candidates.c.personalization_error.in_([
-                     'Model abstained while returning GEO hypotheses; inconsistent response',
-                     'Saved response does not contain the raw provider response',
-                     'Outreach review quality failed: SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY'])),
-            and_(candidates.c.personalization_outcome.in_(['KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP']),
-                 candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
-        replayable_response)
+    # A known-cost response is replayed only for deterministic repairs that
+    # changed the validation contract. A replay that has already failed the
+    # current contract is not itself a reason to become eligible again: doing
+    # so made the daemon repeatedly select the same five records, report a
+    # completed run, spend nothing, and leave every other candidate untouched.
+    # Such records require a new, explicit validator repair before eligibility
+    # is restored.
     # Only a semantic PASS is complete for this batch. Historical deployments
     # wrote values such as "FAIL" into the analysis-version column; treating
     # every non-NULL value as a completed analysis stranded those legacy rows.
@@ -89,13 +91,14 @@ def eligibility(ids, stamp=None):
         candidates.c.personalization_analysis_version.is_(None),
         candidates.c.personalization_analysis_version != 'semantic-openai-v1',
         and_(candidates.c.personalization_quality_status == 'FAIL',
-             candidates.c.personalization_outcome == 'SEMANTIC_QUALITY_REJECTED',
+             candidates.c.personalization_outcome.in_([
+                 'SEMANTIC_QUALITY_REJECTED', 'KNOWN_RESPONSE_REPLAY_REJECTED']),
              replayable_response))
     retry_state = or_(candidates.c.personalization_retry_after.is_(None),
                       candidates.c.personalization_retry_after <= stamp,
-                      corrected_validation_outcome, legacy_no_geo_recommendation,
-                      redirect_or_http_repair,
-                      replayable_local_rejection)
+                      corrected_validation_outcome, repaired_service_classification,
+                      legacy_no_geo_recommendation,
+                      redirect_or_http_repair)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
@@ -132,12 +135,45 @@ def progress(db, grant, ids):
                 unresolved += max(cost, Decimal(str(item.reserved_usd or 0)))
         eligible = c.scalar(select(func.count()).select_from(candidates).where(eligibility(ids))) or 0
         status = grant['status']
+        checkpoint = c.execute(select(events.c.created_at, events.c.detail).where(
+            events.c.entity_id == grant['id'],
+            events.c.event == 'PERSONALIZATION_BATCH_CHECKPOINT').order_by(
+                events.c.created_at.desc()).limit(1)).mappings().first()
+        heartbeat = c.execute(select(events.c.created_at, events.c.detail).where(
+            events.c.entity_id == grant['id'], events.c.event.in_([
+                'PERSONALIZATION_BATCH_HEARTBEAT', 'PERSONALIZATION_BATCH_CHECKPOINT',
+                'PERSONALIZATION_BATCH_WAITING_RETRY', 'PERSONALIZATION_BATCH_NO_PROGRESS'
+            ])).order_by(events.c.created_at.desc()).limit(1)).mappings().first()
+        retries = c.execute(select(candidates.c.personalization_retry_after).where(
+            candidates.c.id.in_(ids), candidates.c.personalization_outcome == 'TRANSIENT_HTTP',
+            candidates.c.personalization_attempts < 5,
+            candidates.c.personalization_retry_after.is_not(None),
+            ~exists(select(personalization_attempts.c.id).where(
+                personalization_attempts.c.candidate_id == candidates.c.id,
+                personalization_attempts.c.status.in_(['UNKNOWN_SPEND', 'RESERVED']))))).scalars().all()
+    runner_active = db.personalization_batch_active() if db.postgres else is_active(grant['id'])
+    future_retries = []
+    current_time = datetime.now(timezone.utc)
+    for retry_at in retries:
+        try:
+            parsed = datetime.fromisoformat(retry_at)
+            parsed = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+            if parsed > current_time:
+                future_retries.append(parsed)
+        except (TypeError, ValueError):
+            continue
     return {'authorization_id': grant['id'], 'status': status, 'candidate_count': len(ids),
         'processed': int(passed + failed), 'eligible_remaining': int(eligible),
         'quality_pass': int(passed), 'quality_fail': int(failed), 'provider_attempts': int(attempts),
         'actual_cost_usd': str(actual), 'unresolved_reserved_usd': str(unresolved),
         'total_budget_cap_usd': str(grant['total_budget_usd']), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
-        'runner_active': is_active(grant['id'])}
+        'runner_active': runner_active,
+        'execution_state': ('RUNNER_ACTIVE' if runner_active else 'SCHEDULED_WAIT' if status == 'RUNNING' else status),
+        'last_checkpoint_at': checkpoint['created_at'] if checkpoint else None,
+        'last_checkpoint': json.loads(checkpoint['detail']) if checkpoint and checkpoint['detail'] else None,
+        'heartbeat_at': heartbeat['created_at'] if heartbeat else None,
+        'heartbeat': json.loads(heartbeat['detail']) if heartbeat and heartbeat['detail'] else None,
+        'next_retry_at': min(future_retries).isoformat() if future_retries else None}
 
 
 def is_active(ident):
@@ -215,12 +251,28 @@ def _retry_wait(db, ids):
 
 def _run(db, ident):
     try:
+        with db.personalization_batch_lock() as acquired:
+            if acquired:
+                _run_locked(db, ident)
+    finally:
+        with _active_lock:
+            _active.discard(ident)
+
+
+def _run_locked(db, ident):
+    try:
         with db.transaction() as c:
             grant = c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.id == ident)).mappings().first()
         if not grant:
             return
         ids = _manifest(grant)
+        with db.transaction() as c:
+            c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
+                event='PERSONALIZATION_BATCH_HEARTBEAT',
+                detail=json.dumps({'execution_state':'RUNNER_ACTIVE',
+                    'candidate_ids_sha256':grant['candidate_ids_sha256']},
+                    sort_keys=True, separators=(',', ':')), created_at=now()))
         while True:
             with db.transaction() as c:
                 current = c.execute(select(personalization_authorizations).where(
@@ -237,9 +289,12 @@ def _run(db, ident):
                             event='PERSONALIZATION_BATCH_WAITING_RETRY',
                             detail=json.dumps({'retry_in_seconds': int(delay)}, separators=(',', ':')),
                             created_at=now()))
-                    if not _sleep_while_running(db, ident, min(delay, 60)):
-                        return
-                    continue
+                        c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
+                            event='PERSONALIZATION_BATCH_HEARTBEAT',
+                            detail=json.dumps({'execution_state':'SCHEDULED_WAIT',
+                                'next_retry_in_seconds':int(delay)}, separators=(',', ':')),
+                            created_at=now()))
+                    return
                 current_progress = progress(db, current, ids)
                 final = 'ATTENTION_REQUIRED' if Decimal(current_progress['unresolved_reserved_usd']) > 0 else 'COMPLETED'
                 _set_status(db, ident, final, 'PERSONALIZATION_BATCH_FINISHED', current_progress, only_running=True)
@@ -250,6 +305,7 @@ def _run(db, ident):
                 authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids,
                 approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD))
             detail = {'candidate_count': len(next_ids), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
+                'candidate_ids': list(next_ids),
                 'run_id': result.get('run_id'), 'attempted': result.get('attempted', 0),
                 'completed': result.get('completed', 0), 'incomplete': result.get('incomplete', 0),
                 'status': result.get('status'), 'budget_stopped': result.get('budget_stopped', False),
@@ -266,9 +322,40 @@ def _run(db, ident):
                 _set_status(db, ident, 'ATTENTION_REQUIRED', 'PERSONALIZATION_BATCH_ATTENTION_REQUIRED',
                     current_progress, only_running=True)
                 return
+            if (result.get('attempted', 0) > 0 and result.get('completed', 0) == 0
+                    and result.get('replayed', 0) >= result.get('attempted', 0)
+                    and Decimal(str(result.get('actual_cost_usd', '0'))) == 0):
+                # Rejected known-cost responses are made ineligible by the
+                # repair-specific outcome. Let the scheduler advance to other
+                # IDs instead of resetting or endlessly replaying this chunk.
+                with db.transaction() as c:
+                    c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
+                        event='PERSONALIZATION_BATCH_HEARTBEAT',
+                        detail=json.dumps({'execution_state':'SCHEDULED_WAIT',
+                            'reason':'OFFLINE_REPLAY_CHUNK_COMPLETE',
+                            'candidate_ids':list(next_ids)},sort_keys=True,separators=(',',':')),
+                        created_at=now()))
+                return
             if result.get('attempted', 0) == 0 and result.get('completed', 0) == 0:
-                delay = _retry_wait(db, ids)
-                _sleep_while_running(db, ident, min(delay if delay is not None else 30, 60))
+                if result.get('skipped_existing_attempt', 0) > 0:
+                    with db.transaction() as c:
+                        c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
+                            event='PERSONALIZATION_BATCH_HEARTBEAT',
+                            detail=json.dumps({'execution_state':'SCHEDULED_WAIT',
+                                'reason':'SAFE_REPLAY_NOT_PROVEN_BY_ARCHIVED_PROMPT_HASH',
+                                'candidate_ids':list(next_ids)},sort_keys=True,separators=(',',':')),
+                            created_at=now()))
+                    return
+                current_progress = progress(db, grant, ids)
+                current_progress['last_batch'] = detail
+                current_progress['blocker'] = 'The selected candidates produced no attempt or completion; inspect the durable checkpoint before resuming.'
+                _set_status(db, ident, 'ATTENTION_REQUIRED',
+                    'PERSONALIZATION_BATCH_NO_PROGRESS', current_progress, only_running=True)
+                return
+            # Work one bounded chunk per invocation. A scheduled authenticated
+            # tick reacquires the persisted RUNNING grant after this thread
+            # exits, and after any Render restart.
+            return
     except Exception as exc:
         _set_status(db, ident, 'ATTENTION_REQUIRED', 'PERSONALIZATION_BATCH_RUNNER_ERROR',
             {'error_type': type(exc).__name__}, only_running=True)

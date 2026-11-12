@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -100,6 +100,7 @@ class EvidenceSelection:
     excluded_reasons: Mapping[str, str]
     excluded_counts: Mapping[str, int]
     limitations: tuple[str, ...]
+    legacy_classifications: Mapping[str, str] = field(default_factory=dict)
 
     def to_input(self) -> dict[str, Any]:
         # source_content is kept by the application for excerpt provenance
@@ -118,6 +119,23 @@ class EvidenceSelection:
                 "excluded_counts": dict(self.excluded_counts),
                 "limitations": list(self.limitations)}
 
+    def prior_classification_input(self) -> dict[str, Any]:
+        """Rebuild the pre-fix prompt only for deterministic offering reclassification.
+
+        This permits offline replay only when its prompt hash exactly matches
+        the archived paid request. It is not a general-purpose evidence change
+        or a way to reuse a response against newer website content.
+        """
+        evidence = self.to_input()
+        if not self.legacy_classifications:
+            return evidence
+        for item in evidence["facts"]:
+            old = self.legacy_classifications.get(str(item.get("id")))
+            if old:
+                item["classification"] = old
+                evidence["evidence_classifications"][str(item["id"])] = old
+        return evidence
+
 
 def _host(url: str) -> str:
     try:
@@ -126,7 +144,8 @@ def _host(url: str) -> str:
         return ""
 
 
-def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str) -> str:
+def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str, *,
+                   recognize_explicit_offerings: bool = True) -> str:
     urls = item.get("source_urls") or []
     if not urls or any(_host(str(url)) != site_host for url in urls):
         return "THIRD_PARTY_OR_PARTNER"
@@ -181,6 +200,23 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str) -
     if re.search(r"\b(?:available for sale|for sale|we offer|offers?\b.{0,100}\b(?:services?|products?|custom design|classes?|treatments?|lodging|rooms?|meals?|consulting|lessons?|programs?))\b",
                  excerpt, re.I):
         return "PRODUCT_OR_SERVICE"
+    # About pages often describe actual offerings without saying "services"
+    # or using a /services URL. Promote only company-voice statements that
+    # pair an offer/serve verb with concrete offering terms; quoted customer
+    # copy and third-party evidence were excluded above.
+    if recognize_explicit_offerings:
+        explicit_offering = re.search(
+            r"\b(?:our|we|us)\b.{0,260}\b(?:offer|offers|offering|serve|serves|provide|provides|"
+            r"sell|sells|feature|features|make|makes|create|creates|specialize|specializes)\b",
+            excerpt, re.I)
+        concrete_offering = re.search(
+            r"\b(?:appetizers?|entr(?:e|é)e?s?|chops?|seafood|pasta|cocktails?|scotches?|cordials?|"
+            r"beers?|wines?|menu|meals?|cuisine|food|beverages?|rooms?|lodging|stays?|amenities|"
+            r"treatments?|classes?|lessons?|consulting|custom design|repairs?|installations?|"
+            r"products?|services?|programs?|workshops?|garments?|fittings?)\b",
+            excerpt, re.I)
+        if explicit_offering and concrete_offering:
+            return "PRODUCT_OR_SERVICE"
     # An About/Home claim is target evidence only if it is explicitly tied to
     # the organization, its authors, or first-person company voice.
     entity = str(item.get("statement") or excerpt).casefold()
@@ -228,6 +264,7 @@ def select_evidence(personalization: Mapping[str, Any], *, company_name: str,
     selected: list[tuple[int, int, dict[str, Any]]] = []
     counts: dict[str, int] = {k: 0 for k in priority}
     classifications: dict[str, str] = {}
+    legacy_classifications: dict[str, str] = {}
     excluded_reasons: dict[str, str] = {}
     from .quality import CODE_MARKERS
     for index, item in enumerate(raw_facts):
@@ -237,6 +274,10 @@ def select_evidence(personalization: Mapping[str, Any], *, company_name: str,
         urls = item.get("source_urls") or []
         fact_id = str(item.get("id") or f"candidate_{index}")
         classification = _classify_fact(item, site_host, company_name)
+        previous_classification = _classify_fact(
+            item, site_host, company_name, recognize_explicit_offerings=False)
+        if classification != previous_classification:
+            legacy_classifications[fact_id] = previous_classification
         classifications[fact_id] = classification
         counts[classification] += 1
         if not excerpt or not urls:
@@ -294,7 +335,9 @@ def select_evidence(personalization: Mapping[str, Any], *, company_name: str,
         item["classification"] = classifications[item["id"]]
     return EvidenceSelection(company_name, website, tuple(page_summaries), tuple(chosen),
                              classifications, excluded_reasons, counts,
-                             tuple(str(x) for x in ((personalization.get("assessment") or {}).get("limitations") or [])))
+                             tuple(str(x) for x in ((personalization.get("assessment") or {}).get("limitations") or [])),
+                             {item["id"]: legacy_classifications[item["id"]]
+                              for item in chosen if item["id"] in legacy_classifications})
 
 
 def _tokenizer(model: str) -> Callable[[str], int]:

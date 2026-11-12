@@ -955,6 +955,28 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     personalization_attempts.c.candidate_id==row['id'],
                     personalization_attempts.c.operation_id==operation_id).order_by(
                         personalization_attempts.c.created_at.desc()).limit(1).with_for_update()).mappings().first())
+                # The service-classification correction changes only the
+                # deterministic label supplied to the model. Reuse a paid
+                # response only when restoring those exact prior labels
+                # recreates the archived request hash byte-for-byte.
+                if (not previous and prior_operation
+                        and prior_operation.get('status') in {'COMPLETED','VALIDATION_FAILED'}
+                        and prior_operation.get('provider_response')
+                        and prior_operation.get('actual_cost_usd')
+                        and selection.legacy_classifications):
+                    try:
+                        archived=json.loads(prior_operation['provider_response'])
+                        archived_hash=(archived.get('preflight') or {}).get('prompt_sha256')
+                        if not archived_hash:
+                            archived_hash=((archived.get('provider_response') or {}).get('preflight') or {}).get('prompt_sha256')
+                        prior_preflight,_=build_preflight(
+                            selection.prior_classification_input(),token_count=token_count)
+                        if archived_hash and archived_hash==prior_preflight.prompt_sha256:
+                            previous=prior_operation
+                    except (TypeError,ValueError,PreflightError):
+                        # Missing or malformed archived inputs are never
+                        # treated as replay authorization.
+                        pass
                 if (previous and previous['status'] in {'COMPLETED','VALIDATION_FAILED'}
                         and previous.get('provider_response') and previous.get('actual_cost_usd')):
                     # Mark the replay before local validation starts. If replay
@@ -1036,6 +1058,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             normalized['semantic_execution']={'provider':provider_result.get('provider'),'model':provider_result.get('model'),
                 'request_id':provider_result.get('request_id'),'usage':provider_result.get('usage'),
                 'estimated_cost_usd':provider_result.get('estimated_cost_usd'),
+                'offline_replay':bool(provider_result.get('offline_replay')),
                 'preflight':provider_result.get('preflight'),'model_claim_audit':audit,
                 'structured_output':provider_result.get('structured_output'),
                 'rejected_claims':provider_result.get('rejected_claims',[])}
@@ -1067,7 +1090,13 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
         except ValueError as exc:
             kind=_failure_kind(exc)
             outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
-            release(row,'INCOMPLETE',str(exc),retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
+            error=str(exc)
+            if replaying_saved_response and error=='No concise, cited first-party service statement is available':
+                # This response has already been evaluated against the corrected
+                # first-party offering classifier. Keep the evidence failure
+                # visible while preventing another identical replay loop.
+                outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR'
+            release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1
         except OpenAIRequestError as exc:

@@ -339,6 +339,31 @@ class Database:
                 if acquired:
                     c.execute(text('SELECT pg_advisory_unlock(824761933)'))
                     c.commit()
+    @contextmanager
+    def personalization_batch_lock(self):
+        """One PostgreSQL session owns personalization work across restarts."""
+        if not self.postgres:
+            yield True
+            return
+        with self.engine.connect() as c:
+            acquired = bool(c.scalar(text('SELECT pg_try_advisory_lock(824761934)')))
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    c.execute(text('SELECT pg_advisory_unlock(824761934)'))
+                    c.commit()
+    def personalization_batch_active(self):
+        """Check global activity without relying on this web process's memory."""
+        if not self.postgres:
+            return False
+        with self.engine.connect() as c:
+            acquired = bool(c.scalar(text('SELECT pg_try_advisory_lock(824761934)')))
+            if acquired:
+                c.execute(text('SELECT pg_advisory_unlock(824761934)'))
+                c.commit()
+                return False
+            return True
     def upsert(self, c, relation, rows, keys=('id',), update=True):
         if not rows: return
         if self.postgres:

@@ -235,6 +235,42 @@ def test_report_only_regeneration_from_delivery_stage_never_invokes_delivery(tmp
     assert len(reports_for_job)==2 and sum(bool(row["is_active"]) for row in reports_for_job)==1
 
 
+def test_report_retry_recovers_blocked_job_from_genuine_checkpoint_without_delivery(tmp_path, monkeypatch):
+    db, job, _ = setup_db(tmp_path, preview=True)
+    with db.transaction() as c:
+        c.execute(jobs.update().where(jobs.c.id==JOB_ID).values(
+            status="BLOCKED_CONFIGURATION", stage="DELIVERY",
+            error="GEO Engine result GET failed: HTTP 404"))
+    monkeypatch.setenv("OUTREACH_REPORT_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED", "false")
+    result=worker.tick(db,max_jobs=1,job_id=JOB_ID,idempotency_key=KEY,stage="REPORT",
+        force_report_regeneration=True,renderer=renderer,
+        mail_factory=lambda:pytest.fail("report recovery must not construct a delivery provider"))
+    assert result["processed_stages"]==1
+    rows=report_rows(db)
+    old=next(row for row in rows if row["id"]=="report-preview-TEST-ONLY")
+    new=next(row for row in rows if row["is_active"])
+    assert old["is_active"] is False and old["result_id"]==PREVIEW_ID
+    assert new["result_id"]==RESULT_ID and new["id"]!=old["id"]
+    with db.transaction() as c:
+        recovered=dict(c.execute(select(jobs).where(jobs.c.id==JOB_ID)).mappings().one())
+        delivery_count=c.scalar(select(func.count()).select_from(worker.deliveries).where(
+            worker.deliveries.c.report_id==new["id"]))
+    assert recovered["status"]=="COMPLETED" and recovered["stage"]=="DELIVERY"
+    assert recovered["error"] is None and delivery_count==0
+
+
+def test_blocked_report_retry_still_rejects_invalid_result_checkpoint(tmp_path):
+    db, job, _ = setup_db(tmp_path)
+    invalid=genuine_result() | {"fixture_generated":True}
+    with db.transaction() as c:
+        c.execute(jobs.update().where(jobs.c.id==JOB_ID).values(
+            status="BLOCKED_CONFIGURATION",stage="DELIVERY",result=dump(invalid)))
+        current=dict(c.execute(select(jobs).where(jobs.c.id==JOB_ID)).mappings().one())
+    with pytest.raises(ConfigurationBlocked,match="identity or provenance is not genuine"):
+        worker.report_step(db,current,renderer=renderer,force_regeneration=True)
+
+
 def test_report_migration_is_versioned_and_partial_unique_index_is_present(tmp_path):
     db, _, _ = setup_db(tmp_path)
     with db.transaction() as c:

@@ -116,7 +116,17 @@ def _valid_report_artifact(report, expected_result_id):
             and 'NO-ENGINE-RESULT' not in str(report.get('result_id') or '').upper())
 
 def _genuine_job_result(job, inv):
-    if job.get('status')!='COMPLETED' or job.get('stage') not in {'REPORT','DELIVERY'} or not job.get('result_id'):
+    status=job.get('status')
+    stage=job.get('stage')
+    # A report-stage failure may mark the Outreach job BLOCKED_CONFIGURATION
+    # after Engine has already completed and its result has been checkpointed.
+    # Let an exact report retry reuse that durable checkpoint, but only for a
+    # report/delivery stage and only after the complete result/provenance checks
+    # below pass. Research and consent stages cannot use this recovery path.
+    recoverable_report_checkpoint=(status in {'BLOCKED_CONFIGURATION','RETRY_PENDING'}
+                                   and stage in {'REPORT','DELIVERY'})
+    if ((status!='COMPLETED' and not recoverable_report_checkpoint)
+        or stage not in {'REPORT','DELIVERY'} or not job.get('result_id')):
         raise ConfigurationBlocked('A completed genuine research result is required before report generation')
     result=parse(job.get('result'))
     validate_result(result,inv,job)

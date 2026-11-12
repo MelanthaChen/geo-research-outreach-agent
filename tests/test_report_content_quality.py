@@ -29,6 +29,7 @@ def test_geoairesume_report_keeps_full_page_out_of_proposed_revision_and_lists_s
     template = Path(__file__).parents[1] / "templates/company_geo_analysis_report_template.docx"
     output = generate_docx_report(result, tmp_path/"geo.docx", template)
     doc = Document(output)
+    assert all(section.bottom_margin == 457200 for section in doc.sections)
     all_text = "\n".join([p.text for p in doc.paragraphs] + [cell.text for table in doc.tables for row in table.rows for cell in row.cells])
     assert "Research sources" in all_text
     assert "Model-generated interpretations" in all_text

@@ -1975,6 +1975,36 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
     assert set(eligible_ids)=={allowed,prior_repair,v2_replay}
 
 
+def test_backfill_admits_v1_classifier_replay_selected_by_batch_without_unresolved_spend(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization import _eligible_query
+    replay='v1-classifier-backfill-replay'
+    unresolved='v1-classifier-backfill-unresolved'
+    for ident in (replay, unresolved):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='v1-classifier-backfill-run',started_at=now(),
+            status='COMPLETED',candidate_limit=2,run_budget_usd='0.10',cumulative_budget_usd='5.00',
+            reserved_usd='0.10',actual_cost_usd='0.02',detail='{}'))
+        for ident in (replay, unresolved):
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
+                personalization_error='No concise, cited first-party service statement is available',
+                personalization_retry_after='2099-01-01T00:00:00+00:00',personalization_attempts=1))
+            c.execute(personalization_attempts.insert().values(id='attempt-'+ident,candidate_id=ident,
+                run_id='v1-classifier-backfill-run',evidence_fingerprint='prior-fp',operation_id='prior-op-'+ident,
+                model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+                actual_cost_usd='0.01',provider_response='{"raw_response":{}}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='unknown-v1-attempt',candidate_id=unresolved,
+            run_id='v1-classifier-backfill-run',evidence_fingerprint='unknown-fp',operation_id='unknown-op',
+            model='gpt-5.4-mini-2026-03-17',status='UNKNOWN_SPEND',reserved_usd='0.05',
+            actual_cost_usd='0',provider_response=None,created_at=now()))
+        ids=[replay,unresolved]
+        claimed=c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=ids))).scalars().all()
+    assert claimed==[replay]
+
+
 def test_service_classifier_repair_admits_only_known_cost_saved_response(db):
     from outreach_v2.db import personalization_attempts, personalization_runs
     from outreach_v2.personalization_batch import eligibility

@@ -708,7 +708,9 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                          'Saved response does not contain the raw provider response',
                          'Outreach review quality failed: SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY'])),
                 and_(candidates.c.personalization_outcome.in_([
-                    'KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP',
+                    'KNOWN_RESPONSE_REPLAY_REJECTED',
+                    'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
+                    'TRANSIENT_HTTP',
                     'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2']),
                      candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
             saved_response, no_unresolved_attempt)

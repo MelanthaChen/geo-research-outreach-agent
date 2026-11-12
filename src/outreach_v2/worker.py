@@ -209,7 +209,7 @@ def report_step(db,job,renderer=None,*,force_regeneration=False,result_loader=No
         existing=c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().first()
         version=c.execute(select(reports).where(reports.c.result_id==result['record_id']).order_by(reports.c.created_at.desc())).mappings().first()
         if force_regeneration:
-            if version and version.get('renderer_version')=='geo-report-v4':
+            if version and version.get('renderer_version')=='geo-report-v5':
                 if not _valid_report_artifact(dict(version),result['record_id']):
                     raise ConfigurationBlocked('Current renderer version report failed its integrity check')
                 document=None
@@ -254,7 +254,7 @@ def report_step(db,job,renderer=None,*,force_regeneration=False,result_loader=No
     # Increment when document layout or QA behavior changes. This gives a
     # corrected renderer an immutable report identity instead of reusing a
     # prior artifact that was produced by the same generator label.
-    renderer_version='geo-report-v4'
+    renderer_version='geo-report-v5'
     new_id='report-'+sha(job['id']+':'+str(result['record_id'])+':'+renderer_version)[:24]
     with db.transaction(serialized=True) as c:
         inv,_=context(c,job)

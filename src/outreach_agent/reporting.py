@@ -267,9 +267,12 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     doc.add_paragraph("No website changes were deployed. Post-optimization measurements are Not measured. The proposed revisions are hypotheses for a separately approved experiment.")
 
     doc.add_heading("Limitations and next steps", level=1)
-    for limitation in result.get("limitations", []):
-        doc.add_paragraph(_text(limitation), style="List Bullet")
-    doc.add_paragraph("Review the recommendations before making any website change.", style="List Bullet")
+    limitations = result.get("limitations", [])
+    for index, limitation in enumerate(limitations):
+        text = _text(limitation)
+        if index == len(limitations) - 1:
+            text += " Review the recommendations before making any website change."
+        doc.add_paragraph(text, style="List Bullet")
 
     for paragraph in doc.paragraphs:
         if paragraph.style.name.startswith("Heading") or paragraph.style.name == "Title":

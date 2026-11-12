@@ -71,9 +71,9 @@ jobs = table('jobs', col('id', String, primary_key=True),
     col('error'), col('created_at'), col('started_at'), col('completed_at'), col('updated_at'))
 reports = table('reports', col('id', String, primary_key=True),
     Column('job_id', String, ForeignKey(f'{SCHEMA}.jobs.id'), nullable=False),
-    col('recipient', String, nullable=False), col('result_id', String, unique=True), col('document', LargeBinary),
+    col('recipient', String, nullable=False), col('result_id', String), col('document', LargeBinary),
     col('sha256'), col('created_at'), col('is_active', Boolean, nullable=False, default=True, server_default='TRUE'),
-    col('superseded_at'), col('superseded_by', String))
+    col('superseded_at'), col('superseded_by', String), col('renderer_version'), col('regenerated_from'))
 Index('uq_reports_active_job', reports.c.job_id, unique=True,
     postgresql_where=reports.c.is_active.is_(True), sqlite_where=reports.c.is_active.is_(True))
 deliveries = table('deliveries', col('id', String, primary_key=True),
@@ -181,6 +181,8 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
         'superseded_at': 'TEXT',
         'superseded_by': 'TEXT'
     }
+}), (10, 'immutable-report-regeneration-versions', {
+    'reports': {'renderer_version': 'TEXT', 'regenerated_from': 'TEXT'}
 })]
 
 class Database:
@@ -267,6 +269,31 @@ class Database:
                         c.execute(candidates.update().where(candidates.c.id==row['id']).values(
                             personalization_quality_status='PASS' if not failures else 'FAIL',
                             personalization_quality_errors=json.dumps(failures,separators=(',',':'))))
+                if version == 10:
+                    if self.postgres:
+                        constraints = inspect(c).get_unique_constraints('reports', schema=SCHEMA)
+                        quote = self.engine.dialect.identifier_preparer.quote
+                        for constraint in constraints:
+                            if constraint.get('column_names') == ['result_id']:
+                                c.execute(text(f'ALTER TABLE {SCHEMA}.reports DROP CONSTRAINT {quote(constraint["name"])}'))
+                    else:
+                        unique = inspect(c).get_unique_constraints('reports')
+                        if any(item.get('column_names') == ['result_id'] for item in unique):
+                            c.execute(text('''CREATE TABLE reports_v10_new (
+                                id VARCHAR NOT NULL PRIMARY KEY, job_id VARCHAR NOT NULL REFERENCES jobs(id),
+                                recipient VARCHAR NOT NULL, result_id VARCHAR, document BLOB, sha256 TEXT, created_at TEXT,
+                                approval_required BOOLEAN NOT NULL DEFAULT 1, is_active BOOLEAN NOT NULL DEFAULT 1,
+                                superseded_at TEXT, superseded_by VARCHAR, renderer_version TEXT, regenerated_from VARCHAR
+                            )'''))
+                            c.execute(text('''INSERT INTO reports_v10_new
+                                (id,job_id,recipient,result_id,document,sha256,created_at,approval_required,is_active,
+                                 superseded_at,superseded_by,renderer_version,regenerated_from)
+                                SELECT id,job_id,recipient,result_id,document,sha256,created_at,approval_required,is_active,
+                                       superseded_at,superseded_by,NULL,NULL FROM reports'''))
+                            c.execute(text('DROP TABLE reports'))
+                            c.execute(text('ALTER TABLE reports_v10_new RENAME TO reports'))
+                        c.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_active_job '
+                                       'ON reports (job_id) WHERE is_active = 1'))
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
 
     @contextmanager

@@ -28,6 +28,11 @@ on:
         required: false
         type: choice
         options: [RESEARCH, REPORT]
+      force_report_regeneration:
+        description: Create one immutable report using the current renderer (REPORT mode only)
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -49,6 +54,7 @@ jobs:
           JOB_ID: ${{ inputs.job_id }}
           IDEMPOTENCY_KEY: ${{ inputs.idempotency_key }}
           STAGE: ${{ inputs.stage }}
+          FORCE_REPORT_REGENERATION: ${{ inputs.force_report_regeneration }}
         run: |
           set -euo pipefail
           if [[ -z "$WORKER_URL" || -z "$WORKER_TOKEN" ]]; then
@@ -72,9 +78,11 @@ jobs:
               job_id=os.environ.get('JOB_ID','').strip()
               key=os.environ.get('IDEMPOTENCY_KEY','').strip()
               stage=os.environ.get('STAGE','').strip()
+              force=os.environ.get('FORCE_REPORT_REGENERATION','false').strip().lower()=='true'
               if not job_id or not key or stage not in {'RESEARCH','REPORT'} or os.environ.get('RESPONSE_ID','').strip() or os.environ.get('RESPONSE_REFERENCE','').strip():
                   raise SystemExit('Job mode requires exact job ID, key, stage, and no response selector.')
-              body={'max_jobs':1,'job_id':job_id,'idempotency_key':key,'stage':stage}
+              if force and stage!='REPORT': raise SystemExit('Forced report regeneration is REPORT-only.')
+              body={'max_jobs':1,'job_id':job_id,'idempotency_key':key,'stage':stage,'force_report_regeneration':force}
           else: raise SystemExit('Unknown invocation mode.')
           with open(sys.argv[1],'w',encoding='utf-8') as f: json.dump(body,f,separators=(',',':'))
           PY

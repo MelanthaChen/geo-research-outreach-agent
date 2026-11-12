@@ -65,12 +65,29 @@ def _format_table(table: Any) -> None:
 
 def _add_table(doc: Any, headers: list[str], rows: list[list[str]]) -> Any:
     table = doc.add_table(rows=1, cols=len(headers))
+    table.autofit = False
+    from docx.shared import Inches
+    widths = {
+        2: [Inches(1.55), Inches(5.05)],
+        4: [Inches(1.35), Inches(1.65), Inches(1.0), Inches(2.6)],
+        5: [Inches(1.2), Inches(2.0), Inches(.8), Inches(1.7), Inches(1.9)],
+    }.get(len(headers), [Inches(6.6/len(headers))]*len(headers))
     for i, header in enumerate(headers):
+        table.rows[0].cells[i].width = widths[i]
         _set_cell(table.rows[0].cells[i], header, bold=True)
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    header_properties = table.rows[0]._tr.get_or_add_trPr()
+    repeat = OxmlElement("w:tblHeader")
+    repeat.set(qn("w:val"), "true")
+    header_properties.append(repeat)
     for row in rows:
         cells = table.add_row().cells
         for i, value in enumerate(row):
+            cells[i].width = widths[i]
             _set_cell(cells[i], _text(value))
+        properties = table.rows[-1]._tr.get_or_add_trPr()
+        properties.append(OxmlElement("w:cantSplit"))
     _format_table(table)
     doc.add_paragraph()
     return table
@@ -116,6 +133,16 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
 
     doc = Document(str(template))
     _clear_document(doc)
+    from docx.shared import Inches, Pt
+    for section in doc.sections:
+        section.top_margin = Inches(.65)
+        section.bottom_margin = Inches(.65)
+        section.left_margin = Inches(.7)
+        section.right_margin = Inches(.7)
+    normal = doc.styles["Normal"]
+    normal.font.name = "Aptos"
+    normal.font.size = Pt(9)
+    normal.paragraph_format.space_after = Pt(5)
     title = doc.add_paragraph(style="Title")
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
     title.add_run(_text(result.get("report_title"), "Independent GEO Analysis Report"))
@@ -126,6 +153,9 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
         "Recommendations are research hypotheses and do not promise a measured improvement. "
         "Values not supplied by the source envelope are marked Not established; legacy fields marked Not supplied are not silently inferred."
     )
+    for paragraph in doc.paragraphs:
+        if paragraph.style.name.startswith("Heading") or paragraph.style.name == "Title":
+            paragraph.paragraph_format.keep_with_next = True
     if not evidence_complete or not baseline_complete:
         missing_parts = []
         if not evidence_complete:
@@ -166,25 +196,68 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     )
     rec_rows = []
     for item in result.get("recommendations") or []:
+        proposed = item.get("proposed_revision")
+        if not isinstance(proposed, str) or not proposed.strip() or len(proposed.strip()) > 400:
+            proposed = "Proposed wording not established"
+        excerpt = item.get("original_quote")
+        if isinstance(excerpt, str) and len(excerpt) > 500:
+            excerpt = "Long source excerpt omitted; see the URL and evidence identifier."
+        if not excerpt:
+            excerpt = "No short exact excerpt was stored."
+        evidence_ids = item.get("supporting_evidence_ids") or []
         rec_rows.append([
             f"{item.get('rank')}. {item.get('title')}",
-            f"{item.get('page_url')}\nOriginal: “{item.get('original_quote')}”",
-            item.get("proposed_revision"),
+            f"Page: {item.get('page_url')}\nEvidence IDs: {', '.join(map(str, evidence_ids)) or 'Not supplied'}\nSource excerpt: “{excerpt}”",
+            proposed,
             item.get("rationale"),
         ])
     _add_table(doc, ["Rank and recommendation", "Page evidence", "Proposed revision", "Why it is supported"], rec_rows)
 
+    doc.add_heading("Research sources", level=1)
+    doc.add_paragraph("Retrieved source records are provenance, not proof that a model answer cited or relied on a source. Citation/use is listed only when present in the persisted response.")
+    source_rows = []
+    for source in result.get("research_sources") or []:
+        source_rows.append([
+            f"[{source.get('rank')}] {source.get('title') or 'Title not available'}",
+            source.get("url") or "URL not available",
+            source.get("source_type") or "Type not established",
+            source.get("relevance") or "Retrieved; no specific use established",
+            source.get("evidence_id") or source.get("content_sha256") or "Evidence identifier unavailable",
+        ])
+    if source_rows:
+        _add_table(doc, ["Source", "URL", "Type", "Finding / use", "Evidence ID"], source_rows)
+    else:
+        doc.add_paragraph("Source registry was not included in the stored result envelope; no source citations are inferred.")
+
+    model_results = [item for item in (result.get("baseline") or {}).get("results", [])
+                     if isinstance(item, dict) and isinstance(item.get("response"), str) and item.get("response").strip()]
+    if model_results:
+        doc.add_heading("Model-generated interpretations", level=1)
+        doc.add_paragraph("The following are GEO Engine model outputs for the persisted research query. They are not answers retrieved from third-party AI search products or evidence of external search rankings.")
+        for item in model_results:
+            label = str(item.get("strategy") or "strategy")
+            paragraph = doc.add_paragraph()
+            paragraph.paragraph_format.keep_together = True
+            run = paragraph.add_run(label.title() + " strategy: ")
+            run.bold = True
+            paragraph.add_run(item["response"].strip())
+
     doc.add_heading("Research questions", level=1)
     _add_table(doc, ["Question", "Evidence basis"], [[q, "Derived from rendered page content and stated demo scope"] for q in result.get("questions") or []])
 
-    doc.add_heading("Real baseline measurements", level=1)
+    baseline_heading = doc.add_heading("Real baseline measurements", level=1)
+    baseline_heading.paragraph_format.page_break_before = True
     baseline = result.get("baseline") or {}
     _add_table(doc, ["Measure", "Observed value"], [
         ["Provider", _text(baseline.get("provider"), "Not run")],
         ["Model", _text(baseline.get("model"), "Not established")],
         ["Model calls", _text(baseline.get("model_calls"), "0")],
         ["Response archive", _text(baseline.get("response_archive"), "Not available")],
-        ["Persisted model response archive", _text(baseline.get("results"), "Not measured")],
+        ["Strategy results", "; ".join(
+            f"{item.get('strategy', 'strategy')}: {item.get('metrics', {}).get('word_count', 'not recorded')} cited words, "
+            f"{item.get('metrics', {}).get('citation_count', 'not recorded')} citations"
+            for item in baseline.get("results", []) if isinstance(item, dict)
+        ) or "Not measured"],
         ["Interpretation", _text(baseline.get("interpretation"), "No external AI-search visibility claim is established.")],
     ])
 
@@ -196,6 +269,10 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
         doc.add_paragraph(_text(limitation), style="List Bullet")
     doc.add_paragraph("Next step: review the audit-backed recommendations and model-generated revisions before deciding whether to change the website. No website changes or external AI-search ranking measurements are included in this report.")
     doc.add_paragraph("Research integrity note. The report distinguishes rendered website evidence, existing Audit recommendations, live retrieval sources, and persisted model-generated responses. GEO Engine model evaluations do not establish rankings in third-party AI search products.")
+
+    for paragraph in doc.paragraphs:
+        if paragraph.style.name.startswith("Heading") or paragraph.style.name == "Title":
+            paragraph.paragraph_format.keep_with_next = True
 
     output.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(output))

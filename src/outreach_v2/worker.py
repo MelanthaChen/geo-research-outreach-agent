@@ -18,7 +18,7 @@ def transition(c,job_id,**values):
     c.execute(jobs.update().where(jobs.c.id==job_id).values(updated_at=now(),**values))
     c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job_id,event=values.get('status') or values.get('stage') or 'UPDATED',detail=dump({k:v for k,v in values.items() if k not in {'result','lease_token'}}),created_at=now()))
 
-def claim(db,*,job_id=None,idempotency_key=None,stage=None,scheduled=False,controlled=False):
+def claim(db,*,job_id=None,idempotency_key=None,stage=None,scheduled=False,controlled=False,force_report_regeneration=False):
     research_only=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').strip().lower()=='true'
     delivery_enabled=os.environ.get('OUTREACH_REPORT_DELIVERY_ENABLED','').strip().lower()=='true'
     # A live single-job research switch must constrain selection itself. A
@@ -52,7 +52,9 @@ def claim(db,*,job_id=None,idempotency_key=None,stage=None,scheduled=False,contr
             eligible.append(jobs.c.stage!='DELIVERY')
         if job_id:eligible.append(jobs.c.id==job_id)
         if idempotency_key:eligible.append(jobs.c.idempotency_key==idempotency_key)
-        if stage:eligible.append(jobs.c.stage==stage)
+        if force_report_regeneration:
+            eligible.append(jobs.c.stage.in_(['REPORT','DELIVERY']))
+        elif stage:eligible.append(jobs.c.stage==stage)
         row=c.execute(select(jobs).where(*eligible).order_by(jobs.c.created_at).limit(1)).mappings().first()
         if not row:return None
         token=uuid.uuid4().hex
@@ -189,28 +191,46 @@ def research_step(db,job,engine_factory):
     with db.transaction(serialized=True) as c:
         context(c,job);transition(c,job['id'],**values)
 
-def report_step(db,job,renderer=None):
+def report_step(db,job,renderer=None,*,force_regeneration=False,result_loader=None):
     with db.transaction() as c:
         inv,_=context(c,job)
         current=c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one()
         result=_genuine_job_result(dict(current),inv)
         existing=c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().first()
-        version=c.execute(select(reports).where(reports.c.result_id==result['record_id'])).mappings().first()
-        if existing and existing['result_id']==result['record_id']:
-            if not _valid_report_artifact(dict(existing),result['record_id']):
-                raise ConfigurationBlocked('Matching report has invalid integrity or simulated provenance')
-            document=None
-        elif version:
-            if not _valid_report_artifact(dict(version),result['record_id']):
-                raise ConfigurationBlocked('Existing result version has invalid integrity or simulated provenance')
-            document=None
-        elif existing and not ('TEST-ONLY' in str(existing['result_id'] or '').upper()
-                               or 'NO-ENGINE-RESULT' in str(existing['result_id'] or '').upper()
-                               or _document_has_simulation_marker(existing['document'] or b'')):
-            raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
+        version=c.execute(select(reports).where(reports.c.result_id==result['record_id']).order_by(reports.c.created_at.desc())).mappings().first()
+        if force_regeneration:
+            if version and version.get('renderer_version')=='geo-report-v2':
+                if not _valid_report_artifact(dict(version),result['record_id']):
+                    raise ConfigurationBlocked('Current renderer version report failed its integrity check')
+                document=None
+            else:
+                document=False
         else:
-            document=False
+            if existing and existing['result_id']==result['record_id']:
+                if not _valid_report_artifact(dict(existing),result['record_id']):
+                    raise ConfigurationBlocked('Matching report has invalid integrity or simulated provenance')
+                document=None
+            elif version:
+                if not _valid_report_artifact(dict(version),result['record_id']):
+                    raise ConfigurationBlocked('Existing result version has invalid integrity or simulated provenance')
+                document=None
+            elif existing and not ('TEST-ONLY' in str(existing['result_id'] or '').upper()
+                                   or 'NO-ENGINE-RESULT' in str(existing['result_id'] or '').upper()
+                                   or _document_has_simulation_marker(existing['document'] or b'')):
+                raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
+            else:
+                document=False
     if document is False:
+        if not result.get('research_sources') and renderer is None:
+            if result_loader is None:
+                result_loader=lambda current: Engine().get_research_result(current['source_profile_id'],current['source_profile_version'])
+            enriched=result_loader(result)
+            if (not isinstance(enriched,dict) or enriched.get('record_id')!=result.get('record_id')
+                    or enriched.get('source_profile_id')!=result.get('source_profile_id')
+                    or enriched.get('source_profile_version')!=result.get('source_profile_version')
+                    or not isinstance(enriched.get('research_sources'),list) or not enriched['research_sources']):
+                raise ConfigurationBlocked('GEO Engine returned a different or invalid research result envelope')
+            result=enriched
         if renderer:document=renderer(result)
         else:
             from outreach_agent.reporting import generate_docx_report
@@ -221,15 +241,20 @@ def report_step(db,job,renderer=None):
     if document is not None and _document_has_simulation_marker(document):
         raise ConfigurationBlocked('Generated DOCX is not a genuine research artifact')
     new_sha=hashlib.sha256(document).hexdigest() if document is not None else None
-    new_id='report-'+sha(job['id']+':'+str(result['record_id']))[:24]
+    renderer_version='geo-report-v2'
+    new_id='report-'+sha(job['id']+':'+str(result['record_id'])+':'+renderer_version)[:24]
     with db.transaction(serialized=True) as c:
         inv,_=context(c,job)
         current=dict(c.execute(select(jobs).where(jobs.c.id==job['id'])).mappings().one())
         fresh_result=_genuine_job_result(current,inv)
         if fresh_result['record_id']!=result['record_id']:
             raise ConfigurationBlocked('Research result changed while the report was being rendered')
+        if result.get('research_sources') and not fresh_result.get('research_sources'):
+            c.execute(jobs.update().where(jobs.c.id==job['id']).values(result=dump(result)))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job['id'],event='RESEARCH_RESULT_ENRICHED_FOR_REPORT',
+                detail=dump({'result_id':result['record_id'],'source_count':len(result['research_sources'])}),created_at=now()))
         existing=c.execute(select(reports).where(reports.c.job_id==job['id'],reports.c.is_active.is_(True))).mappings().first()
-        version=c.execute(select(reports).where(reports.c.result_id==result['record_id'])).mappings().first()
+        version=c.execute(select(reports).where(reports.c.id==new_id)).mappings().first()
         if version:
             version=dict(version)
             if not _valid_report_artifact(version,result['record_id']):
@@ -252,7 +277,11 @@ def report_step(db,job,renderer=None):
                 old_hash=hashlib.sha256(old['document'] or b'').hexdigest()
                 if not old['document'] or not old['sha256'] or not hmac.compare_digest(old_hash,str(old['sha256'])):
                     raise ConfigurationBlocked('Existing preview integrity check failed; it cannot be safely superseded')
-                if not ('TEST-ONLY' in str(old['result_id'] or '').upper()
+                if force_regeneration:
+                    delivery=c.execute(select(deliveries.c.id).where(deliveries.c.report_id==old['id'])).first()
+                    if delivery:
+                        raise ConfigurationBlocked('Cannot regenerate a report with an existing delivery record')
+                elif not ('TEST-ONLY' in str(old['result_id'] or '').upper()
                         or 'NO-ENGINE-RESULT' in str(old['result_id'] or '').upper()
                         or _document_has_simulation_marker(old['document'] or b'')):
                     raise ConfigurationBlocked('An active report for a different genuine result cannot be replaced')
@@ -262,7 +291,13 @@ def report_step(db,job,renderer=None):
                     detail=dump({'old_report_id':old['id'],'old_result_id':old['result_id'],'old_sha256':old['sha256'],
                                  'new_report_id':new_id,'new_result_id':result['record_id'],'new_sha256':new_sha}),created_at=now()))
             c.execute(reports.insert().values(id=new_id,job_id=job['id'],recipient=inv['recipient'],result_id=result['record_id'],
-                document=document,sha256=new_sha,created_at=now(),is_active=True))
+                document=document,sha256=new_sha,created_at=now(),is_active=True,renderer_version=renderer_version,
+                regenerated_from=existing['id'] if existing else None))
+            if existing:
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job['id'],event='REPORT_REGENERATED',
+                    detail=dump({'prior_report_id':existing['id'],'prior_sha256':existing['sha256'],
+                                 'new_report_id':new_id,'new_sha256':new_sha,'result_id':result['record_id'],
+                                 'renderer_version':renderer_version}),created_at=now()))
         transition(c,job['id'],stage='DELIVERY',status='COMPLETED',error=None,next_attempt_at=now())
 
 def report_delivery_enabled():
@@ -335,7 +370,7 @@ def delivery_step(db,job,mail_factory):
         transition(c,job['id'],stage='DONE',status='COMPLETED',error=None)
 
 def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,renderer=None,max_jobs=20,
-         response_id=None,response_reference=None,job_id=None,idempotency_key=None,stage=None):
+         response_id=None,response_reference=None,job_id=None,idempotency_key=None,stage=None,force_report_regeneration=False):
     response_selector=bool(response_id or response_reference)
     job_selector=bool(job_id or idempotency_key)
     if response_id and response_reference:raise ValueError('Select a Forms response by ID or invitation reference, not both')
@@ -343,6 +378,8 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
         raise ValueError('Exact-response ingestion-only tick requires max_jobs=0 and no job stage')
     if job_selector and (not job_id or not idempotency_key or stage not in {'RESEARCH','REPORT'} or max_jobs!=1):
         raise ValueError('Controlled job tick requires matching job ID/key, RESEARCH or REPORT stage, and max_jobs=1')
+    if force_report_regeneration and (stage!='REPORT' or not job_selector or max_jobs!=1):
+        raise ValueError('Forced report regeneration requires an exact job-only REPORT tick')
     if response_selector and job_selector:
         raise ValueError('Ingest the selected response separately before the exact-job invocation')
     if stage=='REPORT' and not job_id:raise ValueError('Report-only tick requires an exact job ID')
@@ -371,12 +408,16 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
         warning='Sheets: '+safe_error(e);errors.append(warning);subsystem_errors['consent'].append(warning)
     for _ in range(max_jobs):
         job=claim(db,job_id=job_id if job_selector else None,idempotency_key=idempotency_key if job_selector else None,
-                  stage=stage,scheduled=not job_selector,controlled=job_selector)
+                  stage=stage,scheduled=not job_selector,controlled=job_selector,
+                  force_report_regeneration=force_report_regeneration)
         if not job:break
         try:
             stage=job['stage']
             if stage=='RESEARCH':research_step(db,job,engine_factory)
-            elif stage=='REPORT':report_step(db,job,renderer)
+            elif stage=='REPORT' or (force_report_regeneration and stage=='DELIVERY'):
+                report_step(db,job,renderer,force_regeneration=force_report_regeneration,
+                result_loader=(lambda result: engine_factory().get_research_result(result['source_profile_id'],result['source_profile_version']))
+                if force_report_regeneration else None)
             elif stage=='DELIVERY':delivery_step(db,job,mail_factory)
             else:raise ValueError('Unknown durable job stage')
             processed+=1

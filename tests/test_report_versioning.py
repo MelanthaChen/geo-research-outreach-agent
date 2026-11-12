@@ -147,7 +147,7 @@ def test_test_only_report_is_preserved_and_superseded_by_genuine_docx(tmp_path):
         current_job = dict(c.execute(select(jobs).where(jobs.c.id == JOB_ID)).mappings().one())
         assert current_job["result_id"] == RESULT_ID
         migration = c.scalar(select(func.max(schema_migrations.c.version)))
-        assert migration == 9
+        assert migration == 10
 
 
 def test_new_report_has_real_result_and_old_approval_cannot_pass_delivery_gate(tmp_path, monkeypatch):
@@ -193,12 +193,54 @@ def test_report_delivery_disabled_even_for_freshly_approved_docx(tmp_path, monke
     assert calls == []
 
 
+def test_forced_report_regeneration_versions_same_result_without_inheriting_approval(tmp_path):
+    db, job, _ = setup_db(tmp_path)
+    old_doc=renderer(genuine_result())
+    with db.transaction() as c:
+        c.execute(reports.insert().values(id="report-old-genuine",job_id=JOB_ID,recipient="owner@example.test",
+            result_id=RESULT_ID,document=old_doc,sha256=sha256(old_doc).hexdigest(),created_at="2026-11-05T00:00:00+00:00"))
+        c.execute(report_reviews.insert().values(id="review-old-approved",report_id="report-old-genuine",
+            document_sha256=sha256(old_doc).hexdigest(),decision="APPROVED",reviewer_email="professor@example.edu",
+            reviewed_at="2026-11-05T00:01:00+00:00"))
+    worker.report_step(db,job,renderer=lambda result:make_docx("Regenerated genuine report " + result["record_id"]),force_regeneration=True)
+    rows=report_rows(db)
+    old=next(row for row in rows if row["id"]=="report-old-genuine")
+    new=next(row for row in rows if row["is_active"])
+    assert old["is_active"] is False and old["sha256"]==sha256(old_doc).hexdigest()
+    assert new["result_id"]==RESULT_ID and new["id"]!=old["id"] and new["sha256"]!=old["sha256"]
+    assert new["renderer_version"]=="geo-report-v2" and new["regenerated_from"]==old["id"]
+    with db.transaction() as c:
+        prior_review=c.execute(select(report_reviews).where(report_reviews.c.id=="review-old-approved")).mappings().one()
+        assert prior_review["report_id"]==old["id"] and prior_review["document_sha256"]==old["sha256"]
+        assert c.scalar(select(func.count()).select_from(report_reviews).where(
+            report_reviews.c.report_id==new["id"],report_reviews.c.document_sha256==new["sha256"]))==0
+        audit=c.execute(select(events).where(events.c.event=="REPORT_REGENERATED")).mappings().one()
+        assert json.loads(audit["detail"])["prior_report_id"]==old["id"]
+    with db.transaction() as c:
+        retry=dict(c.execute(select(jobs).where(jobs.c.id==JOB_ID)).mappings().one())
+    worker.report_step(db,retry,renderer=lambda _:pytest.fail("current report version was regenerated"),force_regeneration=True)
+    assert len(report_rows(db))==2
+
+
+def test_report_only_regeneration_from_delivery_stage_never_invokes_delivery(tmp_path, monkeypatch):
+    db, job, _ = setup_db(tmp_path, preview=True)
+    with db.transaction() as c:
+        c.execute(jobs.update().where(jobs.c.id==JOB_ID).values(status="COMPLETED",stage="DELIVERY"))
+    monkeypatch.setenv("OUTREACH_REPORT_DELIVERY_ENABLED","false")
+    monkeypatch.setenv("GEO_OUTREACH_RESEARCH_ENABLED","false")
+    result=worker.tick(db,max_jobs=1,job_id=JOB_ID,idempotency_key=KEY,stage="REPORT",
+        force_report_regeneration=True,renderer=renderer,mail_factory=lambda:pytest.fail("delivery factory must not run"))
+    assert result["processed_stages"]==1
+    reports_for_job=report_rows(db)
+    assert len(reports_for_job)==2 and sum(bool(row["is_active"]) for row in reports_for_job)==1
+
+
 def test_report_migration_is_versioned_and_partial_unique_index_is_present(tmp_path):
     db, _, _ = setup_db(tmp_path)
     with db.transaction() as c:
         indexes = c.exec_driver_sql("PRAGMA index_list('reports')").all()
         assert any(row[1] == "uq_reports_active_job" and row[2] == 1 for row in indexes)
-        assert c.scalar(select(func.max(schema_migrations.c.version))) == 9
+        assert c.scalar(select(func.max(schema_migrations.c.version))) == 10
 
 
 def test_migration_upgrades_legacy_unique_job_schema_and_preserves_review_fk(tmp_path):
@@ -218,6 +260,7 @@ def test_migration_upgrades_legacy_unique_job_schema_and_preserves_review_fk(tmp
             c.exec_driver_sql("DROP TABLE reports")
             c.exec_driver_sql("ALTER TABLE reports_v8 RENAME TO reports")
             c.exec_driver_sql("DELETE FROM schema_migrations WHERE version=9")
+            c.exec_driver_sql("DELETE FROM schema_migrations WHERE version=10")
     db.initialize()
     with db.transaction() as c:
         row=c.execute(select(reports).where(reports.c.id=="report-preview-TEST-ONLY")).mappings().one()

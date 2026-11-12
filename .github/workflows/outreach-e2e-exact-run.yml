@@ -90,11 +90,17 @@ jobs:
             exit 1
           fi
           python3 - "$response_file" <<'PY'
-          import json,sys
+          import json,os,sys
           with open(sys.argv[1],encoding='utf-8') as f: result=json.load(f)
           print('invocation_status='+str(result.get('invocation_status','unknown')))
           print('worker_run_id='+str(result.get('worker_run_id','unknown')))
           print('processed_stages='+str(result.get('processed_stages','unknown')))
-          if result.get('invocation_status')!='COMPLETED':
+          print('status='+str(result.get('status','unknown')))
+          if result.get('invocation_status')!='COMPLETED' or result.get('status')!='COMPLETED':
               raise SystemExit('Invocation is not confirmed complete; no automatic retry.')
+          if os.environ.get('MODE')=='ingest_response':
+              consent=result.get('subsystems',{}).get('consent',{}).get('status')
+              print('consent_status='+str(consent))
+              if consent!='COMPLETED':
+                  raise SystemExit('Selected Forms response ingestion is incomplete; inspect persisted diagnostics.')
           PY

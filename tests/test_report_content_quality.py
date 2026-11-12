@@ -2,6 +2,7 @@ from pathlib import Path
 from docx import Document
 
 from outreach_agent.reporting import generate_docx_report
+from scripts.docx_report_qa import validate_intermediate_page_density
 
 
 def test_geoairesume_report_keeps_full_page_out_of_proposed_revision_and_lists_sources(tmp_path):
@@ -40,3 +41,40 @@ def test_geoairesume_report_keeps_full_page_out_of_proposed_revision_and_lists_s
     assert "Persisted model response archive" not in all_text
     assert "original: 61 cited words" in all_text
     assert len(list(doc.tables)) >= 5
+
+
+def test_baseline_section_does_not_force_a_new_page(tmp_path):
+    result = {
+        "contract_version": "geo-research-integration/v1", "source_profile_id": "geoairesume-owner-test-v1",
+        "source_profile_version": "inv-353e5922aa8e4686ad82ff99c6d0c91d", "property_id": 2,
+        "site": "https://geo-ai-resume.vercel.app/",
+        "observed_pages": [{"url": "https://geo-ai-resume.vercel.app/", "title": "GeoAIResume",
+            "headings": ["Resume research"], "exact_quotes": ["Saved first-party evidence."]}],
+        "questions": ["What does the page state?"],
+        "baseline": {"provider": "openai", "model": "gpt-6-luna", "model_calls": 2,
+            "results": [{"strategy": "original", "response": "The page says this [1].",
+                         "metrics": {"word_count": 4, "citation_count": 1}}]},
+    }
+    template = Path(__file__).parents[1] / "templates/company_geo_analysis_report_template.docx"
+    output = generate_docx_report(result, tmp_path / "flowing-baseline.docx", template)
+    heading = next(p for p in Document(output).paragraphs if p.text == "Real baseline measurements")
+    assert heading.paragraph_format.page_break_before is not True
+
+
+def test_render_qa_rejects_nearly_empty_intermediate_page():
+    import pytest
+
+    with pytest.raises(ValueError, match=r"intermediate page 2 is nearly empty"):
+        validate_intermediate_page_density([
+            "Substantive first page. " * 40,
+            "Research questions\nQuestion\tEvidence basis\nOne short question\tNot established",
+            "Substantive final page. " * 40,
+        ])
+
+
+def test_render_qa_does_not_treat_short_final_page_as_intermediate():
+    validate_intermediate_page_density([
+        "Substantive first page. " * 40,
+        "Substantive middle page. " * 40,
+        "Short concluding note.",
+    ])

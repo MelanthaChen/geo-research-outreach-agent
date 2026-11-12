@@ -1819,3 +1819,17 @@ def test_inner_claim_selector_allows_known_cost_quality_response_replay(db):
         eligible_ids=c.execute(select(candidates.c.id).where(_eligible_query(
             now(),selected_ids=[ident],retry_candidate_ids=[ident]))).scalars().all()
     assert eligible_ids==[ident]
+
+
+def test_inner_claim_selector_accepts_legacy_ready_only_when_in_authorized_batch_slice(db):
+    from outreach_v2.personalization import _eligible_query
+    ident='inner-legacy-ready-batch-slice'
+    outside='inner-legacy-ready-outside-slice'
+    candidate(db,ident=ident,name='Inner Legacy Ready',fixture=False,personalization=True)
+    candidate(db,ident=outside,name='Outside Batch Slice',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id.in_([ident,outside])).values(
+            personalization_status='READY',personalization_analysis_version='FAIL'))
+        selected=c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=[ident]))).scalars().all()
+    assert selected==[ident]

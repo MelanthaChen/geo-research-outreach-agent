@@ -622,6 +622,15 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
             candidates.c.personalization_analysis_version != 'semantic-openai-v1',
             candidates.c.personalization_quality_status != 'PASS'))
         personalization_state = or_(personalization_state, legacy_selected)
+    if retry_candidate_ids:
+        # The batch selector has already admitted these exact IDs from the
+        # immutable admin-approved manifest. Permit legacy READY rows within
+        # that selected slice; only semantic PASS is complete for the cohort.
+        legacy_batch_selected = and_(candidates.c.id.in_(retry_candidate_ids), or_(
+            candidates.c.personalization_analysis_version.is_(None),
+            candidates.c.personalization_analysis_version != 'semantic-openai-v1',
+            candidates.c.personalization_quality_status != 'PASS'))
+        personalization_state = or_(personalization_state, legacy_batch_selected)
     retry_state=or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp)
     if selected_ids: retry_state=or_(retry_state,candidates.c.id.in_(selected_ids))
     if retry_candidate_ids:

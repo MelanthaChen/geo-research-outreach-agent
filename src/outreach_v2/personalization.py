@@ -713,6 +713,8 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
         retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
                         replayable_local_rejection)
     return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
+        or_(candidates.c.personalization_outcome.is_(None),
+            candidates.c.personalization_outcome != 'NO_AUTOMATIC_RETRY'),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), personalization_state, retry_state,
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until < stamp),

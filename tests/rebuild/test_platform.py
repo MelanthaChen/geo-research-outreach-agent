@@ -2064,7 +2064,8 @@ def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides
     replay='inner-known-response-replay'
     redirect='inner-http-redirect-repair'
     transient='inner-known-cost-service-replay'
-    for ident in (old,replay,redirect,transient):
+    terminal='inner-no-automatic-retry'
+    for ident in (old,replay,redirect,transient,terminal):
         candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
     with db.transaction() as c:
         c.execute(personalization_runs.insert().values(id='inner-narrow-run',started_at=now(),status='COMPLETED',
@@ -2082,6 +2083,8 @@ def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides
         c.execute(candidates.update().where(candidates.c.id==transient).values(
             personalization_error='No concise, cited first-party service statement is available',
             personalization_outcome='TRANSIENT_HTTP',personalization_retry_after='2099-01-01T00:00:00+00:00'))
+        c.execute(candidates.update().where(candidates.c.id==terminal).values(
+            personalization_outcome='NO_AUTOMATIC_RETRY'))
         c.execute(personalization_attempts.insert().values(id='inner-known-response',candidate_id=replay,
             run_id='inner-narrow-run',evidence_fingerprint='fp',operation_id='op',
             model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
@@ -2091,7 +2094,7 @@ def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides
             model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
             actual_cost_usd='0.01',provider_response='{}',created_at=now()))
         selected=c.execute(select(candidates.c.id).where(_eligible_query(
-            now(),retry_candidate_ids=[old,replay,redirect,transient]))).scalars().all()
+            now(),retry_candidate_ids=[old,replay,redirect,transient,terminal]))).scalars().all()
     assert set(selected)=={old,replay,redirect,transient}
 
 
@@ -2143,6 +2146,10 @@ def test_changed_evidence_for_a_paid_operation_never_issues_second_provider_call
     assert backend.calls==0 and len(attempts)==1, result
     assert result['skipped_existing_attempt']==1, result
     assert row['personalization_outcome']=='NO_AUTOMATIC_RETRY'
+    with db.transaction() as c:
+        eligible_ids=c.execute(select(candidates.c.id).where(
+            __import__('outreach_v2.personalization_batch',fromlist=['eligibility']).eligibility([ident]))).scalars().all()
+    assert ident not in eligible_ids
 
 
 def test_known_quality_failure_with_saved_paid_response_is_replay_eligible(db):

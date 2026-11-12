@@ -105,6 +105,8 @@ def eligibility(ids, stamp=None):
                       redirect_or_http_repair)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
+        or_(candidates.c.personalization_outcome.is_(None),
+            candidates.c.personalization_outcome != 'NO_AUTOMATIC_RETRY'),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         # READY is also the historical legacy personalization state. Only a
         # persisted semantic version is complete for this GPT cohort.

@@ -194,6 +194,11 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str, *
         return "AMBIGUOUS"
     if any(word in path for word in ("service", "product", "collection")):
         return "PRODUCT_OR_SERVICE"
+    if recognize_explicit_offerings and any(word in path for word in ("menu", "menus")):
+        # A first-party menu is direct evidence of the products/services listed
+        # there. Keep this gated so prior_classification_input() reconstructs
+        # the exact pre-repair label for hash-checked offline replay.
+        return "PRODUCT_OR_SERVICE"
     # About pages may be the canonical source for an offering (as in the
     # Lagoon New York example), even when the URL is not called /services.
     # Require explicit sales or service language before assigning this class.

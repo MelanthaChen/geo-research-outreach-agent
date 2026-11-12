@@ -1095,7 +1095,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 # This response has already been evaluated against the corrected
                 # first-party offering classifier. Keep the evidence failure
                 # visible while preventing another identical replay loop.
-                outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR'
+                outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
             release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1

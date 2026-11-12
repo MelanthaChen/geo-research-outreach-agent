@@ -1942,9 +1942,11 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
     from outreach_v2.db import personalization_attempts, personalization_runs
     from outreach_v2.personalization_batch import eligibility
     allowed='known-local-validation-rejection'
+    prior_repair='known-local-validation-prior-repair'
+    v2_terminal='known-local-validation-v2-terminal'
     identity='known-identity-mismatch'
     transient='transient-local-validation-rejection'
-    for ident in (allowed,identity,transient):
+    for ident in (allowed,prior_repair,v2_terminal,identity,transient):
         candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
     future='2099-01-01T00:00:00+00:00'
     with db.transaction() as c:
@@ -1952,6 +1954,8 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
             candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.10',
             actual_cost_usd='0.02',detail='{}'))
         for ident,error,outcome in ((allowed,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED'),
+                            (prior_repair,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR'),
+                            (v2_terminal,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'),
                             (identity,'Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
                             (transient,'No concise, cited first-party service statement is available','TRANSIENT_HTTP')):
             c.execute(candidates.update().where(candidates.c.id==ident).values(
@@ -1961,11 +1965,13 @@ def test_known_response_replay_rejection_does_not_reenter_batch_without_new_repa
                 run_id='local-replay-run',evidence_fingerprint='fp',operation_id='op-'+ident,
                 model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
                 actual_cost_usd='0.01',provider_response='{}',created_at=now()))
-        manifest=[allowed,identity,transient]+[f'unused-{i}' for i in range(97)]
+        manifest=[allowed,prior_repair,v2_terminal,identity,transient]+[f'unused-{i}' for i in range(95)]
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
     # Only the exact known-cost first-party service-classification failure is
-    # eligible for deterministic offline replay; identity/transient failures stay out.
-    assert set(eligible_ids)=={allowed}
+    # The new menu-page classifier admits one more offline replay for a
+    # previously rejected known-cost response. The V2 terminal marker prevents
+    # the same unchanged response from re-entering the next recovery tick.
+    assert set(eligible_ids)=={allowed,prior_repair}
 
 
 def test_service_classifier_repair_admits_only_known_cost_saved_response(db):

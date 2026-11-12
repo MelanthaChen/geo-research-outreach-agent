@@ -56,7 +56,11 @@ def eligibility(ids, stamp=None):
                      'Website robots policy could not be checked']))),
         replayable_response)
     repaired_service_classification = and_(
-        candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+        candidates.c.personalization_outcome.in_([
+            'KNOWN_RESPONSE_REPLAY_REJECTED',
+            # One additional offline replay is allowed after the first repair
+            # when a new URL-based first-party menu classification is deployed.
+            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR']),
         candidates.c.personalization_error == 'No concise, cited first-party service statement is available',
         replayable_response)
     # These are narrow, deterministic repairs. The legacy V1 error was raised

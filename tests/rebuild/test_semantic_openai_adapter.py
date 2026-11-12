@@ -149,6 +149,24 @@ def test_about_page_food_and_beverage_offerings_are_citable_services_and_build_c
     assert quality["OUTREACH_REVIEW_READY"]["reasons"] == []
 
 
+def test_first_party_menu_page_is_a_product_source_and_preserves_legacy_label_for_replay():
+    source = {"evidence_profile": {
+        "pages": [
+            {"url":"https://shashlik.example/", "type":"home", "title":"Shashlik", "headings":[], "links":[]},
+            {"url":"https://shashlik.example/menu/", "type":"menu", "title":"Menu", "headings":[], "links":[]},
+        ],
+        "facts": [{"id":"menu1", "statement":"Menu offerings include kebabs, plov, samsa, and salads.",
+            "evidence_excerpt":"Menu offerings include over 20 varieties of kebabs, plus plov, samsa, and salads.",
+            "source_content":"Menu offerings include over 20 varieties of kebabs, plus plov, samsa, and salads.",
+            "source_urls":["https://shashlik.example/menu/"], "source_title":"Menu",
+            "section_heading":"Menu", "assertion_type":"ATTRIBUTED_COMPANY_STRENGTH",
+            "attribution":"COMPANY_STATED"}]}}
+    selection = select_evidence(source, company_name="Shashlik Uzn1", website="https://shashlik.example/")
+    assert selection.classifications["menu1"] == "PRODUCT_OR_SERVICE"
+    assert selection.legacy_classifications == {"menu1":"TARGET_BUSINESS"}
+    assert selection.prior_classification_input()["evidence_classifications"]["menu1"] == "TARGET_BUSINESS"
+
+
 def test_quoted_first_person_review_on_service_page_is_not_company_evidence():
     source = profile()
     service_url = "https://www.lagoonny.com/services/dentistry"

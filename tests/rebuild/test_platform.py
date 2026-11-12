@@ -1796,6 +1796,27 @@ def test_gpt_personalization_batch_preview_requires_one_explicit_saved_grant_app
     resumed=client.post('/api/admin/personalization/batch/pending-batch/resume',headers=headers,json={})
     assert resumed.status_code==200 and resumed.json()['status']=='RUNNING'
     assert count(db,personalization_attempts)==0
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.update().where(
+            personalization_authorizations.c.id=='pending-batch').values(status='ATTENTION_REQUIRED'))
+        c.execute(events.insert().values(id='batch-no-progress',entity_id='pending-batch',
+            event='PERSONALIZATION_BATCH_NO_PROGRESS',detail=dump({'blocker':
+                'The selected candidates produced no attempt or completion; inspect the durable checkpoint before resuming.',
+                'last_batch':{'candidate_ids_sha256':digest,'attempted':0,'completed':0,
+                    'budget_stopped':False,'run_id':'zero-attempt'}}),created_at=now()))
+    with db.transaction() as c:
+        saved=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='pending-batch')).mappings().one()
+        status=batch.progress(db,saved,manifest)
+    assert status['recoverable_no_progress'] is True
+    recovered=client.post('/api/admin/personalization/batch/pending-batch/resume',headers=headers,json={})
+    assert recovered.status_code==200 and recovered.json()['status']=='RUNNING'
+    with db.transaction() as c:
+        audit=c.execute(select(events.c.event).where(events.c.entity_id=='pending-batch')).scalars().all()
+        saved=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='pending-batch')).mappings().one()
+    assert saved['status']=='RUNNING' and 'PERSONALIZATION_BATCH_RECOVERED_AFTER_SELECTOR_FIX' in audit
+    assert count(db,personalization_attempts)==0
 
 
 def test_batch_runner_processes_one_bounded_chunk_and_preserves_unknown_spend(db,monkeypatch):

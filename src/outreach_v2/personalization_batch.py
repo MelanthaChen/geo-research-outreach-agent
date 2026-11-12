@@ -148,6 +148,10 @@ def progress(db, grant, ids):
             events.c.entity_id == grant['id'],
             events.c.event == 'PERSONALIZATION_BATCH_CHECKPOINT').order_by(
                 events.c.created_at.desc()).limit(1)).mappings().first()
+        no_progress = c.execute(select(events.c.created_at, events.c.detail).where(
+            events.c.entity_id == grant['id'],
+            events.c.event == 'PERSONALIZATION_BATCH_NO_PROGRESS').order_by(
+                events.c.created_at.desc()).limit(1)).mappings().first()
         heartbeat = c.execute(select(events.c.created_at, events.c.detail).where(
             events.c.entity_id == grant['id'], events.c.event.in_([
                 'PERSONALIZATION_BATCH_HEARTBEAT', 'PERSONALIZATION_BATCH_CHECKPOINT',
@@ -182,6 +186,12 @@ def progress(db, grant, ids):
         'last_checkpoint': json.loads(checkpoint['detail']) if checkpoint and checkpoint['detail'] else None,
         'heartbeat_at': heartbeat['created_at'] if heartbeat else None,
         'heartbeat': json.loads(heartbeat['detail']) if heartbeat and heartbeat['detail'] else None,
+        'recoverable_no_progress': bool(no_progress and no_progress['detail'] and
+            (lambda detail: detail.get('blocker') ==
+                'The selected candidates produced no attempt or completion; inspect the durable checkpoint before resuming.'
+                and (detail.get('last_batch') or {}).get('candidate_ids_sha256') == grant['candidate_ids_sha256']
+                and (detail.get('last_batch') or {}).get('attempted') == 0
+                and (detail.get('last_batch') or {}).get('completed') == 0)(json.loads(no_progress['detail']))),
         'next_retry_at': min(future_retries).isoformat() if future_retries else None}
 
 

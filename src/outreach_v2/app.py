@@ -904,8 +904,33 @@ def create_app(database=None):
                 personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
             if not grant: raise LookupError('Personalization batch authorization not found')
             ids=_manifest(grant)
-            if grant['status'] not in {'PAUSED','RUNNING'}:
+            no_progress=False
+            if grant['status']=='ATTENTION_REQUIRED':
+                last=c.execute(select(events.c.detail).where(events.c.entity_id==ident,
+                    events.c.event=='PERSONALIZATION_BATCH_NO_PROGRESS').order_by(
+                    events.c.created_at.desc()).limit(1)).scalar_one_or_none()
+                try: detail=json.loads(last or '{}')
+                except (TypeError,ValueError): detail={}
+                batch_detail=detail.get('last_batch') or {}
+                no_progress=(detail.get('blocker') ==
+                    'The selected candidates produced no attempt or completion; inspect the durable checkpoint before resuming.'
+                    and batch_detail.get('candidate_ids_sha256')==grant['candidate_ids_sha256']
+                    and batch_detail.get('attempted')==0 and batch_detail.get('completed')==0
+                    and batch_detail.get('budget_stopped') is False)
+                if not no_progress:
+                    raise ValueError('Only a verified zero-attempt selector mismatch can recover from administrator review')
+            elif grant['status'] not in {'PAUSED','RUNNING'}:
                 raise ValueError('Only a paused or interrupted running batch can resume')
+            if no_progress:
+                stamp=now()
+                c.execute(personalization_authorizations.update().where(
+                    personalization_authorizations.c.id==ident).values(status='RUNNING'))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BATCH_RECOVERED_AFTER_SELECTOR_FIX',
+                    detail=json.dumps({'candidate_ids_sha256':grant['candidate_ids_sha256'],
+                        'recovered_by':request.state.session['email'],
+                        'prior_checkpoint_run_id':batch_detail.get('run_id')},sort_keys=True,separators=(',',':')),
+                    created_at=stamp))
             if grant['status']=='PAUSED':
                 c.execute(personalization_authorizations.update().where(
                     personalization_authorizations.c.id==ident).values(status='RUNNING'))

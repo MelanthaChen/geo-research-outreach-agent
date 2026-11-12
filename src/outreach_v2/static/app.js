@@ -64,7 +64,10 @@ async function loadPersonalizationBatch(other,quiet=false){
   if(!data.runner_active)card.append(el('p','No worker currently holds the execution lock. The approved batch is waiting for its authenticated recovery tick; it resumes from durable checkpoints without another approval or a manual Resume action.'))
  }else if(data.status==='PAUSED'){
   const resume=el('button','Resume Batch');resume.onclick=async()=>{resume.disabled=true;try{await api(`admin/personalization/batch/${encodeURIComponent(data.authorization_id)}/resume`,{method:'POST',body:'{}'});message('Resumed the saved batch from its durable checkpoints.');await loadPersonalizationBatch(other)}catch(e){message(e.message);resume.disabled=false}};controls.append(resume)
- }else if(data.status==='ATTENTION_REQUIRED')card.append(el('p','Processing stopped for administrator review. Unresolved provider spend remains reserved and will not be retried automatically.'));
+ }else if(data.status==='ATTENTION_REQUIRED'){
+  card.append(el('p','Processing stopped for administrator review. Unresolved provider spend remains reserved and will not be retried automatically.'));
+  if(data.recoverable_no_progress){const resume=el('button','Resume after selector repair');resume.onclick=async()=>{resume.disabled=true;try{await api(`admin/personalization/batch/${encodeURIComponent(data.authorization_id)}/resume`,{method:'POST',body:'{}'});message('Recovered the same approved batch after the selector repair. No new authorization was created.');await loadPersonalizationBatch(other)}catch(e){message(e.message);resume.disabled=false}};controls.append(resume)}
+ }
  if(controls.childNodes.length)card.append(controls);other.append(card);
  if(['RUNNING'].includes(data.status)){clearInterval(batchPoll);batchPoll=setInterval(()=>{if(current==='gpt-personalization')loadPersonalizationBatch(other,true)},5000)}
 }

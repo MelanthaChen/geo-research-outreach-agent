@@ -1,0 +1,53 @@
+name: Outreach personalization batch recovery
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: outreach-personalization-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Recover the existing approved batch
+        env:
+          WORKER_URL: ${{ secrets.OUTREACH_STAGING_URL }}
+          WORKER_TOKEN: ${{ secrets.OUTREACH_WORKER_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$WORKER_URL" || -z "$WORKER_TOKEN" ]]; then
+            echo 'Required repository secrets are not configured.'
+            exit 1
+          fi
+          case "$WORKER_URL" in
+            https://*) ;;
+            *) echo 'Worker URL must use HTTPS.'; exit 1 ;;
+          esac
+          response_file="$RUNNER_TEMP/outreach-personalization-recovery.json"
+          status_code="$(curl --silent --show-error --output "$response_file" \
+            --write-out '%{http_code}' --max-time 60 --request POST \
+            --header "Authorization: Bearer ${WORKER_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "${WORKER_URL%/}/api/internal/personalization-batch-tick")"
+          if [[ "$status_code" != '200' ]]; then
+            echo "Recovery tick returned HTTP ${status_code}."
+            exit 1
+          fi
+          python3 - "$response_file" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as response:
+              result = json.load(response)
+          print('status=' + str(result.get('status')))
+          print('authorization_id=' + str(result.get('authorization_id', 'none')))
+          print('runner_active=' + str(result.get('runner_active', False)))
+          PY

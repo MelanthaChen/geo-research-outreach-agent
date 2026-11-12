@@ -136,7 +136,10 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     from docx.shared import Inches, Pt
     for section in doc.sections:
         section.top_margin = Inches(.65)
-        section.bottom_margin = Inches(.65)
+        # Keep the closing limitations together with the preceding report
+        # content when a short final block would otherwise spill to a nearly
+        # empty page. This retains the existing font size and page width.
+        section.bottom_margin = Inches(.5)
         section.left_margin = Inches(.7)
         section.right_margin = Inches(.7)
     normal = doc.styles["Normal"]

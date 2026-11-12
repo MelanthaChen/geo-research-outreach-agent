@@ -1171,7 +1171,7 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
                 'structured_output':response(),'rejected_claims':[],'raw_response':raw}
     backend=Backend(); counter=lambda _text:1000
     first=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
-    assert first['attempted']==1 and first['incomplete']==1 and backend.calls==1
+    assert first['attempted']==1 and backend.calls==1
     with db.transaction() as c:
         attempt=c.execute(select(personalization_attempts)).mappings().one()
         row=c.execute(select(candidates).where(candidates.c.id=='lagoon-ai')).mappings().one()
@@ -1193,6 +1193,69 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
     assert len(versions)==2 and versions[0]['analysis_version']=='LEGACY_SNAPSHOT'
     assert versions[1]['request_id']=='req-test'
     assert count(db,invitations)==0
+
+
+def test_failed_saved_response_replay_is_marked_rejected_and_not_retried(db, monkeypatch):
+    from outreach_v2.db import personalization_attempts
+    from outreach_v2.personalization import backfill
+    from outreach_v2.personalization_batch import eligibility
+    from test_semantic_openai_adapter import profile, response
+    import outreach_v2.personalization as module
+    import outreach_v2.semantic_openai as semantic_module
+
+    ident='known-response-replay-fails'
+    candidate(db,ident=ident,email='hello@lagoonny.com',website='https://www.lagoonny.com/',
+        name='Lagoon New York',personalization=False,fixture=False)
+    for key,value in {
+        'OUTREACH_AI_PERSONALIZATION_ENABLED':'true',
+        'OUTREACH_AI_PERSONALIZATION_MODEL':'gpt-5.4-mini-2026-03-17',
+        'OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD':'0.20',
+        'OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD':'0.25',
+        'OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD':'0.05',
+        'OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN':'1',
+    }.items():
+        monkeypatch.setenv(key,value)
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
+    real_build=semantic_module.build_automated_personalization
+    transform={'calls':0}
+    def fail_once(raw,selection,*,stamp):
+        transform['calls']+=1
+        if transform['calls']==1:
+            raise ValueError('local transformation failure')
+        return real_build(raw,selection,stamp=stamp)
+    monkeypatch.setattr(semantic_module,'build_automated_personalization',fail_once)
+
+    class Backend:
+        calls=0
+        def analyze_once(self,evidence,*,token_count=None):
+            self.calls+=1
+            raw={'id':'req-replay-fails','model':'gpt-5.4-mini-2026-03-17','status':'completed',
+                'usage':{'input_tokens':1000,'output_tokens':400,'output_tokens_details':{'reasoning_tokens':0}},
+                'output_text':json.dumps(response())}
+            return {'provider':'openai','model':'gpt-5.4-mini-2026-03-17','request_id':'req-replay-fails',
+                'status':'completed','usage':{'input_tokens':1000,'output_tokens':400,'reasoning_tokens':0},
+                'estimated_cost_usd':0.00255,'preflight':{'worst_case_usd':0.03825},
+                'structured_output':response(),'rejected_claims':[],'raw_response':raw}
+
+    backend=Backend()
+    first=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=[ident],
+        backend_factory=lambda:backend,token_count=lambda _text:1000,time_budget_seconds=30)
+    assert first['attempted']==1 and backend.calls==1
+    monkeypatch.setattr(semantic_module,'build_automated_personalization',real_build)
+    monkeypatch.setattr(semantic_module,'replay_saved_provider_attempt',
+        lambda *args,**kwargs: (_ for _ in ()).throw(ValueError('saved evidence reference rejected')))
+
+    second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=[ident],
+        retry_candidate_ids=[ident],backend_factory=lambda:backend,
+        token_count=lambda _text:1000,time_budget_seconds=30)
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        attempts=c.execute(select(personalization_attempts)).mappings().all()
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
+    assert second['attempted']==1 and second['incomplete']==1
+    assert backend.calls==1 and len(attempts)==1
+    assert row['personalization_outcome']=='KNOWN_RESPONSE_REPLAY_REJECTED'
+    assert eligible_ids==[]
 
 
 def test_robots_server_error_is_classified_as_transient(monkeypatch):

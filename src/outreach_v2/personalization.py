@@ -885,8 +885,12 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     personalization_attempts.c.operation_id==operation_id).with_for_update()).mappings().first()
                 if (previous and previous['status'] in {'COMPLETED','VALIDATION_FAILED'}
                         and previous.get('provider_response') and previous.get('actual_cost_usd')):
+                    # Mark the replay before local validation starts. If replay
+                    # rejects the saved response, it must leave the automatic
+                    # retry set rather than being replayed on every batch tick.
+                    replaying_saved_response=True
                     provider_result=replay_saved_provider_attempt(previous,evidence_input,preflight)
-                    result['replayed']+=1;attempt=dict(previous);replaying_saved_response=True
+                    result['replayed']+=1;attempt=dict(previous)
                 elif previous:
                     result['skipped_existing_attempt']+=1
                     at=now(); attempts=int(row.get('personalization_attempts') or 0)+1

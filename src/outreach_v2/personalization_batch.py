@@ -34,11 +34,30 @@ def hashlib_ids(ids):
 
 def eligibility(ids, stamp=None):
     stamp = stamp or now()
+    # A known, paid provider response that failed local validation can be
+    # replayed offline after a validation fix. This narrow exception lets the
+    # immutable cohort recover from stale long retry dates without creating a
+    # new provider request. Unknown or still-reserved spend remains excluded.
+    replayable_response = exists(select(personalization_attempts.c.id).where(
+        personalization_attempts.c.candidate_id == candidates.c.id,
+        personalization_attempts.c.status.in_(['VALIDATION_FAILED', 'COMPLETED']),
+        personalization_attempts.c.actual_cost_usd.is_not(None),
+        personalization_attempts.c.actual_cost_usd != '0',
+        personalization_attempts.c.provider_response.is_not(None)))
+    corrected_validation_outcome = and_(
+        candidates.c.personalization_outcome.in_([
+            'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
+            'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
+            'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE']),
+        replayable_response)
+    retry_state = or_(candidates.c.personalization_retry_after.is_(None),
+                      candidates.c.personalization_retry_after <= stamp,
+                      corrected_validation_outcome)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.personalization_status != 'READY', candidates.c.personalization_analysis_version.is_(None),
-        or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp),
+        retry_state,
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until <= stamp),
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id)),
         ~exists(select(personalization_attempts.c.id).where(

@@ -650,7 +650,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     from decimal import Decimal
     from .semantic_openai import (MODEL, MAX_ESTIMATED_USD, OpenAIResponsesBackend,
         build_preflight, select_evidence, build_automated_personalization,
-        OpenAIRequestError, PreflightError, attempt_failure_accounting)
+        OpenAIRequestError, PreflightError, attempt_failure_accounting,
+        replay_saved_provider_attempt)
     from .quality import quality_decisions, quality_reasons
     from .template import validate
 
@@ -832,6 +833,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 detail=_safe_json({'classification':outcome,'error':reason[:200]}),created_at=at))
 
     for index,row in enumerate(claimed):
+        replaying_saved_response=False
         if row['id'] not in authorized_ids:
             raise RuntimeError('Cohort isolation invariant failed before personalization')
         if time.monotonic()>=deadline:
@@ -855,8 +857,10 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     personalization_attempts.c.candidate_id==row['id'],
                     personalization_attempts.c.evidence_fingerprint==fp,
                     personalization_attempts.c.operation_id==operation_id).with_for_update()).mappings().first()
-                if previous and previous['status']=='COMPLETED' and previous.get('provider_response'):
-                    provider_result=json.loads(previous['provider_response']);result['replayed']+=1;attempt=dict(previous)
+                if (previous and previous['status'] in {'COMPLETED','VALIDATION_FAILED'}
+                        and previous.get('provider_response') and previous.get('actual_cost_usd')):
+                    provider_result=replay_saved_provider_attempt(previous,evidence_input,preflight)
+                    result['replayed']+=1;attempt=dict(previous);replaying_saved_response=True
                 elif previous:
                     result['skipped_existing_attempt']+=1
                     at=now(); attempts=int(row.get('personalization_attempts') or 0)+1
@@ -955,7 +959,9 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             result['failure_categories']['PREFLIGHT_BLOCKED']=result['failure_categories'].get('PREFLIGHT_BLOCKED',0)+1
             break
         except ValueError as exc:
-            kind=_failure_kind(exc);release(row,'INCOMPLETE',str(exc),retry_kind=kind,outcome=kind);result['attempted']+=1;result['incomplete']+=1
+            kind=_failure_kind(exc)
+            outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
+            release(row,'INCOMPLETE',str(exc),retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1
         except OpenAIRequestError as exc:
@@ -969,7 +975,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     updates=attempt_failure_accounting(exc,attempt_row)
                     updates['finished_at']=now()
                     c.execute(personalization_attempts.update().where(personalization_attempts.c.id==attempt_row['id']).values(**updates))
-            outcome='PROVIDER_'+exc.failure_stage.upper()
+            outcome=('KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response
+                     else 'PROVIDER_'+exc.failure_stage.upper())
             release(row,'INCOMPLETE','MODEL_REQUEST_'+exc.code,retry_kind='PERMANENT_EVIDENCE',outcome=outcome)
             result['status']='ATTENTION_REQUIRED'
             result['attempted']+=1;result['incomplete']+=1
@@ -985,7 +992,9 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 if attempt_row and attempt_row['status']=='RESERVED':
                     c.execute(personalization_attempts.update().where(personalization_attempts.c.id==attempt_row['id']).values(
                         status='UNKNOWN_SPEND',error_code=type(exc).__name__,finished_at=now()))
-            kind=_failure_kind(exc);release(row,'INCOMPLETE',type(exc).__name__,retry_kind=('PERMANENT_EVIDENCE' if attempt_row else kind))
+            kind=_failure_kind(exc)
+            outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
+            release(row,'INCOMPLETE',type(exc).__name__,retry_kind=('PERMANENT_EVIDENCE' if attempt_row else kind),outcome=outcome)
             result['attempted']+=1;result['incomplete']+=1;result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1;result['failure_reasons'][type(exc).__name__]=1
         if result['budget_stopped'] or time.monotonic()>=deadline:
             result['budget_stopped']=result['budget_stopped'] or time.monotonic()>=deadline

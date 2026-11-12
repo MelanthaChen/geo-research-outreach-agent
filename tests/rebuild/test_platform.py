@@ -1161,10 +1161,14 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
         calls=0
         def analyze_once(self,evidence,*,token_count=None):
             self.calls+=1
+            raw={'id':'req-test','model':'gpt-5.4-mini-2026-03-17','status':'completed',
+                'usage':{'input_tokens':1000,'output_tokens':400,
+                    'output_tokens_details':{'reasoning_tokens':0}},
+                'output_text':json.dumps(response())}
             return {'provider':'openai','model':'gpt-5.4-mini-2026-03-17','request_id':'req-test',
                 'status':'completed','usage':{'input_tokens':1000,'output_tokens':400,'reasoning_tokens':0},
                 'estimated_cost_usd':0.00255,'preflight':{'worst_case_usd':0.03825},
-                'structured_output':response(),'rejected_claims':[],'raw_response':{'id':'req-test'}}
+                'structured_output':response(),'rejected_claims':[],'raw_response':raw}
     backend=Backend(); counter=lambda _text:1000
     first=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
     assert first['attempted']==1 and first['incomplete']==1 and backend.calls==1
@@ -1642,3 +1646,39 @@ def test_batch_runner_resumes_safe_transient_and_skips_unknown_spend(db,monkeypa
     assert auth_row['status']=='ATTENTION_REQUIRED'
     assert untouched['personalization_status']=='INCOMPLETE'
     assert unknown['status']=='UNKNOWN_SPEND' and unknown['reserved_usd']=='0.05'
+
+
+def test_batch_retry_window_allows_known_validation_replay_but_not_unknown_or_future_transient(db):
+    from outreach_v2.db import personalization_attempts,personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    candidate(db,ident='known-replay',name='Known Replay',fixture=False,personalization=False)
+    candidate(db,ident='unknown-replay',name='Unknown Replay',fixture=False,personalization=False)
+    candidate(db,ident='transient-backoff',name='Transient Backoff',fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        for ident,outcome in [('known-replay','PROVIDER_EVIDENCE_REFERENCE_VALIDATION'),
+                              ('unknown-replay','PROVIDER_EVIDENCE_REFERENCE_VALIDATION'),
+                              ('transient-backoff','TRANSIENT_HTTP')]:
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_retry_after=future,personalization_outcome=outcome,
+                personalization_attempts=1))
+        c.execute(personalization_runs.insert().values(id='known-attempt-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        common={'run_id':'known-attempt-run','evidence_fingerprint':'evidence-fp','operation_id':'initial',
+            'model':'gpt-5.4-mini-2026-03-17','reserved_usd':'0.05','actual_cost_usd':'0.01',
+            'provider_response':'{"diagnostic_version":1,"provider_response":{"status":"completed"}}',
+            'created_at':now()}
+        c.execute(personalization_attempts.insert().values(id='known-attempt',candidate_id='known-replay',
+            status='VALIDATION_FAILED',**common))
+        c.execute(personalization_attempts.insert().values(id='unknown-attempt',candidate_id='unknown-replay',
+            status='UNKNOWN_SPEND',**common))
+    manifest=['known-replay','unknown-replay','transient-backoff']+[f'manifest-{i}' for i in range(97)]
+    with db.transaction() as c:
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
+    assert eligible_ids==['known-replay']
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='known-replay').values(
+            personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED'))
+        after_rejected_replay=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
+    assert after_rejected_replay==[]

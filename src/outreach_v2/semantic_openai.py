@@ -72,7 +72,7 @@ OPENAI_ANALYSIS_SCHEMA: Mapping[str, Any] = _obj({
     "recommendation_decision": {"type": "string", "enum": ["RECOMMEND", "ABSTAIN"]},
 })
 
-SYSTEM_INSTRUCTION = """Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. In products_services, cite evidence explicitly classified PRODUCT_OR_SERVICE; do not substitute identity, audience, or general capability evidence. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification."""
+SYSTEM_INSTRUCTION = """Analyze only the supplied first-party website evidence. Return the required JSON object, not prose outside JSON. The evidence classifications and attributions are supplied by deterministic application code; do not promote EVENT_OR_PARTICIPANT, THIRD_PARTY_OR_PARTNER, CUSTOMER_OR_TESTIMONIAL, or AMBIGUOUS material into a claim about the target business. For every factual claim, cite one or more exact evidence IDs. Summarize in concise natural language; do not copy long source passages. Distinguish company-published statements from your interpretations. Describe the business, offerings, customer-facing characteristics, and why this site is relevant to research about AI systems representing businesses. Analyze page relationships only from the supplied page structure and evidence. Any GEO implication is a hypothesis, never a measured result. Do not claim search rankings, AI visibility, performance, or site-wide absences. Return no recommendation unless a concrete opportunity is directly supported by the evidence; otherwise use ABSTAIN and an empty hypotheses array. State evidence limitations and unresolved questions. Do not claim your own support judgment is independent verification."""
 
 _UNSUPPORTED_COMPARATIVE_RE = re.compile(
     r"\b(?:best|largest|smallest|leading|only|unique|first(?![-‐‑‒–— ]party\b)|most)\b", re.I)
@@ -165,6 +165,12 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str) -
         field = str(item.get("field") or "").casefold()
         return "TARGET_BUSINESS" if field in {"name", "description", "address", "openinghours", "email", "telephone"} else "AMBIGUOUS"
     if any(word in path for word in ("service", "product", "collection")):
+        return "PRODUCT_OR_SERVICE"
+    # About pages may be the canonical source for an offering (as in the
+    # Lagoon New York example), even when the URL is not called /services.
+    # Require explicit sales or service language before assigning this class.
+    if re.search(r"\b(?:available for sale|for sale|we offer|offers?\b.{0,100}\b(?:services?|products?|custom design|classes?|treatments?|lodging|rooms?|meals?|consulting|lessons?|programs?))\b",
+                 excerpt, re.I):
         return "PRODUCT_OR_SERVICE"
     # An About/Home claim is target evidence only if it is explicitly tied to
     # the organization, its authors, or first-person company voice.
@@ -600,33 +606,110 @@ def _validate_against_schema(value: Any, schema: Mapping[str, Any], path: str = 
 
 def reject_claims_with_unknown_evidence(raw: Mapping[str, Any], evidence: Mapping[str, Any]
                                         ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Remove individual claims with unknown evidence IDs; preserve their audit trail.
+    """Remove unsupported individual claims while retaining supported analysis.
 
-    Other response structures remain subject to strict whole-response checks.
-    This permits supported claims to proceed to review without laundering a
-    claim that cites evidence the application did not supply.
+    This is deliberately claim-scoped: a bad citation or unsupported numeric/
+    comparative assertion does not invalidate unrelated claims. Entity identity
+    remains a hard validation requirement, and retained entries still pass the
+    strict schema, URL, attribution, and evidence-ID checks below.
     """
     if not isinstance(raw, Mapping):
         raise ValueError("Model response must be an object")
-    supplied = {str(item.get("id")) for item in evidence.get("facts", [])}
-    claims = raw.get("proposed_claims")
-    if not isinstance(claims, list):
-        raise ValueError("proposed_claims must be an array")
-    accepted, rejected = [], []
-    for claim in claims:
-        refs = claim.get("evidence_ids", []) if isinstance(claim, Mapping) else []
-        unknown = [str(ref) for ref in refs if str(ref) not in supplied]
-        if unknown:
-            rejected.append({"id": str(claim.get("id") or ""),
-                             "text": str(claim.get("text") or ""),
-                             "evidence_ids": [str(ref) for ref in refs],
-                             "unknown_evidence_ids": unknown,
-                             "status": "REJECTED_UNKNOWN_EVIDENCE_ID"})
+    supplied = {str(item.get("id")): item for item in evidence.get("facts", [])}
+    host = _host(str(evidence.get("website") or ""))
+    if not host:
+        raise ValueError("Evidence website is invalid")
+    allowed_business = {"TARGET_BUSINESS", "PRODUCT_OR_SERVICE"}
+    rejected: list[dict[str, Any]] = []
+
+    def filter_entries(key: str, *, entry_type: str, business_claim: bool,
+                       product_service: bool = False) -> None:
+        entries = raw.get(key)
+        if not isinstance(entries, list):
+            return  # strict schema validation below reports malformed containers
+        accepted = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                accepted.append(entry)  # preserve for the schema validator
+                continue
+            refs = entry.get("evidence_ids", [])
+            refs = refs if isinstance(refs, list) else []
+            unknown = [str(ref) for ref in refs if str(ref) not in supplied]
+            reasons: list[str] = []
+            if not refs:
+                reasons.append("MISSING_EVIDENCE_ID")
+            if unknown:
+                reasons.append("UNKNOWN_EVIDENCE_ID")
+            for ref in refs:
+                fact = supplied.get(str(ref))
+                if not fact:
+                    continue
+                if _host(str(fact.get("source_url") or "")) != host:
+                    reasons.append("NON_FIRST_PARTY_EVIDENCE")
+                classification = str(fact.get("classification") or "")
+                if business_claim and classification not in allowed_business:
+                    reasons.append("NON_COMPANY_EVIDENCE")
+            if product_service and not any(
+                    str(supplied[str(ref)].get("classification") or "") == "PRODUCT_OR_SERVICE"
+                    for ref in refs if str(ref) in supplied):
+                reasons.append("NOT_PRODUCT_OR_SERVICE_EVIDENCE")
+            text = str(entry.get("text") or entry.get("summary") or
+                       entry.get("description") or entry.get("hypothesis") or
+                       entry.get("observation") or "")
+            if entry_type == "PROPOSED_CLAIM" and not reasons:
+                excerpts = " ".join(str(supplied[str(ref)].get("exact_excerpt") or "") for ref in refs)
+                number_pattern = r"(?:\$\s?\d+(?:,\d{3})*(?:\.\d+)?|\b\d+(?:\.\d+)?%?\b)"
+                for number in re.findall(number_pattern, text):
+                    if number.casefold().replace(" ", "") not in excerpts.casefold().replace(" ", ""):
+                        reasons.append("UNSUPPORTED_NUMERICAL_CLAIM")
+                        break
+                if not reasons:
+                    for match in _UNSUPPORTED_COMPARATIVE_RE.finditer(text):
+                        if not re.search(rf"\b{re.escape(match.group(0))}\b", excerpts, re.I):
+                            reasons.append("UNSUPPORTED_COMPARATIVE_CLAIM")
+                            break
+            if reasons:
+                status = "REJECTED_" + reasons[0]
+                rejected.append({"entry_type": entry_type,
+                                 "id": str(entry.get("id") or ""),
+                                 "text": text,
+                                 "evidence_ids": [str(ref) for ref in refs],
+                                 "unknown_evidence_ids": unknown,
+                                 "reason_codes": list(dict.fromkeys(reasons)),
+                                 "status": status})
+            else:
+                accepted.append(entry)
+        # Copy-on-write so the archived raw response remains untouched.
+        raw_copy[key] = accepted
+
+    raw_copy = dict(raw)
+    filter_entries("proposed_claims", entry_type="PROPOSED_CLAIM", business_claim=False)
+    filter_entries("products_services", entry_type="PRODUCT_OR_SERVICE", business_claim=True)
+    filter_entries("target_audiences", entry_type="TARGET_AUDIENCE", business_claim=True)
+    filter_entries("capabilities_characteristics", entry_type="CAPABILITY", business_claim=True)
+    filter_entries("observed_relationships", entry_type="OBSERVED_RELATIONSHIP", business_claim=False)
+    known_relationships = {str(x.get("id")) for x in raw_copy.get("observed_relationships", [])
+                           if isinstance(x, Mapping)}
+    filter_entries("potential_geo_implications", entry_type="GEO_HYPOTHESIS", business_claim=False)
+    hypotheses = []
+    for item in raw_copy.get("potential_geo_implications", []):
+        if not isinstance(item, Mapping):
+            hypotheses.append(item)
+            continue
+        unknown_relations = [str(x) for x in item.get("relationship_ids", [])
+                             if str(x) not in known_relationships]
+        if unknown_relations:
+            rejected.append({"entry_type": "GEO_HYPOTHESIS", "id": str(item.get("id") or ""),
+                "text": str(item.get("hypothesis") or ""),
+                "evidence_ids": [str(x) for x in item.get("evidence_ids", [])],
+                "unknown_relationship_ids": unknown_relations,
+                "reason_codes": ["UNKNOWN_RELATIONSHIP_ID"], "status": "REJECTED_UNKNOWN_RELATIONSHIP_ID"})
         else:
-            accepted.append(claim)
-    filtered = dict(raw)
-    filtered["proposed_claims"] = accepted
-    return filtered, rejected
+            hypotheses.append(item)
+    raw_copy["potential_geo_implications"] = hypotheses
+    if raw_copy.get("recommendation_decision") == "RECOMMEND" and not hypotheses:
+        raw_copy["recommendation_decision"] = "ABSTAIN"
+    return raw_copy, rejected
 
 
 def validate_openai_response(raw: Mapping[str, Any], evidence: Mapping[str, Any]) -> None:
@@ -702,6 +785,86 @@ def validate_openai_response(raw: Mapping[str, Any], evidence: Mapping[str, Any]
         raise ValueError("Model recommended without a cited GEO hypothesis")
     if raw.get("recommendation_decision") == "ABSTAIN" and raw.get("potential_geo_implications"):
         raise ValueError("Model abstained while returning GEO hypotheses; inconsistent response")
+
+
+def replay_saved_provider_attempt(previous: Mapping[str, Any], evidence: Mapping[str, Any],
+                                  preflight: Preflight) -> dict[str, Any]:
+    """Revalidate a known-cost provider response offline; never issue a request.
+
+    The evidence fingerprint is checked by the caller before this function is
+    reached. Only complete provider responses with verifiable token usage and
+    a matching persisted actual cost are eligible for replay.
+    """
+    from decimal import Decimal
+
+    status = str(previous.get("status") or "")
+    if status not in {"COMPLETED", "VALIDATION_FAILED"}:
+        raise ValueError("Saved provider attempt is not eligible for offline replay")
+    try:
+        saved = json.loads(previous.get("provider_response") or "")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Saved provider response is not valid JSON") from exc
+    if not isinstance(saved, Mapping):
+        raise ValueError("Saved provider response is not an object")
+    if status == "VALIDATION_FAILED":
+        diagnostic = saved
+        raw = saved.get("provider_response")
+    else:
+        diagnostic = saved
+        raw = saved.get("raw_response")
+    if not isinstance(raw, Mapping):
+        raise ValueError("Saved response does not contain the raw provider response")
+    if raw.get("status") != "completed" or raw.get("model") != MODEL:
+        raise ValueError("Saved provider response is incomplete or uses a different model")
+    request_id = str(raw.get("id") or "")
+    if not request_id or (previous.get("request_id") and request_id != str(previous["request_id"])):
+        raise ValueError("Saved provider request ID does not match its ledger row")
+    usage = raw.get("usage") or diagnostic.get("usage") or {}
+    input_tokens = usage.get("input_tokens")
+    output_tokens = usage.get("output_tokens")
+    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+        raise ValueError("Saved provider response has no verifiable token usage")
+    cost = estimated_cost(input_tokens, output_tokens)
+    try:
+        recorded_cost = Decimal(str(previous.get("actual_cost_usd")))
+        diagnostic_cost = diagnostic.get("actual_cost_usd")
+        if diagnostic_cost is not None and Decimal(str(diagnostic_cost)) != recorded_cost:
+            raise ValueError("Saved diagnostic cost does not match its ledger row")
+    except Exception as exc:
+        raise ValueError("Saved provider cost cannot be verified") from exc
+    if not recorded_cost.is_finite() or recorded_cost <= 0 or Decimal(str(cost)) != recorded_cost:
+        raise ValueError("Saved provider token usage does not match the known ledger cost")
+    details = usage.get("output_tokens_details") or {}
+    reasoning_tokens = details.get("reasoning_tokens", 0)
+    if not isinstance(reasoning_tokens, int) or reasoning_tokens < 0 or reasoning_tokens > output_tokens:
+        raise ValueError("Saved provider reasoning-token usage is invalid")
+    output_text = raw.get("output_text")
+    if not isinstance(output_text, str):
+        chunks = []
+        for output_item in raw.get("output", []):
+            for content in output_item.get("content", []):
+                if content.get("type") == "output_text":
+                    chunks.append(content.get("text", ""))
+        output_text = "".join(chunks)
+    try:
+        structured = json.loads(output_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Saved provider output is not valid structured JSON") from exc
+    _validate_against_schema(structured, OPENAI_ANALYSIS_SCHEMA)
+    structured, rejected = reject_claims_with_unknown_evidence(structured, evidence)
+    validate_openai_response(structured, evidence)
+    prior_rejected = saved.get("rejected_claims") if status == "COMPLETED" else []
+    rejected = list(prior_rejected or []) + rejected
+    return {
+        "provider": "openai", "model": MODEL, "request_id": request_id,
+        "status": "completed",
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens,
+                  "reasoning_tokens": reasoning_tokens,
+                  "reasoning_tokens_reported": "reasoning_tokens" in details},
+        "estimated_cost_usd": float(recorded_cost), "preflight": preflight.__dict__,
+        "raw_response": raw, "structured_output": structured,
+        "rejected_claims": rejected, "offline_replay": True,
+    }
 
 
 def to_evidence_contract(raw: Mapping[str, Any], selection: EvidenceSelection) -> EvidenceContract:

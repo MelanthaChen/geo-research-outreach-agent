@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -15,9 +16,11 @@ from outreach_v2.semantic_openai import (
     OpenAIRequestError,
     OpenAIResponsesBackend,
     PreflightError,
+    EvidenceSelection,
     build_preflight,
     build_automated_personalization,
     estimated_cost,
+    replay_saved_provider_attempt,
     reject_claims_with_unknown_evidence,
     select_evidence,
     to_evidence_contract,
@@ -222,6 +225,86 @@ def test_unknown_claim_citation_is_rejected_without_discarding_other_claims():
     validate_openai_response(filtered, evidence)
 
 
+def test_invalid_structured_citation_and_unsupported_claim_are_removed_individually():
+    selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
+    evidence = selection.to_input()
+    raw = response()
+    raw["products_services"].append({"summary": "An unsupported service claim",
+        "evidence_ids": ["missing-service-id"], "attribution": "COMPANY_STATED"})
+    raw["proposed_claims"].append({"id": "bad-number", "text": "Lagoon New York has 42 stores.",
+        "evidence_ids": ["about1"], "attribution": "COMPANY_STATED", "role": "BUSINESS_DESCRIPTION"})
+    filtered, rejected = reject_claims_with_unknown_evidence(raw, evidence)
+    assert {item["entry_type"] for item in rejected} == {"PRODUCT_OR_SERVICE", "PROPOSED_CLAIM"}
+    by_type = {item["entry_type"]: item for item in rejected}
+    assert by_type["PRODUCT_OR_SERVICE"]["status"] == "REJECTED_UNKNOWN_EVIDENCE_ID"
+    assert by_type["PROPOSED_CLAIM"]["id"] == "bad-number"
+    assert by_type["PROPOSED_CLAIM"]["status"] == "REJECTED_UNSUPPORTED_NUMERICAL_CLAIM"
+    assert len(filtered["products_services"]) == 1
+    assert all(item["id"] != "bad-number" for item in filtered["proposed_claims"])
+    validate_openai_response(filtered, evidence)
+
+
+def test_lagoon_archived_response_replay_keeps_supported_claims_and_grounded_copy():
+    root = Path(__file__).parents[2] / "src/outreach_v2/demo_data"
+    run = json.loads((root / "lagoon-openai-run.json").read_text())
+    replay = json.loads((root / "lagoon-openai-replay.json").read_text())
+    evidence = run["selected_evidence"]
+    raw = run["raw_structured_model_response"]
+    output_text = raw.get("output_text") or "".join(
+        content.get("text", "")
+        for item in raw.get("output", [])
+        for content in item.get("content", [])
+        if content.get("type") == "output_text")
+    structured = json.loads(output_text)
+    filtered, rejected = reject_claims_with_unknown_evidence(structured, evidence)
+    validate_openai_response(filtered, evidence)
+    assert [claim["id"] for claim in filtered["proposed_claims"]] == replay["accepted_claim_ids"]
+    assert next(item for item in rejected if item["id"] == "c4")["unknown_evidence_ids"] == ["p2_jsonld_0"]
+    # The saved Lagoon request and deployed semantic adapter use the exact same
+    # system instruction; the workflow is reused rather than redesigned.
+    assert run["request_payload_without_credentials"]["instructions"] == SYSTEM_INSTRUCTION
+
+    selection = EvidenceSelection(evidence["target_company"], evidence["website"],
+        tuple(evidence["pages"]), tuple(evidence["facts"]),
+        evidence["evidence_classifications"], evidence["excluded_reasons"],
+        evidence["excluded_counts"], tuple(evidence["limitations"]))
+    personalization, audit = build_automated_personalization(
+        filtered, selection, stamp=run["fetched_at"])
+    copy = personalization["recipient_copy"]
+    assert copy["business_summary"]
+    assert copy["distinctive_detail"]
+    assert copy["research_relevance"]
+    assert len({copy[key] for key in ("business_summary", "distinctive_detail", "research_relevance")}) == 3
+    fact_ids = {item["id"] for item in selection.facts}
+    assert set(copy["support"]["business_summary"] + copy["support"]["distinctive_detail"]
+               + copy["support"]["research_relevance"]) <= fact_ids
+    assert any(item["id"] == "c2" and item["status"] == "EXCLUDED_UNSUPPORTED_COMPARISON"
+               for item in audit)
+
+
+def test_lagoon_known_cost_validation_failure_replays_offline_without_new_request():
+    root = Path(__file__).parents[2] / "src/outreach_v2/demo_data"
+    run = json.loads((root / "lagoon-openai-run.json").read_text())
+    evidence = run["selected_evidence"]
+    raw = run["raw_structured_model_response"]
+    cost = run["model_result"]["estimated_cost_usd"]
+    usage = raw["usage"]
+    diagnostic = {"diagnostic_version": 1, "http_status": 200,
+        "request_id": raw["id"], "model": raw["model"], "response_status": raw["status"],
+        "usage": usage, "actual_cost_usd": cost, "failure_code": "STRUCTURED_VALIDATION_FAILED",
+        "failure_stage": "evidence_reference_validation", "failure_path": "Claim c4",
+        "provider_response": raw}
+    saved = {"status": "VALIDATION_FAILED", "provider_response": json.dumps(diagnostic),
+        "actual_cost_usd": str(cost), "request_id": raw["id"]}
+    preflight, _ = build_preflight(evidence, token_count=lambda _: 1000)
+    result = replay_saved_provider_attempt(saved, evidence, preflight)
+    assert result["offline_replay"] is True
+    assert result["request_id"] == raw["id"]
+    assert result["estimated_cost_usd"] == cost
+    assert result["usage"]["input_tokens"] == usage["input_tokens"]
+    assert [item["id"] for item in result["rejected_claims"] if item["id"]] == ["c4"]
+
+
 def test_invalid_evidence_id_remains_a_validation_failure_without_explicit_rejection():
     selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
     raw = response()
@@ -345,8 +428,9 @@ def test_first_party_is_not_mistaken_for_unsupported_superlative():
         validate_openai_response(raw, selection.to_input())
 
 
-def test_prompt_requires_product_service_evidence_for_offerings():
-    assert "products_services, cite evidence explicitly classified PRODUCT_OR_SERVICE" in SYSTEM_INSTRUCTION
+def test_prompt_is_identical_to_the_lagoon_semantic_workflow():
+    run = json.loads((Path(__file__).parents[2] / "src/outreach_v2/demo_data/lagoon-openai-run.json").read_text())
+    assert run["request_payload_without_credentials"]["instructions"] == SYSTEM_INSTRUCTION
 
 
 def test_tokenizer_failure_fails_closed_before_any_request():
@@ -434,12 +518,12 @@ def test_schema_mismatch_reports_exact_validation_path_and_preserves_response():
 def test_invalid_evidence_reference_is_distinguished_from_schema_failure():
     output = response()
     output["products_services"][0]["evidence_ids"] = ["missing-source-id"]
-    error, calls = _run_fake_response(_provider_response(output))
+    result, calls = _run_fake_response(_provider_response(output))
     assert calls == 1
-    assert error.code == "STRUCTURED_VALIDATION_FAILED"
-    assert error.failure_stage == "evidence_reference_validation"
-    assert "missing-source-id" not in error.message
-    assert "products_services" in error.message
+    assert isinstance(result, dict)
+    assert result["rejected_claims"][0]["entry_type"] == "PRODUCT_OR_SERVICE"
+    assert result["rejected_claims"][0]["unknown_evidence_ids"] == ["missing-source-id"]
+    assert result["structured_output"]["products_services"] == []
 
 
 def test_provider_success_local_identity_failure_has_replayable_response_and_usage():

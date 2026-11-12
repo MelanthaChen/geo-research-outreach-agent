@@ -707,7 +707,9 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
                          'Model abstained while returning GEO hypotheses; inconsistent response',
                          'Saved response does not contain the raw provider response',
                          'Outreach review quality failed: SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY'])),
-                and_(candidates.c.personalization_outcome.in_(['KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP']),
+                and_(candidates.c.personalization_outcome.in_([
+                    'KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP',
+                    'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2']),
                      candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
             saved_response, no_unresolved_attempt)
         retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
@@ -1094,10 +1096,12 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             outcome='KNOWN_RESPONSE_REPLAY_REJECTED' if replaying_saved_response else kind
             error=str(exc)
             if replaying_saved_response and error=='No concise, cited first-party service statement is available':
-                # This response has already been evaluated against the corrected
-                # first-party offering classifier. Keep the evidence failure
-                # visible while preventing another identical replay loop.
-                outcome='KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
+                # Each deterministic classifier repair gets one offline replay.
+                # Version the terminal outcome so a failed replay cannot loop.
+                outcome = ('KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V3'
+                    if row.get('personalization_outcome') ==
+                        'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2'
+                    else 'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2')
             release(row,'INCOMPLETE',error,retry_kind=kind,outcome=outcome);result['attempted']+=1;result['incomplete']+=1
             result['failure_categories'][kind]=result['failure_categories'].get(kind,0)+1
             result['failure_reasons'][str(exc)[:140]]=result['failure_reasons'].get(str(exc)[:140],0)+1

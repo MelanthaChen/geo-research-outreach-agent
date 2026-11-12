@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -165,6 +166,27 @@ def test_first_party_menu_page_is_a_product_source_and_preserves_legacy_label_fo
     assert selection.classifications["menu1"] == "PRODUCT_OR_SERVICE"
     assert selection.legacy_classifications == {"menu1":"TARGET_BUSINESS"}
     assert selection.prior_classification_input()["evidence_classifications"]["menu1"] == "TARGET_BUSINESS"
+
+
+@pytest.mark.parametrize(("company", "url", "text", "fact_id"), [
+    ("Nejad Oriental Rugs", "https://www.nejad.com/2019/about-color.html",
+     "Shop a huge inventory of 30,000 Oriental rugs featuring hand-woven Persian rugs and antique carpets.", "catalog"),
+    ("Latino's Fresh Market", "https://www.latinosfreshmarketllc.com/",
+     "Proveemos una gran variedad de productos frescos: frutas, verduras, bebidas, quesos y pescados.", "spanish"),
+])
+def test_explicit_catalog_and_spanish_first_party_offers_are_citable(company, url, text, fact_id):
+    host = urlparse(url).hostname
+    domain = host.removeprefix("www.")
+    source = {"evidence_profile": {"pages": [{"url": url, "type": "about",
+        "title": "About", "headings": [], "links": []}], "facts": [{
+        "id": fact_id, "statement": text, "evidence_excerpt": text,
+        "source_content": text, "source_urls": [url], "source_title": "About",
+        "section_heading": "About", "assertion_type": "ATTRIBUTED_COMPANY_DESCRIPTION",
+        "attribution": "COMPANY_STATED"}]}}
+    selection = select_evidence(source, company_name=company, website=f"https://{domain}/")
+    assert selection.classifications[fact_id] == "PRODUCT_OR_SERVICE"
+    # The previous paid request's prompt hash must still be reproducible.
+    assert selection.prior_classification_input()["evidence_classifications"][fact_id] == "TARGET_BUSINESS"
 
 
 def test_quoted_first_person_review_on_service_page_is_not_company_evidence():

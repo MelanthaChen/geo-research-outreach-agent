@@ -59,8 +59,11 @@ def eligibility(ids, stamp=None):
         candidates.c.personalization_outcome.in_([
             'KNOWN_RESPONSE_REPLAY_REJECTED',
             # One additional offline replay is allowed after the first repair
-            # when a new URL-based first-party menu classification is deployed.
-            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR']),
+            # when a URL-based first-party menu classification was deployed.
+            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR',
+            # v3 recognizes explicit first-party English catalog and Spanish
+            # offer statements on otherwise ordinary About/Home pages.
+            'KNOWN_RESPONSE_REPLAY_REJECTED_AFTER_CLASSIFIER_REPAIR_V2']),
         candidates.c.personalization_error == 'No concise, cited first-party service statement is available',
         replayable_response)
     # These are narrow, deterministic repairs. The legacy V1 error was raised

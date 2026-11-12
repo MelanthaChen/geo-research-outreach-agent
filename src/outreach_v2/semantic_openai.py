@@ -222,6 +222,24 @@ def _classify_fact(item: Mapping[str, Any], site_host: str, company_name: str, *
             excerpt, re.I)
         if explicit_offering and concrete_offering:
             return "PRODUCT_OR_SERVICE"
+        # Explicit catalog language is also a company offer even when the
+        # copy avoids an "offer/provide" verb (for example, "Shop a huge
+        # inventory of ..."). Keep this constrained to concrete catalog
+        # nouns so general editorial statements do not become services.
+        catalog_offer = re.search(
+            r"\b(?:shop|browse|buy|purchase|view)\b.{0,100}\b(?:inventory|catalog(?:ue)?|collection|"
+            r"rugs?|products?|groceries|food|clothing|furniture|artwork)\b",
+            excerpt, re.I)
+        if catalog_offer:
+            return "PRODUCT_OR_SERVICE"
+        # Spanish first-person company statements commonly introduce retail
+        # offers with "proveemos", "disponemos", "ofrecemos", or "vendemos".
+        spanish_offer = re.search(
+            r"\b(?:proveemos|disponemos|ofrecemos|vendemos|contamos con|tenemos)\b.{0,180}\b(?:productos?|frutas?|verduras?|vegetales?|alimentos?|"
+            r"pescados?|quesos?|bebidas?|abarrotes|servicios?|comidas?)\b",
+            excerpt, re.I)
+        if spanish_offer:
+            return "PRODUCT_OR_SERVICE"
     # An About/Home claim is target evidence only if it is explicitly tied to
     # the organization, its authors, or first-person company voice.
     entity = str(item.get("statement") or excerpt).casefold()

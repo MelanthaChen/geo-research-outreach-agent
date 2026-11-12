@@ -614,7 +614,7 @@ def _safe_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
-def _eligible_query(stamp, selected_ids=()):
+def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
     no_prior_invitation = ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id))
     personalization_state = candidates.c.personalization_status != 'READY'
     if selected_ids:
@@ -624,6 +624,28 @@ def _eligible_query(stamp, selected_ids=()):
         personalization_state = or_(personalization_state, legacy_selected)
     retry_state=or_(candidates.c.personalization_retry_after.is_(None), candidates.c.personalization_retry_after <= stamp)
     if selected_ids: retry_state=or_(retry_state,candidates.c.id.in_(selected_ids))
+    if retry_candidate_ids:
+        # The durable batch selector may admit a future-backoff candidate only
+        # when its prior provider response is known-cost and replayable. Keep
+        # the inner selector aligned, but independently fail closed on any
+        # unresolved spend reservation before claiming a lease.
+        saved_response = exists(select(personalization_attempts.c.id).where(
+            personalization_attempts.c.candidate_id == candidates.c.id,
+            personalization_attempts.c.status.in_(['COMPLETED', 'VALIDATION_FAILED']),
+            personalization_attempts.c.actual_cost_usd.is_not(None),
+            personalization_attempts.c.actual_cost_usd != '0',
+            personalization_attempts.c.provider_response.is_not(None)))
+        no_unresolved_attempt = ~exists(select(personalization_attempts.c.id).where(
+            personalization_attempts.c.candidate_id == candidates.c.id,
+            personalization_attempts.c.status.in_(['UNKNOWN_SPEND', 'RESERVED'])))
+        replayable_outcome = and_(
+            candidates.c.id.in_(retry_candidate_ids),
+            candidates.c.personalization_outcome.in_([
+                'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
+                'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
+                'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE']),
+            saved_response, no_unresolved_attempt)
+        retry_state=or_(retry_state,replayable_outcome)
     return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), personalization_state, retry_state,
@@ -637,7 +659,7 @@ def _analysis_fingerprint(selection):
 
 
 def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_seconds=240,
-             authorized_candidate_ids=None, selected_candidate_ids=None,
+             authorized_candidate_ids=None, selected_candidate_ids=None, retry_candidate_ids=None,
              backend_factory=None, token_count=None, approved_cumulative_budget_usd=None,
              approved_candidate_budget_usd=None):
     """Run the real semantic pipeline; paid execution is disabled unless explicitly configured.
@@ -667,6 +689,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 'reason': 'OUTREACH_AI_PERSONALIZATION_ENABLED is not true; no model calls were made.'}
     authorized_ids = tuple(dict.fromkeys(str(x).strip() for x in (authorized_candidate_ids or ()) if str(x).strip()))
     selected_ids = tuple(dict.fromkeys(str(x).strip() for x in (selected_candidate_ids or ()) if str(x).strip()))
+    retry_ids = tuple(dict.fromkeys(str(x).strip() for x in (retry_candidate_ids or ()) if str(x).strip()))
     if not authorized_ids:
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
                 'reason':'No explicit authorized candidate cohort is configured; automatic database-wide selection is disabled.'}
@@ -676,6 +699,9 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     if not set(selected_ids).issubset(set(authorized_ids)):
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
                 'reason':'Historical reprocessing IDs must be within the exact authorized candidate cohort.'}
+    if not set(retry_ids).issubset(set(authorized_ids)):
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
+                'reason':'Retry recovery IDs must be within the exact authorized candidate cohort.'}
     operation_id=os.environ.get('OUTREACH_AI_PERSONALIZATION_OPERATION_ID','initial').strip()
     if not operation_id or len(operation_id)>128:
         raise ValueError('AI personalization operation ID must contain 1–128 characters')
@@ -738,7 +764,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     deadline = run_started + time_budget_seconds
     lease_token = uuid.uuid4().hex
     lease_until = (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).isoformat()
-    eligible = _eligible_query(stamp, selected_ids)
+    eligible = _eligible_query(stamp, selected_ids, retry_ids)
     backlog = and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), candidates.c.personalization_status != 'READY',
@@ -760,7 +786,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
         if db.postgres: q=q.with_for_update(skip_locked=True)
         for item in c.execute(q).mappings():
             row=dict(item); domain=_domain_key(row.get('domain'))
-            if domain in domains or (domain in recent and row['id'] not in selected_ids): continue
+            if domain in domains or (domain in recent and row['id'] not in selected_ids and row['id'] not in retry_ids): continue
             updated=c.execute(candidates.update().where(candidates.c.id==row['id'],eligible).values(
                 personalization_lease_token=lease_token,personalization_lease_until=lease_until))
             if updated.rowcount==1:

@@ -1178,9 +1178,10 @@ def test_paid_semantic_pipeline_is_sequential_versioned_and_replays_saved_respon
         assert attempt['status']=='COMPLETED' and attempt['provider_response']
         assert row['personalization_outcome']=='PERMANENT_EVIDENCE'
         assert row['personalization_retry_after'] is not None
-        c.exec_driver_sql("UPDATE events SET created_at='2000-01-01T00:00:00+00:00' WHERE entity_id='lagoon-ai'")
-    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_REPROCESS_ENABLED','true')
-    second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30,selected_candidate_ids=['lagoon-ai'])
+    # This is the actual authorized-batch path: a future local retry timestamp
+    # may be bypassed only to replay the exact known-cost provider artifact.
+    second=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['lagoon-ai'],
+        retry_candidate_ids=['lagoon-ai'],backend_factory=lambda:backend,token_count=counter,time_budget_seconds=30)
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='lagoon-ai')).mappings().one()
         versions=c.execute(select(personalization_versions).where(personalization_versions.c.candidate_id=='lagoon-ai')).mappings().all()

@@ -202,7 +202,8 @@ def _run(db, ident):
 
             from .personalization import backfill
             result = backfill(db, limit=len(next_ids), concurrency=1, time_budget_seconds=300,
-                authorized_candidate_ids=next_ids, approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD))
+                authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids,
+                approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD))
             detail = {'candidate_count': len(next_ids), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
                 'run_id': result.get('run_id'), 'attempted': result.get('attempted', 0),
                 'completed': result.get('completed', 0), 'incomplete': result.get('incomplete', 0),

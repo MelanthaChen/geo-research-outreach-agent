@@ -41,6 +41,10 @@ def test_geoairesume_report_keeps_full_page_out_of_proposed_revision_and_lists_s
     assert "Persisted model response archive" not in all_text
     assert "original: 61 cited words" in all_text
     assert len(list(doc.tables)) >= 5
+    limitation_index = next(i for i, p in enumerate(doc.paragraphs) if p.text == "Limitations and next steps")
+    limitation_bullets = [p for p in doc.paragraphs[limitation_index + 1:] if p.style.name == "List Bullet"]
+    assert len(limitation_bullets) == 1
+    assert limitation_bullets[0].text.endswith("Review the recommendations before making any website change.")
 
 
 def test_baseline_section_does_not_force_a_new_page(tmp_path):

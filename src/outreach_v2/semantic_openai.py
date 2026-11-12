@@ -464,7 +464,9 @@ class OpenAIResponsesBackend:
                                      failure_stage="json_schema_validation",
                                      failure_path="$" + path_match.group(1) if path_match else "$",
                                      usage=usage, request_id=raw.get("id"), actual_cost_usd=actual_cost) from exc
+        structured, abstention_rejections = normalize_abstained_recommendations(structured)
         structured, rejected_claims = reject_claims_with_unknown_evidence(structured, evidence)
+        rejected_claims = abstention_rejections + rejected_claims
         try:
             validate_openai_response(structured, evidence)
         except (TypeError, ValueError) as exc:
@@ -721,6 +723,22 @@ def reject_claims_with_unknown_evidence(raw: Mapping[str, Any], evidence: Mappin
     return raw_copy, rejected
 
 
+def normalize_abstained_recommendations(raw: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Honor an explicit GEO ABSTAIN while excluding its contradictory hypotheses."""
+    normalized = dict(raw)
+    hypotheses = normalized.get("potential_geo_implications")
+    if normalized.get("recommendation_decision") != "ABSTAIN" or not hypotheses:
+        return normalized, []
+    normalized["potential_geo_implications"] = []
+    rejected = [{"id": str(item.get("id") or ""),
+                 "text": str(item.get("hypothesis") or item.get("recommendation") or ""),
+                 "evidence_ids": list(item.get("evidence_ids") or []),
+                 "status": "EXCLUDED_INCONSISTENT_WITH_ABSTAIN",
+                 "reason": "The model explicitly abstained; GEO hypotheses were excluded from analysis."}
+                for item in hypotheses if isinstance(item, Mapping)]
+    return normalized, rejected
+
+
 def validate_openai_response(raw: Mapping[str, Any], evidence: Mapping[str, Any]) -> None:
     """Independent structural/provenance checks, not semantic entailment."""
     if not isinstance(raw, Mapping):
@@ -815,12 +833,16 @@ def replay_saved_provider_attempt(previous: Mapping[str, Any], evidence: Mapping
         raise ValueError("Saved provider response is not valid JSON") from exc
     if not isinstance(saved, Mapping):
         raise ValueError("Saved provider response is not an object")
-    if status == "VALIDATION_FAILED":
-        diagnostic = saved
+    diagnostic = saved
+    raw = saved.get("provider_response") if status == "VALIDATION_FAILED" else saved.get("raw_response")
+    # Older COMPLETED replay rows wrapped the API response in provider_response.
+    # Accept the envelope only if every ledger, model, usage, cost, schema,
+    # identity and evidence check below passes.
+    if not isinstance(raw, Mapping) and status == "COMPLETED":
         raw = saved.get("provider_response")
-    else:
-        diagnostic = saved
-        raw = saved.get("raw_response")
+    if (status == "COMPLETED" and isinstance(raw, Mapping)
+            and raw.get("status") is None and isinstance(raw.get("provider_response"), Mapping)):
+        raw = raw["provider_response"]
     if not isinstance(raw, Mapping):
         raise ValueError("Saved response does not contain the raw provider response")
     if raw.get("status") != "completed" or raw.get("model") != MODEL:
@@ -860,10 +882,11 @@ def replay_saved_provider_attempt(previous: Mapping[str, Any], evidence: Mapping
     except (TypeError, ValueError) as exc:
         raise ValueError("Saved provider output is not valid structured JSON") from exc
     _validate_against_schema(structured, OPENAI_ANALYSIS_SCHEMA)
+    structured, abstention_rejections = normalize_abstained_recommendations(structured)
     structured, rejected = reject_claims_with_unknown_evidence(structured, evidence)
     validate_openai_response(structured, evidence)
     prior_rejected = saved.get("rejected_claims") if status == "COMPLETED" else []
-    rejected = list(prior_rejected or []) + rejected
+    rejected = list(prior_rejected or []) + abstention_rejections + rejected
     return {
         "provider": "openai", "model": MODEL, "request_id": request_id,
         "status": "completed",
@@ -932,6 +955,7 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     """
     evidence = selection.to_input()
     _validate_against_schema(raw, OPENAI_ANALYSIS_SCHEMA)
+    raw, abstention_rejections = normalize_abstained_recommendations(raw)
     validate_openai_response(raw, evidence)
     facts = {str(item["id"]): item for item in selection.facts}
     claims = list(raw.get("proposed_claims") or [])
@@ -954,6 +978,12 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
         audit.append({"id": str(claim.get("id") or ""), "role": str(claim.get("role") or ""), "original_text": text,
                       "evidence_ids": refs, "status": status, "reason": reason,
                       "deterministic_transformation": None})
+    for item in abstention_rejections:
+        audit.append({"id": item["id"], "role": "GEO_HYPOTHESIS",
+                      "original_text": item["text"],
+                      "evidence_ids": item["evidence_ids"],
+                      "status": item["status"], "reason": item["reason"],
+                      "deterministic_transformation": "Excluded because recommendation_decision=ABSTAIN"})
 
     rejected = []
     # Business identity is selected only from the model-cited, target-business
@@ -974,16 +1004,21 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
     # first-party product/service fact. The wording emitted below is
     # the extractor's concise statement attached to that exact source.
     service_fact = None
+    service_summary = None
     for entry in raw.get("products_services", []):
         refs = [str(value) for value in entry.get("evidence_ids", [])]
+        summary = str(entry.get("summary") or "").strip()
+        if not summary or len(summary) > 260 or any(ref not in facts for ref in refs):
+            continue
         candidates = [facts.get(ref) for ref in refs]
         candidates = [item for item in candidates if item
                       and item.get("classification") == "PRODUCT_OR_SERVICE"
                       and item.get("attribution") in {"COMPANY_STATED", "PUBLISHED_STRUCTURED_DATA"}]
         for item in candidates:
             statement = str(item.get("text") or "").strip()
-            if statement and len(statement) <= 260:
+            if statement:
                 service_fact = item
+                service_summary = summary
                 break
         if service_fact:
             break
@@ -992,7 +1027,7 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
 
     company = selection.target_company
     description = str(description_fact["text"]).strip()
-    strength = str(service_fact["text"]).strip()
+    strength = service_summary
     service_assertion = str(service_fact["text"]).strip().rstrip(".")
     if service_assertion:
         service_assertion = service_assertion[0].lower() + service_assertion[1:]
@@ -1010,6 +1045,8 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
         return None, None
 
     summary, summary_refs = claim_copy("BUSINESS_DESCRIPTION", str(description_fact["id"]))
+    if not summary:
+        summary, summary_refs = claim_copy("BUSINESS_DESCRIPTION")
     if not summary:
         summary, summary_refs = description, [str(description_fact["id"])]
     detail, detail_refs = None, None
@@ -1065,6 +1102,7 @@ def build_automated_personalization(raw: Mapping[str, Any], selection: EvidenceS
                 {"id": item["id"], "status": item["status"], "reason": item["reason"]}
                 for item in audit if item["status"] == "EXCLUDED_UNSUPPORTED_COMPARISON"
             ],
+            "excluded_model_recommendations": abstention_rejections,
             "interpretation": "Recipient wording uses the semantic analysis and its evidence IDs; extracted source facts remain separately available for review.",
         },
         "claim_support": {"business_description": [str(description_fact["id"])],

@@ -1331,6 +1331,94 @@ def test_robots_server_error_is_classified_as_transient(monkeypatch):
         personalization.fetch_page('https://example.test/')
     assert personalization._failure_kind(raised.value)=='TRANSIENT_HTTP'
 
+
+def test_fetch_follows_bounded_public_robots_and_same_site_page_redirects(monkeypatch):
+    from contextlib import nullcontext
+    import httpx
+    import outreach_v2.personalization as personalization
+    calls=[]
+    def response(status,url,headers=None,content=b'',content_type='text/plain'):
+        request=httpx.Request('GET',url)
+        return httpx.Response(status,request=request,headers={
+            'content-type':content_type,**(headers or {})},content=content)
+    replies={
+        'https://example.test/robots.txt':response(301,'https://example.test/robots.txt',
+            {'location':'https://www.example.test/robots.txt'}),
+        'https://www.example.test/robots.txt':response(200,'https://www.example.test/robots.txt',
+            content=b'User-agent: GEOResearchOutreach\nDisallow: /blocked'),
+        'https://example.test/':response(301,'https://example.test/',
+            {'location':'https://www.example.test/'}),
+        'https://www.example.test/':response(200,'https://www.example.test/',
+            content=b'<html><p>First-party page text</p></html>',content_type='text/html'),
+    }
+    class Client:
+        def __init__(self,*args,**kwargs):
+            assert kwargs.get('follow_redirects') is False
+            assert kwargs.get('trust_env') is False
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def get(self,url):
+            calls.append(('robots',url)); return replies[url]
+        def stream(self,method,url):
+            calls.append(('page',url)); return nullcontext(replies[url])
+    checked=[]
+    monkeypatch.setattr(personalization,'public_url',lambda url:checked.append(url))
+    monkeypatch.setattr(personalization.httpx,'Client',Client)
+    final,html,_=personalization.fetch_page('https://example.test/')
+    assert final=='https://www.example.test/' and 'First-party' in html
+    assert calls==[('robots','https://example.test/robots.txt'),
+                   ('robots','https://www.example.test/robots.txt'),
+                   ('page','https://example.test/'),('robots','https://www.example.test/robots.txt'),
+                   ('page','https://www.example.test/')]
+    assert 'https://www.example.test/robots.txt' in checked
+
+
+def test_fetch_fails_closed_on_robots_redirect_loop(monkeypatch):
+    import httpx
+    import outreach_v2.personalization as personalization
+    request=httpx.Request('GET','https://example.test/robots.txt')
+    response=httpx.Response(302,request=request,headers={'location':'https://example.test/robots.txt'})
+    class Client:
+        requests=0
+        def __init__(self,*args,**kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def get(self,url):
+            self.requests+=1; return response
+    clients=[]
+    def factory(*args,**kwargs):
+        client=Client(*args,**kwargs); clients.append(client); return client
+    monkeypatch.setattr(personalization,'public_url',lambda url:None)
+    monkeypatch.setattr(personalization.httpx,'Client',factory)
+    with pytest.raises(ValueError,match='robots redirect loop'):
+        personalization.fetch_page('https://example.test/')
+    assert clients[0].requests==1
+
+
+def test_fetch_resolves_each_same_site_redirect_before_request(monkeypatch):
+    from contextlib import nullcontext
+    import httpx
+    import outreach_v2.personalization as personalization
+    requests=[]
+    def response(status,url,headers=None):
+        return httpx.Response(status,request=httpx.Request('GET',url),headers=headers or {})
+    class Client:
+        def __init__(self,*args,**kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def get(self,url): return response(404,url)
+        def stream(self,method,url):
+            requests.append(url)
+            return nullcontext(response(301,url,{'location':'https://example.test/next'}))
+    def resolve(url):
+        if url.endswith('/next'):
+            raise ValueError('Website resolves to a non-public address')
+    monkeypatch.setattr(personalization,'public_url',resolve)
+    monkeypatch.setattr(personalization.httpx,'Client',Client)
+    with pytest.raises(ValueError,match='non-public address'):
+        personalization.fetch_page('https://example.test/')
+    assert requests==['https://example.test/']
+
 def test_postgres_text_keeps_embedded_nul_visible():
     assert postgres_text('before\x00after')=='before\ufffdafter'
     assert postgres_text(None) is None
@@ -1825,6 +1913,159 @@ def test_batch_eligibility_includes_legacy_ready_records_with_historical_fail_ve
             personalization_status='READY',personalization_analysis_version='FAIL'))
         eligible_ids=c.execute(select(candidates.c.id).where(eligibility([ident]))).scalars().all()
     assert eligible_ids==[ident]
+
+
+def test_batch_retry_override_is_limited_to_no_attempt_v1_recommendation_deferrals(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    exact='legacy-no-v1-recommendation'
+    paid='legacy-no-v1-recommendation-has-attempt'
+    other='different-permanent-evidence-error'
+    redirect='redirect-no-provider-attempt'
+    redirect_attempted='redirect-has-provider-attempt'
+    for ident in (exact,paid,other,redirect,redirect_attempted):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    message='No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='legacy-deferral-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0',
+            actual_cost_usd='0',detail='{}'))
+        for ident,error in ((exact,message),(paid,message),(other,'A different evidence failure')):
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_error=error,personalization_outcome='PERMANENT_EVIDENCE',
+                personalization_retry_after=future,personalization_attempts=0))
+        for ident in (redirect,redirect_attempted):
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_error='HTTP 301',personalization_outcome='PERMANENT_EVIDENCE',
+                personalization_retry_after=future,personalization_attempts=0))
+        c.execute(personalization_attempts.insert().values(id='legacy-old-attempt',candidate_id=paid,
+            run_id='legacy-deferral-run',evidence_fingerprint='old',operation_id='old-op',
+            model='gpt-5.4-mini-2026-03-17',status='VALIDATION_FAILED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='redirect-old-attempt',candidate_id=redirect_attempted,
+            run_id='legacy-deferral-run',evidence_fingerprint='old',operation_id='old-op',
+            model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        manifest=[exact,paid,other,redirect,redirect_attempted]+[f'unused-{i}' for i in range(95)]
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
+    assert set(eligible_ids)=={exact,redirect}
+
+
+def test_known_response_replay_rejection_override_excludes_identity_mismatch(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization_batch import eligibility
+    allowed='known-local-validation-rejection'
+    identity='known-identity-mismatch'
+    transient='transient-local-validation-rejection'
+    for ident in (allowed,identity,transient):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='local-replay-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='5.00',reserved_usd='0.10',
+            actual_cost_usd='0.02',detail='{}'))
+        for ident,error,outcome in ((allowed,'No concise, cited first-party service statement is available','KNOWN_RESPONSE_REPLAY_REJECTED'),
+                            (identity,'Model changed the target business identity','KNOWN_RESPONSE_REPLAY_REJECTED'),
+                            (transient,'No concise, cited first-party service statement is available','TRANSIENT_HTTP')):
+            c.execute(candidates.update().where(candidates.c.id==ident).values(
+                personalization_outcome=outcome,personalization_error=error,
+                personalization_retry_after=future,personalization_attempts=1))
+            c.execute(personalization_attempts.insert().values(id='attempt-'+ident,candidate_id=ident,
+                run_id='local-replay-run',evidence_fingerprint='fp',operation_id='op-'+ident,
+                model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+                actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        manifest=[allowed,identity,transient]+[f'unused-{i}' for i in range(97)]
+        eligible_ids=c.execute(select(candidates.c.id).where(eligibility(manifest))).scalars().all()
+    assert set(eligible_ids)=={allowed,transient}
+
+
+def test_inner_retry_selector_matches_narrow_legacy_and_offline_replay_overrides(db):
+    from outreach_v2.db import personalization_attempts, personalization_runs
+    from outreach_v2.personalization import _eligible_query
+    old='inner-legacy-no-recommendation'
+    replay='inner-known-response-replay'
+    redirect='inner-http-redirect-repair'
+    transient='inner-known-cost-service-replay'
+    for ident in (old,replay,redirect,transient):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='inner-narrow-run',started_at=now(),status='COMPLETED',
+            candidate_limit=2,run_budget_usd='0.10',cumulative_budget_usd='5.00',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        c.execute(candidates.update().where(candidates.c.id==old).values(
+            personalization_error='No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
+            personalization_outcome='PERMANENT_EVIDENCE',personalization_retry_after='2099-01-01T00:00:00+00:00'))
+        c.execute(candidates.update().where(candidates.c.id==replay).values(
+            personalization_error='Model abstained while returning GEO hypotheses; inconsistent response',
+            personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED',personalization_retry_after='2099-01-01T00:00:00+00:00'))
+        c.execute(candidates.update().where(candidates.c.id==redirect).values(
+            personalization_error='HTTP 308',personalization_outcome='PERMANENT_EVIDENCE',
+            personalization_retry_after='2099-01-01T00:00:00+00:00'))
+        c.execute(candidates.update().where(candidates.c.id==transient).values(
+            personalization_error='No concise, cited first-party service statement is available',
+            personalization_outcome='TRANSIENT_HTTP',personalization_retry_after='2099-01-01T00:00:00+00:00'))
+        c.execute(personalization_attempts.insert().values(id='inner-known-response',candidate_id=replay,
+            run_id='inner-narrow-run',evidence_fingerprint='fp',operation_id='op',
+            model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        c.execute(personalization_attempts.insert().values(id='inner-transient-known-response',candidate_id=transient,
+            run_id='inner-narrow-run',evidence_fingerprint='fp2',operation_id='op2',
+            model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+        selected=c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=[old,replay,redirect,transient]))).scalars().all()
+    assert set(selected)=={old,replay,redirect,transient}
+
+
+def test_changed_evidence_for_a_paid_operation_never_issues_second_provider_call(db,monkeypatch):
+    from outreach_v2.db import personalization_attempts,personalization_runs
+    from outreach_v2.personalization import backfill
+    from test_semantic_openai_adapter import profile
+    import outreach_v2.personalization as module
+    ident='paid-evidence-changed'
+    candidate(db,ident=ident,name='Lagoon New York',website='https://www.lagoonny.com/',
+        fixture=False,personalization=False)
+    for key,value in {
+        'OUTREACH_AI_PERSONALIZATION_ENABLED':'true',
+        'OUTREACH_AI_PERSONALIZATION_MODEL':'gpt-5.4-mini-2026-03-17',
+        'OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD':'0.20',
+        'OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD':'0.25',
+        'OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD':'0.05',
+        'OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN':'1',
+    }.items(): monkeypatch.setenv(key,value)
+    future='2099-01-01T00:00:00+00:00'
+    with db.transaction() as c:
+        c.execute(personalization_runs.insert().values(id='changed-evidence-run',started_at=now(),status='COMPLETED',
+            candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',
+            actual_cost_usd='0.01',detail='{}'))
+        c.execute(candidates.update().where(candidates.c.id==ident).values(
+            personalization_outcome='KNOWN_RESPONSE_REPLAY_REJECTED',
+            personalization_error='No concise, cited first-party service statement is available',
+            personalization_retry_after=future,personalization_attempts=1))
+        c.execute(personalization_attempts.insert().values(id='already-paid',candidate_id=ident,
+            run_id='changed-evidence-run',evidence_fingerprint='old-fingerprint',operation_id='initial',
+            model='gpt-5.4-mini-2026-03-17',status='COMPLETED',reserved_usd='0.05',
+            actual_cost_usd='0.01',provider_response='{}',created_at=now()))
+    def changed_profile():
+        observed=profile()
+        observed['evidence_profile']['facts'][0]['statement']+=' New sentence on the first-party site.'
+        return observed
+    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:changed_profile())
+    class Backend:
+        calls=0
+        def analyze_once(self,*args,**kwargs):
+            self.calls+=1
+            raise AssertionError('a candidate with a prior paid operation may not make another provider request')
+    backend=Backend()
+    result=backfill(db,limit=1,fetcher=lambda _url:None,authorized_candidate_ids=[ident],
+        retry_candidate_ids=[ident],backend_factory=lambda:backend,token_count=lambda _text:1000,time_budget_seconds=30)
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        attempts=c.execute(select(personalization_attempts).where(personalization_attempts.c.candidate_id==ident)).mappings().all()
+    assert backend.calls==0 and len(attempts)==1, result
+    assert result['skipped_existing_attempt']==1, result
+    assert row['personalization_outcome']=='NO_AUTOMATIC_RETRY'
 
 
 def test_known_quality_failure_with_saved_paid_response_is_replay_eligible(db):

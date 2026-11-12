@@ -27,6 +27,7 @@ MAX_PILOT_SPEND_USD = '0.25'
 # A fourth same-site page gives evidence-limited companies another grounded
 # source opportunity while preserving the strict per-page size and time bounds.
 MAX_PAGES_PER_CANDIDATE = 4
+MAX_REDIRECTS_PER_PAGE = 5
 LEASE_SECONDS = 300
 
 
@@ -40,34 +41,62 @@ def public_url(url):
 
 
 def fetch_page(url):
-    public_url(url)
-    with httpx.Client(timeout=5, follow_redirects=False,
+    with httpx.Client(timeout=5, follow_redirects=False, trust_env=False,
                        headers={'User-Agent': 'GEOResearchOutreach/2.0 (bounded invitation evidence)'}) as client:
         from urllib.robotparser import RobotFileParser
-        parsed = urlparse(url)
-        origin = f'{parsed.scheme}://{parsed.netloc}'
-        robots = client.get(origin + '/robots.txt')
-        if robots.status_code == 200:
-            rules = RobotFileParser()
-            rules.parse(robots.text.splitlines())
-            if not rules.can_fetch('GEOResearchOutreach', url):
-                raise ValueError('Website robots rules disallow this page')
-        elif robots.status_code not in {404, 410}:
-            # Preserve the HTTP status so 429/5xx failures receive the same
-            # bounded retry policy as other transient site responses.
-            robots.raise_for_status()
-            raise ValueError('Website robots policy could not be checked')
+        def robots_allows(target):
+            public_url(target)
+            parsed = urlparse(target)
+            origin = f'{parsed.scheme}://{parsed.netloc}'
+            robots_url = origin + '/robots.txt'
+            visited_robots = set()
+            for redirect_count in range(MAX_REDIRECTS_PER_PAGE + 1):
+                if robots_url in visited_robots:
+                    raise ValueError('Website robots redirect loop detected')
+                visited_robots.add(robots_url)
+                public_url(robots_url)
+                robots = client.get(robots_url)
+                if robots.is_redirect:
+                    location = robots.headers.get('location')
+                    if not location or redirect_count == MAX_REDIRECTS_PER_PAGE:
+                        raise ValueError('Website robots policy could not be checked')
+                    robots_url = urljoin(robots_url, location)
+                    public_url(robots_url)
+                    continue
+                break
+            if robots.status_code == 200:
+                rules = RobotFileParser()
+                rules.parse(robots.text.splitlines())
+                if not rules.can_fetch('GEOResearchOutreach', target):
+                    raise ValueError('Website robots rules disallow this page')
+            elif robots.status_code not in {404, 410}:
+                # Never follow robots redirects or treat an unknown policy as
+                # permission; retain HTTP errors for bounded transient retry.
+                robots.raise_for_status()
+                raise ValueError('Website robots policy could not be checked')
         target = url
-        for _ in range(3):
+        visited = set()
+        for hop in range(MAX_REDIRECTS_PER_PAGE + 1):
+            if target in visited:
+                raise ValueError('Website redirect loop detected')
+            visited.add(target)
+            if not same_site(url, target):
+                raise ValueError('Redirect leaves the verified website')
+            robots_allows(target)
             public_url(target)
             with client.stream('GET', target) as response:
                 if response.is_redirect:
                     new = urljoin(target, response.headers.get('location', ''))
                     if not same_site(url, new):
                         raise ValueError('Redirect leaves the verified website')
+                    public_url(new)
+                    if hop == MAX_REDIRECTS_PER_PAGE:
+                        raise ValueError('Website redirect limit exceeded')
                     target = new
                     continue
                 response.raise_for_status()
+                if not same_site(url, str(response.url)):
+                    raise ValueError('Final response leaves the verified website')
                 if 'text/html' not in response.headers.get('content-type', ''):
                     raise ValueError('Website did not return HTML')
                 chunks, size, truncated = [], 0, False
@@ -649,13 +678,40 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
             personalization_attempts.c.status.in_(['UNKNOWN_SPEND', 'RESERVED'])))
         replayable_outcome = and_(
             candidates.c.id.in_(retry_candidate_ids),
-            candidates.c.personalization_outcome.in_([
-                'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
-                'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
-                'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE',
-                'SEMANTIC_QUALITY_REJECTED']),
+            or_(candidates.c.personalization_outcome.in_([
+                    'PROVIDER_JSON_SCHEMA_VALIDATION', 'PROVIDER_EVIDENCE_REFERENCE_VALIDATION',
+                    'PROVIDER_IDENTITY_VALIDATION', 'PROVIDER_SEMANTIC_CONTRACT_VALIDATION',
+                    'PROVIDER_STRUCTURED_JSON_PARSE', 'SEMANTIC_QUALITY_REJECTED']),
+                and_(candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+                     candidates.c.personalization_error.not_in([
+                         'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
+                         'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
+                         'Website robots policy could not be checked']))),
             saved_response, no_unresolved_attempt)
-        retry_state=or_(retry_state,replayable_outcome)
+        no_attempt = ~exists(select(personalization_attempts.c.id).where(
+            personalization_attempts.c.candidate_id == candidates.c.id))
+        legacy_no_geo = and_(
+            candidates.c.personalization_error ==
+                'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
+            candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+            no_attempt)
+        redirect_or_http_repair = and_(
+            candidates.c.personalization_error.in_([
+                'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
+                'Website robots policy could not be checked']),
+            candidates.c.personalization_outcome.in_(['PERMANENT_EVIDENCE', 'TRANSIENT_HTTP']),
+            no_attempt)
+        replayable_local_rejection = and_(
+            or_(and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+                     candidates.c.personalization_error.in_([
+                         'Model abstained while returning GEO hypotheses; inconsistent response',
+                         'Saved response does not contain the raw provider response',
+                         'Outreach review quality failed: SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY'])),
+                and_(candidates.c.personalization_outcome.in_(['KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP']),
+                     candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
+            saved_response, no_unresolved_attempt)
+        retry_state=or_(retry_state,replayable_outcome,legacy_no_geo,redirect_or_http_repair,
+                        replayable_local_rejection)
     return and_(candidates.c.kind.in_(['company', 'hotel']), candidates.c.fixture.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), personalization_state, retry_state,
@@ -895,6 +951,10 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     personalization_attempts.c.candidate_id==row['id'],
                     personalization_attempts.c.evidence_fingerprint==fp,
                     personalization_attempts.c.operation_id==operation_id).with_for_update()).mappings().first()
+                prior_operation=(None if previous else c.execute(select(personalization_attempts).where(
+                    personalization_attempts.c.candidate_id==row['id'],
+                    personalization_attempts.c.operation_id==operation_id).order_by(
+                        personalization_attempts.c.created_at.desc()).limit(1).with_for_update()).mappings().first())
                 if (previous and previous['status'] in {'COMPLETED','VALIDATION_FAILED'}
                         and previous.get('provider_response') and previous.get('actual_cost_usd')):
                     # Mark the replay before local validation starts. If replay
@@ -903,7 +963,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     replaying_saved_response=True
                     provider_result=replay_saved_provider_attempt(previous,evidence_input,preflight)
                     result['replayed']+=1;attempt=dict(previous)
-                elif previous:
+                elif previous or prior_operation:
+                    existing_attempt = previous or prior_operation
                     result['skipped_existing_attempt']+=1
                     at=now(); attempts=int(row.get('personalization_attempts') or 0)+1
                     c.execute(candidates.update().where(candidates.c.id==row['id'],candidates.c.personalization_lease_token==lease_token)
@@ -912,7 +973,9 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                             personalization_retry_after=_retry_time('PERMANENT_EVIDENCE',attempts,at),
                             personalization_lease_token=None,personalization_lease_until=None))
                     c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row['id'],event='PERSONALIZATION_NO_AUTOMATIC_RETRY',
-                        detail=_safe_json({'attempt_status':previous['status'],'evidence_fingerprint':fp}),created_at=at))
+                        detail=_safe_json({'attempt_status':existing_attempt['status'],'evidence_fingerprint':fp,
+                            'saved_evidence_fingerprint':existing_attempt.get('evidence_fingerprint'),
+                            'reason':'saved provider attempt belongs to different evidence or is not replayable'}),created_at=at))
                     continue
                 else:
                     spent=Decimal('0')

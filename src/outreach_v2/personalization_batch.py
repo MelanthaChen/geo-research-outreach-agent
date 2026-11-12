@@ -45,11 +45,42 @@ def eligibility(ids, stamp=None):
         personalization_attempts.c.actual_cost_usd != '0',
         personalization_attempts.c.provider_response.is_not(None)))
     corrected_validation_outcome = and_(
-        candidates.c.personalization_outcome.in_([
-            'PERMANENT_EVIDENCE', 'PROVIDER_JSON_SCHEMA_VALIDATION',
-            'PROVIDER_EVIDENCE_REFERENCE_VALIDATION', 'PROVIDER_IDENTITY_VALIDATION',
-            'PROVIDER_SEMANTIC_CONTRACT_VALIDATION', 'PROVIDER_STRUCTURED_JSON_PARSE',
-            'SEMANTIC_QUALITY_REJECTED']),
+        or_(candidates.c.personalization_outcome.in_([
+                'PROVIDER_JSON_SCHEMA_VALIDATION', 'PROVIDER_EVIDENCE_REFERENCE_VALIDATION',
+                'PROVIDER_IDENTITY_VALIDATION', 'PROVIDER_SEMANTIC_CONTRACT_VALIDATION',
+                'PROVIDER_STRUCTURED_JSON_PARSE', 'SEMANTIC_QUALITY_REJECTED']),
+            and_(candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+                 candidates.c.personalization_error.not_in([
+                     'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
+                     'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
+                     'Website robots policy could not be checked']))),
+        replayable_response)
+    # These are narrow, deterministic repairs. The legacy V1 error was raised
+    # before website evidence or a provider request existed; it is safe to run
+    # under the same manifest authorization. Rejected saved responses are
+    # replayed offline only when their known-cost response is present. Identity
+    # mismatches are intentionally excluded.
+    no_provider_attempt = ~exists(select(personalization_attempts.c.id).where(
+        personalization_attempts.c.candidate_id == candidates.c.id))
+    legacy_no_geo_recommendation = and_(
+        candidates.c.personalization_error ==
+            'No V1 recommendation is supported by this bounded same-site sample; preserve existing data and defer',
+        candidates.c.personalization_outcome == 'PERMANENT_EVIDENCE',
+        no_provider_attempt)
+    redirect_or_http_repair = and_(
+        candidates.c.personalization_error.in_([
+            'HTTP 301', 'HTTP 308', 'HTTPStatusError', 'Website redirect limit exceeded',
+            'Website robots policy could not be checked']),
+        candidates.c.personalization_outcome.in_(['PERMANENT_EVIDENCE', 'TRANSIENT_HTTP']),
+        no_provider_attempt)
+    replayable_local_rejection = and_(
+        or_(and_(candidates.c.personalization_outcome == 'KNOWN_RESPONSE_REPLAY_REJECTED',
+                 candidates.c.personalization_error.in_([
+                     'Model abstained while returning GEO hypotheses; inconsistent response',
+                     'Saved response does not contain the raw provider response',
+                     'Outreach review quality failed: SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY'])),
+            and_(candidates.c.personalization_outcome.in_(['KNOWN_RESPONSE_REPLAY_REJECTED','TRANSIENT_HTTP']),
+                 candidates.c.personalization_error == 'No concise, cited first-party service statement is available')),
         replayable_response)
     # Only a semantic PASS is complete for this batch. Historical deployments
     # wrote values such as "FAIL" into the analysis-version column; treating
@@ -62,7 +93,9 @@ def eligibility(ids, stamp=None):
              replayable_response))
     retry_state = or_(candidates.c.personalization_retry_after.is_(None),
                       candidates.c.personalization_retry_after <= stamp,
-                      corrected_validation_outcome)
+                      corrected_validation_outcome, legacy_no_geo_recommendation,
+                      redirect_or_http_repair,
+                      replayable_local_rejection)
     return and_(candidates.c.id.in_(ids), candidates.c.kind.in_(['company', 'hotel']),
         candidates.c.fixture.is_(False), candidates.c.suppressed.is_(False),
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),

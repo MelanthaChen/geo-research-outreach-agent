@@ -305,6 +305,41 @@ def test_lagoon_known_cost_validation_failure_replays_offline_without_new_reques
     assert [item["id"] for item in result["rejected_claims"] if item["id"]] == ["c4"]
 
 
+def test_completed_response_nested_in_diagnostic_envelope_replays_offline():
+    evidence = select_evidence(profile(), company_name="Lagoon New York",
+                               website="https://www.lagoonny.com/").to_input()
+    provider = {"id": "resp_nested_replay", "model": MODEL, "status": "completed",
+        "usage": {"input_tokens": 1000, "output_tokens": 400,
+                  "output_tokens_details": {"reasoning_tokens": 0}},
+        "output_text": json.dumps(response())}
+    cost = estimated_cost(1000, 400)
+    saved = {"status": "COMPLETED", "request_id": provider["id"],
+        "actual_cost_usd": str(cost),
+        "provider_response": json.dumps({"usage": provider["usage"],
+            "actual_cost_usd": cost, "provider_response": provider})}
+    preflight, _ = build_preflight(evidence, token_count=lambda _: 1000)
+    replay = replay_saved_provider_attempt(saved, evidence, preflight)
+    assert replay["offline_replay"] is True
+    assert replay["request_id"] == provider["id"]
+    assert replay["estimated_cost_usd"] == cost
+
+
+def test_explicit_abstain_discards_geo_hypotheses_without_rejecting_factual_copy():
+    selection = select_evidence(profile(), company_name="Lagoon New York",
+                                website="https://www.lagoonny.com/")
+    raw = response()
+    raw["potential_geo_implications"] = [{"id": "geo1", "observation": "A page relationship",
+        "hypothesis": "A possible GEO interpretation", "recommendation": "Change a page",
+        "evidence_ids": ["about1", "service1"], "relationship_ids": ["about_service"],
+        "status": "HYPOTHESIS_REQUIRES_REVIEW"}]
+    normalized, audit = build_automated_personalization(raw, selection, stamp="2026-11-12T00:00:00Z")
+    assert normalized["recommendations"] == []
+    assert normalized["assessment"]["geo_observation"] == "NOT_ESTABLISHED"
+    assert normalized["recipient_copy"]["business_summary"]
+    assert normalized["assessment"]["excluded_model_recommendations"][0]["id"] == "geo1"
+    assert any(item["status"] == "EXCLUDED_INCONSISTENT_WITH_ABSTAIN" for item in audit)
+
+
 def test_invalid_evidence_id_remains_a_validation_failure_without_explicit_rejection():
     selection = select_evidence(profile(), company_name="Lagoon New York", website="https://www.lagoonny.com/")
     raw = response()
@@ -339,7 +374,8 @@ def test_long_first_party_excerpts_use_cited_semantic_copy_without_copying_sourc
         "in a setting connected to sustainability and the natural environment.")
     long_service = ("The founders offer custom design and let clients select a silhouette, size, "
         "fabric, and colors for made-to-order garments developed for individual projects, "
-        "including looks prepared to meet the needs of a particular event or production.")
+        "including looks prepared to meet the needs of a particular event or production, "
+        "plus fittings and finishing services for those garments.")
     source["evidence_profile"]["facts"][0].update(statement=long_about, evidence_excerpt=long_about,
         source_content="About: " + long_about)
     source["evidence_profile"]["facts"][1].update(statement=long_service, evidence_excerpt=long_service,
@@ -352,12 +388,29 @@ def test_long_first_party_excerpts_use_cited_semantic_copy_without_copying_sourc
     copy = personalization["recipient_copy"]
     result = quality_decisions(personalization, record={"fixture": False},
         candidate_name="Lagoon New York", website="https://www.lagoonny.com/")
-    assert len(long_about) > 180 and len(long_service) > 180
+    assert len(long_about) > 180 and len(long_service) > 260
     assert copy["business_summary"] != long_about
     assert copy["distinctive_detail"] != long_service
     assert copy["support"]["business_summary"] == ["about1"]
     assert copy["support"]["distinctive_detail"] == ["about1", "service1"]
     assert result["OUTREACH_REVIEW_READY"]["passed"] is True
+
+
+def test_recipient_summary_uses_cited_semantic_claim_when_it_does_not_repeat_identity_fact_id():
+    from outreach_v2.quality import quality_decisions
+    selection = select_evidence(profile(), company_name="Lagoon New York",
+                                website="https://www.lagoonny.com/")
+    raw = response()
+    raw["proposed_claims"][0].update(
+        text="Lagoon New York offers custom design that lets clients select a silhouette.",
+        evidence_ids=["service1"])
+    personalization, _ = build_automated_personalization(
+        raw, selection, stamp="2026-11-12T00:00:00Z")
+    copy_result = quality_decisions(personalization, record={"fixture": False},
+        candidate_name="Lagoon New York", website="https://www.lagoonny.com/")
+    assert personalization["recipient_copy"]["business_summary"] == raw["proposed_claims"][0]["text"]
+    assert personalization["recipient_copy"]["support"]["business_summary"] == ["service1"]
+    assert "SOURCE_TEXT_COPIED_TO_RECIPIENT_COPY" not in copy_result["OUTREACH_REVIEW_READY"]["reasons"]
 
 
 def test_structured_first_party_offerings_are_not_misclassified_as_ambiguous():

@@ -452,7 +452,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==9
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==10
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -467,7 +467,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==9
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==10
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
     assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
@@ -528,7 +528,7 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1}).status_code==400
     response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':0,'response_reference':'GEO-exact-reference'})
     assert response.status_code==200 and response.json()['worker_run_id']=='run-test'
-    assert observed==[(db,{'max_jobs':0,'response_id':None,'response_reference':'GEO-exact-reference','job_id':None,'idempotency_key':None,'stage':None})]
+    assert observed==[(db,{'max_jobs':0,'response_id':None,'response_reference':'GEO-exact-reference','job_id':None,'idempotency_key':None,'stage':None,'force_report_regeneration':False})]
     response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'})
     assert response.status_code==200
     assert observed[-1][1]['job_id']=='job-exact' and observed[-1][1]['idempotency_key']=='outreach-v2:inv-exact' and observed[-1][1]['stage']=='REPORT'
@@ -647,6 +647,8 @@ def _completed_engine_result(job):
             'questions':['What resume formats are supported?'],
             'baseline':{'provider':'exa','model':'gpt-6-luna','model_calls':1,'response_archive':'archive-existing',
                 'results':[{'query':'resume builder'}],'interpretation':'Provider observations recorded.'},
+            'research_sources':[{'rank':1,'title':'Resume tools','url':'https://geo-ai-resume.vercel.app/',
+                'source_type':'target website','relevance':'Test evidence','evidence_id':'test:source:1','content_sha256':'a'*64}],
             'limitations':['One bounded test result.']}}
 
 def test_disabled_outreach_reconciles_completed_engine_result_and_creates_docx_without_delivery(db,monkeypatch):

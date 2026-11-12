@@ -1,0 +1,42 @@
+from pathlib import Path
+from docx import Document
+
+from outreach_agent.reporting import generate_docx_report
+
+
+def test_geoairesume_report_keeps_full_page_out_of_proposed_revision_and_lists_sources(tmp_path):
+    huge_page = "GeoAIResume homepage paragraph " * 3000
+    result = {
+        "contract_version": "geo-research-integration/v1", "source_profile_id":"geoairesume-owner-test-v1",
+        "source_profile_version":"inv-353e5922aa8e4686ad82ff99c6d0c91d", "property_id":2,
+        "site":"https://geo-ai-resume.vercel.app/", "experiment_summary":{"experiment_id":8},
+        "observed_pages":[{"url":"https://geo-ai-resume.vercel.app/","title":"GeoAIResume",
+            "headings":["Resume research"],"exact_quotes":["The saved excerpt is a short source fact."],
+            "content_sha256":"a"*64}],
+        "recommendations":[{"rank":1,"title":"Add missing meta descriptions",
+            "page_url":"https://geo-ai-resume.vercel.app/","original_quote":"Short exact quote",
+            "proposed_revision":huge_page,"rationale":"Recommendation rationale.",
+            "supporting_evidence_ids":["experiment:8:document:1"]}],
+        "research_sources":[{"rank":1,"title":"GeoAIResume target page","url":"https://geo-ai-resume.vercel.app/",
+            "source_type":"target website","relevance":"Cited in persisted strategy response(s): original, faq",
+            "evidence_id":"experiment:8:document:1","content_sha256":"a"*64}],
+        "baseline":{"provider":"openai","model":"gpt-6-luna","model_calls":2,
+            "results":[{"strategy":"original","response":"The target page says this [1].","metrics":{"word_count":61,"citation_count":4}},
+                      {"strategy":"faq","response":"The FAQ result says this [1].","metrics":{"word_count":53,"citation_count":3}}]},
+        "questions":["What does the page say?"],"limitations":["No external rankings are measured."],
+    }
+    template = Path(__file__).parents[1] / "templates/company_geo_analysis_report_template.docx"
+    output = generate_docx_report(result, tmp_path/"geo.docx", template)
+    doc = Document(output)
+    all_text = "\n".join([p.text for p in doc.paragraphs] + [cell.text for table in doc.tables for row in table.rows for cell in row.cells])
+    assert "Research sources" in all_text
+    assert "Model-generated interpretations" in all_text
+    assert "not answers retrieved from third-party AI search products" in all_text
+    assert "Evidence IDs: experiment:8:document:1" in all_text
+    assert "Proposed wording not established" in all_text
+    assert "Retrieved source records are provenance" in all_text
+    assert "GeoAIResume homepage paragraph" not in all_text
+    assert "https://geo-ai-resume.vercel.app/" in all_text
+    assert "Persisted model response archive" not in all_text
+    assert "original: 61 cited words" in all_text
+    assert len(list(doc.tables)) >= 5

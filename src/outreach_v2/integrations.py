@@ -212,6 +212,15 @@ class Engine:
         if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine advance POST authorization denied: HTTP {r.status_code}')
         if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine advance POST failed: HTTP {r.status_code}')
         return r.json()
+    def get_research_result(self,profile_id,profile_version):
+        try:
+            r=self.client.get('/api/v1/integration/research-results/'+quote(profile_id,safe=''),
+                params={'source_profile_version':profile_version},timeout=httpx.Timeout(120.0,connect=10.0))
+        except httpx.TransportError as e:
+            raise OutcomeUncertain('Engine research-result retrieval outcome uncertain') from e
+        if r.status_code in {401,403}:raise ConfigurationBlocked(f'GEO Engine result GET authorization denied: HTTP {r.status_code}')
+        if r.status_code>=400:raise ConfigurationBlocked(f'GEO Engine result GET failed: HTTP {r.status_code}')
+        return r.json()
     def start(self,key,payload):
         existing=self.reconcile(key)
         if existing:return existing

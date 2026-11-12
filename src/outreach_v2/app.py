@@ -941,19 +941,24 @@ def create_app(database=None):
             body=json.loads(raw or b'{}')
         except json.JSONDecodeError:
             raise HTTPException(status_code=400,detail='Invalid worker request')
-        if not isinstance(body,dict) or set(body)-{'max_jobs','response_id','response_reference','job_id','idempotency_key','stage'}:
+        if not isinstance(body,dict) or set(body)-{'max_jobs','response_id','response_reference','job_id','idempotency_key','stage','force_report_regeneration'}:
             raise HTTPException(status_code=400,detail='Invalid worker request')
         max_jobs=body.get('max_jobs',1)
         if type(max_jobs) is not int:
             raise HTTPException(status_code=400,detail='Invalid worker limit')
         response_selector=bool(body.get('response_id') or body.get('response_reference'))
         job_selector=bool(body.get('job_id') or body.get('idempotency_key'))
+        force_regeneration=body.get('force_report_regeneration',False)
+        if type(force_regeneration) is not bool:
+            raise HTTPException(status_code=400,detail='Report regeneration selector must be boolean')
         if response_selector==job_selector:
             raise HTTPException(status_code=400,detail='Select exactly one response-ingestion or exact-job mode')
         if response_selector and (max_jobs!=0 or body.get('stage') or body.get('job_id') or body.get('idempotency_key')):
             raise HTTPException(status_code=400,detail='Response ingestion must be isolated with max_jobs=0')
         if job_selector and (max_jobs!=1 or not body.get('job_id') or not body.get('idempotency_key') or body.get('stage') not in {'RESEARCH','REPORT'}):
             raise HTTPException(status_code=400,detail='Exact-job mode requires matching ID/key, stage, and max_jobs=1')
+        if force_regeneration and (not job_selector or body.get('stage')!='REPORT' or max_jobs!=1):
+            raise HTTPException(status_code=400,detail='Forced regeneration requires exact-job REPORT mode')
         if max_jobs not in {0,1}:
             raise HTTPException(status_code=400,detail='Only one exact response or one exact job is allowed')
         from .worker import tick
@@ -965,6 +970,7 @@ def create_app(database=None):
             # continue while a batch is running.
             result=await run_in_threadpool(tick,db,max_jobs=max_jobs,
                 response_id=body.get('response_id'),response_reference=body.get('response_reference'),
-                job_id=body.get('job_id'),idempotency_key=body.get('idempotency_key'),stage=body.get('stage'))
+                job_id=body.get('job_id'),idempotency_key=body.get('idempotency_key'),stage=body.get('stage'),
+                force_report_regeneration=force_regeneration)
         return result
     return app

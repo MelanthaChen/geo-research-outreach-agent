@@ -18,15 +18,24 @@ def transition(c,job_id,**values):
     c.execute(jobs.update().where(jobs.c.id==job_id).values(updated_at=now(),**values))
     c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=job_id,event=values.get('status') or values.get('stage') or 'UPDATED',detail=dump({k:v for k,v in values.items() if k not in {'result','lease_token'}}),created_at=now()))
 
-def claim(db,*,job_id=None,idempotency_key=None,stage=None):
+def claim(db,*,job_id=None,idempotency_key=None,stage=None,scheduled=False,controlled=False):
     research_only=os.environ.get('GEO_OUTREACH_RESEARCH_ENABLED','').strip().lower()=='true'
+    delivery_enabled=os.environ.get('OUTREACH_REPORT_DELIVERY_ENABLED','').strip().lower()=='true'
     # A live single-job research switch must constrain selection itself. A
     # downstream research_step guard is too late: claiming another queued job
     # mutates its lease/attempt count even when that guard blocks Engine access.
     allowed_keys={x.strip() for x in os.environ.get('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST','').split(',') if x.strip()}
-    if research_only and len(allowed_keys)!=1:return None
+    if (research_only or scheduled) and len(allowed_keys)!=1:return None
     if (job_id or idempotency_key) and stage not in {'RESEARCH','REPORT'}:
         raise ValueError('Exact-job worker invocation must select RESEARCH or REPORT stage')
+    # A scheduled tick may ingest all fresh Forms responses, but it may only
+    # claim the one job explicitly named by the staging allowlist.  The
+    # research and delivery switches gate those side-effecting stages before
+    # a lease or attempt counter is changed.
+    if job_id or idempotency_key:
+        if controlled and stage=='RESEARCH' and not research_only:return None
+        if stage=='DELIVERY' and not delivery_enabled:return None
+    elif scheduled and len(allowed_keys)!=1:return None
     if job_id and idempotency_key:
         with db.transaction() as c:
             if not c.scalar(select(jobs.c.id).where(jobs.c.id==job_id,jobs.c.idempotency_key==idempotency_key)):
@@ -35,8 +44,12 @@ def claim(db,*,job_id=None,idempotency_key=None,stage=None):
         eligible=[jobs.c.stage!='DONE',jobs.c.status.not_in(['BLOCKED_CONSENT','FAILED']),
                 or_(jobs.c.next_attempt_at.is_(None),jobs.c.next_attempt_at<=now()),
                 or_(jobs.c.lease_until.is_(None),jobs.c.lease_until<now())]
-        if research_only:
+        if scheduled or research_only:
             eligible.append(jobs.c.idempotency_key.in_(allowed_keys))
+        if scheduled and not research_only:
+            eligible.append(jobs.c.stage!='RESEARCH')
+        if scheduled and not delivery_enabled:
+            eligible.append(jobs.c.stage!='DELIVERY')
         if job_id:eligible.append(jobs.c.id==job_id)
         if idempotency_key:eligible.append(jobs.c.idempotency_key==idempotency_key)
         if stage:eligible.append(jobs.c.stage==stage)
@@ -357,7 +370,8 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
     except Exception as e:
         warning='Sheets: '+safe_error(e);errors.append(warning);subsystem_errors['consent'].append(warning)
     for _ in range(max_jobs):
-        job=claim(db,job_id=job_id if job_selector else None,idempotency_key=idempotency_key if job_selector else None,stage=stage)
+        job=claim(db,job_id=job_id if job_selector else None,idempotency_key=idempotency_key if job_selector else None,
+                  stage=stage,scheduled=not job_selector,controlled=job_selector)
         if not job:break
         try:
             stage=job['stage']
@@ -405,7 +419,7 @@ def tick(db,*,sheets=None,engine_factory=Engine,mail_factory=GraphReports,render
     consent_status='ATTENTION_REQUIRED' if subsystem_errors['consent'] else 'COMPLETED'
     personalization_status=('ATTENTION_REQUIRED' if personalization_error else
         (personalization_backfill or {}).get('status','COMPLETED'))
-    result={'worker_run_id':run_id,'invocation_status':'COMPLETED',
+    result={'worker_run_id':run_id,'invocation_status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED',
             'status':'COMPLETED' if not errors else 'ATTENTION_REQUIRED','processed_stages':processed,'errors':errors,
             'subsystems':{
                 'consent':{'status':consent_status,'errors':subsystem_errors['consent']},

@@ -538,8 +538,11 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
 class EmptySheets:
     def read(self):return []
 
-def test_scheduler_configuration_failure_is_truthful(db):
+def test_scheduler_configuration_failure_is_truthful(db,monkeypatch):
     candidate(db);invite(db);row=response(db);process(db,row,verified_identity=verified_form(row))
+    with db.transaction() as c:key=c.scalar(select(jobs.c.idempotency_key))
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',key)
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_ENABLED','true')
     def unavailable():raise ConfigurationBlocked('Engine unavailable for this isolated test')
     result=tick(db,sheets=EmptySheets(),engine_factory=unavailable)
     assert result['status']=='ATTENTION_REQUIRED'
@@ -561,16 +564,67 @@ def test_worker_consent_intake_automatically_creates_job_without_research_execut
         def advance(self,*_):pytest.fail('Research must not advance while execution is disabled')
     monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
     result=tick(db,sheets=ConsentSheets(),engine_factory=ReadOnlyEngine)
-    assert result['status']=='ATTENTION_REQUIRED'
+    assert result['status']=='COMPLETED' and result['invocation_status']=='COMPLETED'
+    assert result['processed_stages']==0
     with db.transaction() as c:
         invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='a')).mappings().one()
         sub=c.execute(select(submissions).where(submissions.c.reference==invitation['reference'])).mappings().one()
         job=c.execute(select(jobs).where(jobs.c.invitation_id==invitation['id'])).mappings().one()
         assert sub['status']=='AUTHORIZED'
-        assert job['stage']=='RESEARCH' and job['status']=='BLOCKED_CONFIGURATION'
+        assert job['stage']=='RESEARCH' and job['status']=='QUEUED'
+        assert job['attempts']==0 and job['lease_token'] is None
         run=c.execute(select(worker_runs).where(worker_runs.c.id==result['worker_run_id'])).mappings().one()
         assert run['finished_at'] is not None
     assert count(db,reports)==0 and count(db,deliveries)==0
+
+def test_worker_does_not_report_failed_form_ingestion_as_completed(db,monkeypatch):
+    class BrokenSheets:
+        def read(self):raise ConfigurationBlocked('Google Forms response access unavailable (HTTP 403)')
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',raising=False)
+    result=tick(db,sheets=BrokenSheets(),max_jobs=0)
+    assert result['status']=='ATTENTION_REQUIRED'
+    assert result['invocation_status']=='ATTENTION_REQUIRED'
+    assert result['subsystems']['consent']['status']=='ATTENTION_REQUIRED'
+    with db.transaction() as c:
+        run=c.execute(select(worker_runs).where(worker_runs.c.id==result['worker_run_id'])).mappings().one()
+        assert run['status']=='ATTENTION_REQUIRED'
+        assert 'HTTP 403' in run['detail']
+
+def test_scheduled_claim_is_restricted_to_one_allowlisted_job_and_safe_stages(db,monkeypatch):
+    candidate(db,ident='allowed',email='owner@allowed.example',website='https://allowed.example/',fixture=False)
+    candidate(db,ident='other',email='owner@other.example',website='https://other.example/',fixture=False)
+    invite(db,['allowed','other'])
+    for ident in ('allowed','other'):
+        row=response(db,id=ident)
+        assert process(db,row,verified_identity=verified_form(row))=='AUTHORIZED'
+    with db.transaction() as c:
+        allowed_key=c.execute(select(jobs.c.idempotency_key).join(invitations).where(invitations.c.candidate_id=='allowed')).scalar_one()
+        other_key=c.execute(select(jobs.c.idempotency_key).join(invitations).where(invitations.c.candidate_id=='other')).scalar_one()
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_ENABLED','true')
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',allowed_key)
+    claimed=claim(db,scheduled=True)
+    with db.transaction() as c:
+        allowed_job=c.execute(select(jobs).where(jobs.c.idempotency_key==allowed_key)).mappings().one()
+        other_job=c.execute(select(jobs).where(jobs.c.idempotency_key==other_key)).mappings().one()
+    assert claimed and claimed['id']==allowed_job['id']
+    with db.transaction() as c:
+        rows={r['id']:dict(r) for r in c.execute(select(jobs)).mappings()}
+    assert rows[allowed_job['id']]['attempts']==1 and rows[allowed_job['id']]['lease_token']==claimed['lease_token']
+    assert rows[other_job['id']]['attempts']==0 and rows[other_job['id']]['lease_token'] is None
+
+def test_scheduled_claim_does_not_lease_research_while_switch_is_off(db,monkeypatch):
+    candidate(db,ident='allowed',website='https://allowed.example/',fixture=False)
+    invite(db,['allowed'])
+    row=response(db,id='allowed')
+    assert process(db,row,verified_identity=verified_form(row))=='AUTHORIZED'
+    monkeypatch.delenv('GEO_OUTREACH_RESEARCH_ENABLED',raising=False)
+    with db.transaction() as c:key=c.scalar(select(jobs.c.idempotency_key))
+    monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',key)
+    assert claim(db,scheduled=True) is None
+    with db.transaction() as c:
+        row=c.execute(select(jobs)).mappings().one()
+    assert row['attempts']==0 and row['lease_token'] is None
 
 def _authorized_leased_job(db):
     candidate(db);invite(db);row=response(db)

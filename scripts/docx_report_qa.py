@@ -17,13 +17,13 @@ MIN_INTERMEDIATE_PAGE_CHARS = 250
 
 
 def validate_intermediate_page_density(page_texts: list[str]) -> None:
-    """Reject near-empty pages between substantive pages in rendered output."""
-    for index, page in enumerate(page_texts[1:-1], start=2):
+    """Reject near-empty non-cover pages, including a stranded short final page."""
+    for index, page in enumerate(page_texts[1:], start=2):
         normalized = page.strip()
         words = re.findall(r"\b\w+\b", normalized)
         if len(words) < MIN_INTERMEDIATE_PAGE_WORDS or len(normalized) < MIN_INTERMEDIATE_PAGE_CHARS:
             raise ValueError(
-                f"Rendered intermediate page {index} is nearly empty "
+                f"Rendered page {index} is nearly empty "
                 f"({len(words)} words, {len(normalized)} characters)"
             )
 

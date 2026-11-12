@@ -64,7 +64,7 @@ def test_baseline_section_does_not_force_a_new_page(tmp_path):
 def test_render_qa_rejects_nearly_empty_intermediate_page():
     import pytest
 
-    with pytest.raises(ValueError, match=r"intermediate page 2 is nearly empty"):
+    with pytest.raises(ValueError, match=r"page 2 is nearly empty"):
         validate_intermediate_page_density([
             "Substantive first page. " * 40,
             "Research questions\nQuestion\tEvidence basis\nOne short question\tNot established",
@@ -72,9 +72,12 @@ def test_render_qa_rejects_nearly_empty_intermediate_page():
         ])
 
 
-def test_render_qa_does_not_treat_short_final_page_as_intermediate():
-    validate_intermediate_page_density([
-        "Substantive first page. " * 40,
-        "Substantive middle page. " * 40,
-        "Short concluding note.",
-    ])
+def test_render_qa_rejects_stranded_short_final_page():
+    import pytest
+
+    with pytest.raises(ValueError, match=r"page 3 is nearly empty"):
+        validate_intermediate_page_density([
+            "Substantive first page. " * 40,
+            "Substantive middle page. " * 40,
+            "Short concluding note.",
+        ])

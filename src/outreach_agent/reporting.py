@@ -269,8 +269,7 @@ def generate_docx_report(result: dict[str, Any], output: Path, template: Path) -
     doc.add_heading("Limitations and next steps", level=1)
     for limitation in result.get("limitations", []):
         doc.add_paragraph(_text(limitation), style="List Bullet")
-    doc.add_paragraph("Next step: review the audit-backed recommendations and model-generated revisions before deciding whether to change the website. No website changes or external AI-search ranking measurements are included in this report.")
-    doc.add_paragraph("Research integrity note. The report distinguishes rendered website evidence, existing Audit recommendations, live retrieval sources, and persisted model-generated responses. GEO Engine model evaluations do not establish rankings in third-party AI search products.")
+    doc.add_paragraph("Review the recommendations before making any website change.", style="List Bullet")
 
     for paragraph in doc.paragraphs:
         if paragraph.style.name.startswith("Heading") or paragraph.style.name == "Title":

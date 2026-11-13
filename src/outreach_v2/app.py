@@ -21,6 +21,10 @@ from outreach_agent.google_forms_integration import FORM_VIEW_URL,INVITATION_REF
 STATIC=Path(__file__).parent/'static'
 COOKIE='outreach_v2_session';CSRF='outreach_v2_csrf'
 EMAIL_RE=re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+HISTORICAL_CAMPAIGN_ID='screened-v2-a429c6055896ef7a'
+HISTORICAL_AUTHORIZATION_ID='personalization-auth-3deb7a626ac14f67bd7d31a060c6e4e6'
+HISTORICAL_EXECUTION_MANIFEST_SHA256='ff3bee5be6fe8370b5484eb4472e8a9d3d88be721b180d2eb2038599dcb7c0c1'
+HISTORICAL_SCHEDULER_TRIGGER_NAME='outreach-historical-screening-recovery'
 
 def _existing_100_manifest_ids(connection):
     """Return members of intact persisted 100-ID grants without changing them."""
@@ -282,7 +286,7 @@ def create_app(database=None):
     async def protect(request,call_next):
         path=request.url.path
         try:
-            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/personalization-batch-tick','/api/admin/invites/accept'}:
+            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/personalization-batch-tick','/api/internal/historical-screening-recovery-tick','/api/admin/invites/accept'}:
                 current=auth.session(db,request.cookies.get(COOKIE))
                 if not current:return JSONResponse({'error':'Your administrator session has expired. Please sign in.'},401)
                 request.state.session=current
@@ -1764,4 +1768,87 @@ def create_app(database=None):
         return {'status':'RUNNER_ACTIVE' if active else ('RECOVERY_LAUNCHED' if launched else 'RECOVERY_ALREADY_LOCAL'),
             'authorization_id':grant['id'],'candidate_ids_sha256':grant['candidate_ids_sha256'],
             'candidate_count':len(ids),'runner_active':active or launched}
+
+    @app.post('/api/internal/historical-screening-recovery-tick')
+    async def historical_screening_recovery_tick(request:Request):
+        """Recover only the frozen historical-screen campaign from Neon triggers."""
+        expected=os.environ.get('OUTREACH_HISTORICAL_CAMPAIGN_SCHEDULER_TOKEN','')
+        supplied=request.headers.get('authorization','')
+        if len(expected)<32 or not hmac.compare_digest(supplied,'Bearer '+expected):
+            raise HTTPException(status_code=401,detail='Scheduler authentication required')
+        if not db.postgres:
+            raise HTTPException(status_code=503,detail='Campaign recovery requires PostgreSQL locking')
+        invocation_header=request.headers.get('x-neon-trigger-invocation-id','')
+        try:
+            raw=bytearray()
+            async for chunk in request.stream():
+                if len(raw)+len(chunk)>2048:
+                    raise HTTPException(status_code=413,detail='Scheduler request is too large')
+                raw.extend(chunk)
+            body=json.loads(raw or b'{}')
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400,detail='Invalid scheduler request')
+        required={'trigger_name','invocation_id','scheduled_at','campaign_id',
+            'authorization_id','manifest_sha256'}
+        if (not isinstance(body,dict) or set(body)!=required
+                or body.get('trigger_name')!=HISTORICAL_SCHEDULER_TRIGGER_NAME
+                or body.get('campaign_id')!=HISTORICAL_CAMPAIGN_ID
+                or body.get('authorization_id')!=HISTORICAL_AUTHORIZATION_ID
+                or body.get('manifest_sha256')!=HISTORICAL_EXECUTION_MANIFEST_SHA256
+                or not isinstance(body.get('invocation_id'),str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{12,128}',body['invocation_id'])
+                or not hmac.compare_digest(invocation_header,body['invocation_id'])):
+            raise HTTPException(status_code=400,detail='Invalid or unverified Neon trigger invocation')
+        try:
+            scheduled_at=datetime.fromisoformat(str(body['scheduled_at']).replace('Z','+00:00'))
+            if scheduled_at.tzinfo is None:
+                raise ValueError
+        except (TypeError,ValueError):
+            raise HTTPException(status_code=400,detail='Invalid scheduled time')
+
+        campaign_id=HISTORICAL_CAMPAIGN_ID
+        authorization_id=HISTORICAL_AUTHORIZATION_ID
+        manifest_sha256=HISTORICAL_EXECUTION_MANIFEST_SHA256
+        from .personalization_batch import _manifest,launch
+        with db.transaction() as c:
+            campaign=c.execute(select(personalization_campaigns).where(
+                personalization_campaigns.c.id==campaign_id,
+                personalization_campaigns.c.authorization_id==authorization_id)).mappings().first()
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==authorization_id,
+                personalization_authorizations.c.campaign_id==campaign_id,
+                personalization_authorizations.c.status=='RUNNING')).mappings().first()
+            if not campaign or not grant:
+                return {'status':'IDLE','campaign_id':campaign_id,'runner_active':db.personalization_batch_active()}
+            try:
+                ids=_manifest(grant,c)
+            except (TypeError,ValueError):
+                raise HTTPException(status_code=409,detail='Persisted campaign authorization failed exact-manifest validation')
+            if (grant['candidate_ids_sha256']!=manifest_sha256
+                    or campaign['execution_candidate_ids_sha256']!=manifest_sha256
+                    or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=manifest_sha256):
+                raise HTTPException(status_code=409,detail='Persisted campaign manifest no longer matches its frozen authorization')
+            event_id='neon-personalization-tick-'+hashlib.sha256(body['invocation_id'].encode()).hexdigest()
+            existing=c.execute(select(events.c.id).where(events.c.id==event_id)).scalar_one_or_none()
+            if existing:
+                return {'status':'DUPLICATE_TICK','campaign_id':campaign_id,
+                    'authorization_id':authorization_id,'candidate_ids_sha256':manifest_sha256,
+                    'runner_active':db.personalization_batch_active()}
+            c.execute(events.insert().values(id=event_id,entity_id=campaign_id,
+                event='PERSONALIZATION_BATCH_SCHEDULER_TICK',
+                detail=json.dumps({'scheduler':'NEON_FUNCTION_TRIGGER','trigger_name':body['trigger_name'],
+                    'invocation_id':body['invocation_id'],'scheduled_at':scheduled_at.isoformat(),
+                    'authorization_id':authorization_id,'candidate_ids_sha256':manifest_sha256,
+                    'status':'TICK_ACCEPTED'},sort_keys=True,separators=(',',':')),created_at=now()))
+        active=db.personalization_batch_active()
+        launched=False if active else launch(db,authorization_id)
+        result_status='RUNNER_ACTIVE' if active else ('RECOVERY_LAUNCHED' if launched else 'RECOVERY_ALREADY_LOCAL')
+        with db.transaction() as c:
+            prior=c.execute(select(events.c.detail).where(events.c.id==event_id)).scalar_one_or_none()
+            detail=json.loads(prior or '{}');detail['status']=result_status
+            c.execute(events.update().where(events.c.id==event_id).values(
+                detail=json.dumps(detail,sort_keys=True,separators=(',',':'))))
+        return {'status':result_status,
+            'campaign_id':campaign_id,'authorization_id':authorization_id,
+            'candidate_count':len(ids),'candidate_ids_sha256':manifest_sha256,'runner_active':active or launched}
     return app

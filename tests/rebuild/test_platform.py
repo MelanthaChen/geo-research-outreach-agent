@@ -536,6 +536,64 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     locked=False
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'}).status_code==409
 
+
+def test_neon_historical_recovery_tick_is_campaign_scoped_authenticated_and_idempotent(db,monkeypatch):
+    import hashlib,json
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+    from outreach_v2 import app as app_module
+    from outreach_v2.app import create_app
+    from outreach_v2.db import events,personalization_authorizations,personalization_campaigns
+    import outreach_v2.personalization_batch as batch
+
+    campaign_id='screened-v2-a429c6055896ef7a'
+    authorization_id='personalization-auth-3deb7a626ac14f67bd7d31a060c6e4e6'
+    ids=['scheduler-member-a','scheduler-member-b']
+    manifest_sha=hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+    monkeypatch.setattr(app_module,'HISTORICAL_CAMPAIGN_ID',campaign_id)
+    monkeypatch.setattr(app_module,'HISTORICAL_AUTHORIZATION_ID',authorization_id)
+    monkeypatch.setattr(app_module,'HISTORICAL_EXECUTION_MANIFEST_SHA256',manifest_sha)
+    monkeypatch.setenv('OUTREACH_HISTORICAL_CAMPAIGN_SCHEDULER_TOKEN','scoped-test-token-'+'x'*32)
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id=authorization_id,
+            candidate_ids=dump(ids),candidate_ids_sha256=manifest_sha,total_budget_usd='OPEN_ENDED',
+            status='RUNNING',created_by='test-admin',approved_by='test-admin',approved_at=now(),
+            created_at=now(),campaign_id=campaign_id))
+        c.execute(personalization_campaigns.insert().values(id=campaign_id,source_job_id='test-screen',
+            source_run_version='test-v1',source_manifest_sha256='source-hash',source_candidate_ids=dump(ids),
+            execution_candidate_ids=dump(ids),execution_candidate_ids_sha256=manifest_sha,
+            source_candidate_count=2,company_count=2,hotel_count=0,criteria_json='{}',status='RUNNING',
+            created_by='test-admin',created_at=now(),approved_by='test-admin',approved_at=now(),
+            authorization_id=authorization_id))
+    db.postgres=True
+    monkeypatch.setattr(batch,'_manifest',lambda _grant,_connection:ids)
+    monkeypatch.setattr(db,'personalization_batch_active',lambda:False)
+    launches=[]
+    monkeypatch.setattr(batch,'launch',lambda database,ident:launches.append((database,ident)) or True)
+
+    client=TestClient(create_app(db))
+    endpoint='/api/internal/historical-screening-recovery-tick'
+    token='Bearer '+'scoped-test-token-'+'x'*32
+    valid_body={'trigger_name':'outreach-historical-screening-recovery',
+        'invocation_id':'neon-invocation-1234567890','scheduled_at':'2026-11-13T05:00:00Z',
+        'campaign_id':campaign_id,'authorization_id':authorization_id,'manifest_sha256':manifest_sha}
+    assert client.post(endpoint,json=valid_body).status_code==401
+    headers={'Authorization':token,'X-Neon-Trigger-Invocation-Id':valid_body['invocation_id']}
+    bad_manifest={**valid_body,'manifest_sha256':'wrong'}
+    assert client.post(endpoint,headers=headers,json=bad_manifest).status_code==400
+    first=client.post(endpoint,headers=headers,json=valid_body)
+    assert first.status_code==200,first.text
+    assert first.json()['status']=='RECOVERY_LAUNCHED'
+    duplicate=client.post(endpoint,headers=headers,json=valid_body)
+    assert duplicate.status_code==200 and duplicate.json()['status']=='DUPLICATE_TICK'
+    assert launches==[(db,authorization_id)]
+    with db.transaction() as c:
+        rows=c.execute(select(events.c.detail).where(events.c.entity_id==campaign_id,
+            events.c.event=='PERSONALIZATION_BATCH_SCHEDULER_TICK')).scalars().all()
+    assert len(rows)==1
+    assert json.loads(rows[0])['invocation_id']==valid_body['invocation_id']
+    assert json.loads(rows[0])['status']=='RECOVERY_LAUNCHED'
+
 class EmptySheets:
     def read(self):return []
 

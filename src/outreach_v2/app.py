@@ -627,9 +627,9 @@ def create_app(database=None):
             'reply_to':values.get('reply_to') if template['template_kind']=='INVITATION' else template['reply_to'],
             'questionnaire_url':values.get('form_url'),'reference':'PREVIEW-NOT-SENDABLE' if template['template_kind']=='INVITATION' else None,
             'delivery_authorized':next((choice['delivery_authorized'] for choice in invitation_choices
-                if choice['email'].casefold()==str(template['sender'] or '').casefold()),False) if template['template_kind']=='INVITATION' else True,
+                if choice['email'].casefold()==str(sender if template['template_kind']=='INVITATION' else template['sender'] or '').casefold()),False) if template['template_kind']=='INVITATION' else True,
             'delivery_status':next((choice['delivery_status'] for choice in invitation_choices
-                if choice['email'].casefold()==str(template['sender'] or '').casefold()),'Sender is not currently selectable') if template['template_kind']=='INVITATION' else 'Report delivery configuration is unchanged',
+                if choice['email'].casefold()==str(sender if template['template_kind']=='INVITATION' else template['sender'] or '').casefold()),'Sender is not currently selectable') if template['template_kind']=='INVITATION' else 'Report delivery configuration is unchanged',
             'sent':False,'persisted_invitation':False}
 
     @app.get('/api/admin/questionnaires')

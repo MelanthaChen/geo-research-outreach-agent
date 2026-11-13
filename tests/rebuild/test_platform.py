@@ -972,6 +972,7 @@ def test_email_template_sender_choices_include_active_admins_but_not_inactive_an
     rendered=preview.json()
     assert rendered['sender']=='g.shan@northeastern.edu' and rendered['reply_to']=='g.shan@northeastern.edu'
     assert rendered['sender_name']=='G Shan' and rendered['delivery_authorized'] is False
+    assert 'ADMIN identity only' in rendered['delivery_status']
     assert 'G Shan' in rendered['body'] and 'Yuxuan Chen' not in rendered['body']
     monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','gshan@hbs.edu')
     verified=client.get('/api/admin/email-templates').json()['authorized_senders']

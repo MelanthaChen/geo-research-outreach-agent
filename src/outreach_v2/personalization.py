@@ -782,7 +782,8 @@ def _analysis_fingerprint(selection):
 def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_seconds=240,
              authorized_candidate_ids=None, selected_candidate_ids=None, retry_candidate_ids=None,
              backend_factory=None, token_count=None, approved_cumulative_budget_usd=None,
-             approved_candidate_budget_usd=None):
+             approved_candidate_budget_usd=None, approved_cohort_budget_usd=None,
+             approved_cohort_candidate_ids=None):
     """Run the real semantic pipeline; paid execution is disabled unless explicitly configured.
 
     Candidate websites are fetched and attributed before an OpenAI request is possible.
@@ -839,6 +840,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     per_candidate_cap = _money_env('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD')
     approved_cumulative=(Decimal(str(approved_cumulative_budget_usd)) if approved_cumulative_budget_usd is not None else None)
     approved_candidate=(Decimal(str(approved_candidate_budget_usd)) if approved_candidate_budget_usd is not None else None)
+    approved_cohort=(Decimal(str(approved_cohort_budget_usd)) if approved_cohort_budget_usd is not None else None)
+    approved_cohort_ids=tuple(dict.fromkeys(str(x).strip() for x in (approved_cohort_candidate_ids or ()) if str(x).strip()))
     if not (Decimal('0') < run_budget <= Decimal(MAX_PILOT_SPEND_USD) and
             Decimal('0') < cumulative_budget <= Decimal(MAX_PILOT_SPEND_USD) and
             Decimal('0') < per_candidate_cap <= Decimal(str(MAX_ESTIMATED_USD))):
@@ -863,6 +866,12 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
             return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
                 'reason':'Approved candidate authorization must be a single-candidate limit no greater than $0.05.'}
         run_budget=min(run_budget,approved_candidate)
+    if approved_cohort is not None:
+        if (not Decimal('0') < approved_cohort <= Decimal('2.50') or len(approved_cohort_ids) != 50
+                or not set(authorized_ids).issubset(set(approved_cohort_ids))
+                or approved_candidate is not None):
+            return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
+                'reason':'Approved replacement-cohort authorization must bind the exact 50-candidate scope and remain within $2.50.'}
     configured_limit = int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit)))
     if not 1 <= configured_limit <= MAX_PILOT_CANDIDATES:
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,
@@ -1091,6 +1100,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 else:
                     spent=Decimal('0')
                     candidate_spent=Decimal('0')
+                    cohort_spent=Decimal('0')
                     rows=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
                         personalization_attempts.c.actual_cost_usd,personalization_attempts.c.candidate_id).with_for_update()).all()
                     for item in rows:
@@ -1100,6 +1110,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                         spent += row_cost
                         if approved_candidate is not None and item.candidate_id == row['id']:
                             candidate_spent += row_cost
+                        if approved_cohort is not None and item.candidate_id in approved_cohort_ids:
+                            cohort_spent += row_cost
                     run_reserved=Decimal(str(c.scalar(select(personalization_runs.c.reserved_usd).where(personalization_runs.c.id==run_id)) or 0))
                     request_reservation=Decimal(str(preflight.worst_case_cost_usd))
                     budget_failures=[]
@@ -1109,6 +1121,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                         budget_failures.append('cumulative_budget')
                     if approved_candidate is not None and candidate_spent+request_reservation>approved_candidate:
                         budget_failures.append('approved_candidate_budget')
+                    if approved_cohort is not None and cohort_spent+request_reservation>approved_cohort:
+                        budget_failures.append('approved_cohort_budget')
                     if budget_failures:
                         result['budget_stopped']=True
                         result['budget_stop_detail']={
@@ -1119,6 +1133,8 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                             'cumulative_budget_usd':str(cumulative_budget),
                             'candidate_spend_including_reservations_usd':str(candidate_spent),
                             'approved_candidate_budget_usd':str(approved_candidate) if approved_candidate is not None else None,
+                            'cohort_spend_including_reservations_usd':str(cohort_spent),
+                            'approved_cohort_budget_usd':str(approved_cohort) if approved_cohort is not None else None,
                         }
                         c.execute(candidates.update().where(candidates.c.id==row['id'],candidates.c.personalization_lease_token==lease_token)
                             .values(personalization_lease_token=None,personalization_lease_until=None))

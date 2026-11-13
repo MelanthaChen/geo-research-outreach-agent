@@ -15,17 +15,38 @@ from .replay_policy import replay_allowed_for_contract
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
+MAX_REPLACEMENT_BUDGET_USD = Decimal('2.50')
 MAX_PER_CANDIDATE_USD = Decimal('0.05')
+REPLACEMENT_MANIFEST_SHA256 = '62c74ce1ca5c7b762019ef9261fc70bedd7ff3c0b68ab2fdd85b91254c86ea73'
+REPLACEMENT_MANIFEST_EVENT_ID = 'replacement-2026-11-12-v2-62c74ce1ca5c:manifest'
 _active: set[str] = set()
 _active_lock = threading.Lock()
 
 
-def _manifest(row):
+def _manifest(row, connection=None):
     ids = json.loads(row['candidate_ids'])
-    if (not isinstance(ids, list) or len(ids) != 100 or len(set(ids)) != 100
+    if (not isinstance(ids, list) or len(ids) not in {50, 100} or len(set(ids)) != len(ids)
             or hashlib_ids(ids) != row['candidate_ids_sha256']):
-        raise ValueError('The saved 100-candidate manifest failed its integrity check')
+        raise ValueError('The saved personalization manifest failed its integrity check')
+    if len(ids) == 50:
+        if row['candidate_ids_sha256'] != REPLACEMENT_MANIFEST_SHA256 or connection is None:
+            raise ValueError('The 50-candidate authorization is not bound to the verified replacement manifest')
+        saved = connection.execute(select(events.c.detail).where(
+            events.c.id == REPLACEMENT_MANIFEST_EVENT_ID,
+            events.c.event == 'PERSONALIZATION_REPLACEMENT_COHORT_MANIFEST_CREATED')).scalar_one_or_none()
+        try:
+            detail = json.loads(saved or '{}')
+        except (TypeError, ValueError):
+            detail = {}
+        if (detail.get('manifest_sha256') != REPLACEMENT_MANIFEST_SHA256
+                or detail.get('candidate_ids') != ids or detail.get('candidate_count') != 50
+                or detail.get('kind_breakdown') != {'company': 40, 'hotel': 10}):
+            raise ValueError('The persisted replacement manifest failed its audit binding check')
     return ids
+
+
+def manifest_budget(ids):
+    return MAX_REPLACEMENT_BUDGET_USD if len(ids) == 50 else MAX_TOTAL_BUDGET_USD
 
 
 def hashlib_ids(ids):
@@ -242,7 +263,7 @@ def _set_status(db, ident, status, event_name, detail=None, *, only_running=Fals
 
 
 def pause(db, ident):
-    return _set_status(db, ident, 'PAUSED', 'PERSONALIZATION_BATCH_PAUSED', {'scope': 'COHORT_100'}, only_running=True)
+    return _set_status(db, ident, 'PAUSED', 'PERSONALIZATION_BATCH_PAUSED', {'scope': 'AUTHORIZED_MANIFEST'}, only_running=True)
 
 
 def launch(db, ident):
@@ -311,7 +332,9 @@ def _run_locked(db, ident):
                 personalization_authorizations.c.id == ident)).mappings().first()
         if not grant:
             return
-        ids = _manifest(grant)
+        with db.transaction() as c:
+            ids = _manifest(grant, c)
+        cohort_cap = manifest_budget(ids)
         with db.transaction() as c:
             c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
                 event='PERSONALIZATION_BATCH_HEARTBEAT',
@@ -351,7 +374,9 @@ def _run_locked(db, ident):
             from .personalization import backfill
             result = backfill(db, limit=len(next_ids), concurrency=1, time_budget_seconds=300,
                 authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids,
-                approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD))
+                approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD),
+                approved_cohort_budget_usd=str(cohort_cap),
+                approved_cohort_candidate_ids=ids if len(ids) == 50 else None)
             detail = {'candidate_count': len(next_ids), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
                 'candidate_ids': list(next_ids),
                 'run_id': result.get('run_id'), 'attempted': result.get('attempted', 0),

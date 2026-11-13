@@ -32,6 +32,23 @@ def _existing_100_manifest_ids(connection):
             members.update(ids)
     return members
 
+def _persisted_replacement_manifest(connection):
+    """Load only the separately audited, immutable 50-ID replacement manifest."""
+    from .personalization_batch import REPLACEMENT_MANIFEST_EVENT_ID,REPLACEMENT_MANIFEST_SHA256,hashlib_ids
+    detail=connection.execute(select(events.c.detail).where(
+        events.c.id==REPLACEMENT_MANIFEST_EVENT_ID,
+        events.c.event=='PERSONALIZATION_REPLACEMENT_COHORT_MANIFEST_CREATED')).scalar_one_or_none()
+    try: payload=json.loads(detail or '{}')
+    except (TypeError,ValueError): payload={}
+    ids=payload.get('candidate_ids')
+    if (payload.get('manifest_sha256')!=REPLACEMENT_MANIFEST_SHA256
+            or payload.get('candidate_count')!=50
+            or payload.get('kind_breakdown')!={'company':40,'hotel':10}
+            or not isinstance(ids,list) or len(ids)!=50 or len(set(ids))!=50
+            or hashlib_ids(ids)!=REPLACEMENT_MANIFEST_SHA256):
+        raise ValueError('The persisted 50-candidate replacement manifest failed its integrity check')
+    return ids
+
 def create_app(database=None):
     app=FastAPI(title='GEO Research Outreach',docs_url=None,redoc_url=None,openapi_url=None)
     db=database or Database();app.state.db=db
@@ -637,14 +654,17 @@ def create_app(database=None):
             raise ValueError('Provide exact candidate_ids and total_budget_usd')
         ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
         if len(ids)!=len(body['candidate_ids']): raise ValueError('Candidate authorization IDs must be non-empty and unique')
-        if len(ids) not in {1,100}: raise ValueError('Authorization must name exactly one pilot candidate or the existing 100-candidate cohort')
+        if len(ids) not in {1,50,100}: raise ValueError('Authorization must name one pilot candidate, the exact 50-candidate replacement manifest, or the existing 100-candidate cohort')
         from decimal import Decimal,InvalidOperation
         try: amount=Decimal(str(body['total_budget_usd']))
         except (InvalidOperation,TypeError): raise ValueError('Budget must be a decimal USD amount')
         one_candidate=len(ids)==1
-        if not amount.is_finite() or (one_candidate and not Decimal('0')<amount<=Decimal('0.05')) or (not one_candidate and not Decimal('0.25')<amount<=Decimal('5.00')):
-            raise ValueError('One-candidate pilot authorization must be at most $0.05; 100-candidate authorization must be greater than $0.25 and no more than $5.00')
+        replacement_cohort=len(ids)==50
+        if not amount.is_finite() or (one_candidate and not Decimal('0')<amount<=Decimal('0.05')) or (replacement_cohort and amount!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<amount<=Decimal('5.00')):
+            raise ValueError('One-candidate authorization is limited to $0.05, the exact 50-candidate replacement cohort is fixed at $2.50, and the existing 100-candidate cohort is limited to $5.00')
         with db.transaction() as c:
+            if replacement_cohort and ids!=_persisted_replacement_manifest(c):
+                raise ValueError('A 50-candidate authorization must match the exact persisted replacement manifest and order')
             rows=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
                 candidate_table.c.fixture.is_(False),candidate_table.c.suppressed.is_(False),
                 candidate_table.c.website_status=='VERIFIED',candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
@@ -652,6 +672,26 @@ def create_app(database=None):
             if set(rows)!=set(ids): raise ValueError('Every authorized ID must be an existing, unsuppressed, verified eligible company or hotel')
             if c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id.in_(ids))):
                 raise ValueError('Candidates with existing invitations cannot enter a personalization grant')
+            if replacement_cohort:
+                attempts=c.execute(select(personalization_attempts.c.status).where(
+                    personalization_attempts.c.candidate_id.in_(ids))).scalars().all()
+                if any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts):
+                    raise ValueError('Replacement candidates with unresolved provider spend or open reservations cannot be authorized')
+                pass_count=c.scalar(select(func.count()).select_from(candidate_table).where(
+                    candidate_table.c.id.in_(ids),candidate_table.c.personalization_analysis_version=='semantic-openai-v1',
+                    candidate_table.c.personalization_quality_status=='PASS')) or 0
+                if pass_count:
+                    raise ValueError('The replacement manifest contains an existing semantic PASS; refresh the exact cohort before authorizing paid analysis')
+                ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                    personalization_attempts.c.actual_cost_usd)).all()
+                total=Decimal('0')
+                for item in ledger:
+                    row_cost=Decimal(str(item.actual_cost_usd or 0))
+                    if item.status in {'UNKNOWN_SPEND','RESERVED'}:
+                        row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
+                    total+=row_cost
+                if total+amount>Decimal('5.00'):
+                    raise ValueError('The new replacement authorization would exceed the existing $5.00 global cumulative provider-spend ceiling')
             if one_candidate:
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0])).mappings().one()
                 if candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0':
@@ -675,7 +715,7 @@ def create_app(database=None):
                 candidate_ids_sha256=digest,total_budget_usd=str(amount),status='PENDING',
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
-                detail=json.dumps({'candidate_count':len(ids),'scope':'ONE_CANDIDATE' if one_candidate else 'COHORT_100',
+                detail=json.dumps({'candidate_count':len(ids),'scope':'ONE_CANDIDATE' if one_candidate else 'REPLACEMENT_COHORT_50' if replacement_cohort else 'COHORT_100',
                     'candidate_ids_sha256':digest,'total_budget_usd':str(amount),
                     'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
         return {'id':ident,'candidate_count':len(ids),'candidate_ids_sha256':digest,'total_budget_usd':str(amount),'status':'PENDING'}
@@ -708,12 +748,32 @@ def create_app(database=None):
             if not row: raise LookupError('Personalization authorization not found')
             if row['status']!='PENDING': raise ValueError('Authorization is no longer pending')
             ids=json.loads(row['candidate_ids'])
-            if len(ids) not in {1,100} or len(set(ids))!=len(ids) or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=row['candidate_ids_sha256']:
+            if len(ids) not in {1,50,100} or len(set(ids))!=len(ids) or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=row['candidate_ids_sha256']:
                 raise ValueError('Authorization candidate manifest is invalid')
             budget=Decimal(row['total_budget_usd'])
-            if not budget.is_finite() or (len(ids)==1 and not Decimal('0')<budget<=Decimal('0.05')) or (len(ids)==100 and not Decimal('0.25')<budget<=Decimal('5.00')):
+            if not budget.is_finite() or (len(ids)==1 and not Decimal('0')<budget<=Decimal('0.05')) or (len(ids)==50 and budget!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<budget<=Decimal('5.00')):
                 raise ValueError('Authorization spending limit is invalid for its candidate scope')
-            if len(ids)==1:
+            if len(ids)==50:
+                from .personalization_batch import eligibility
+                if ids!=_persisted_replacement_manifest(c):
+                    raise ValueError('The replacement authorization no longer matches the immutable 50-ID manifest')
+                if c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids)))<=0:
+                    raise ValueError('The replacement cohort has no currently eligible candidates')
+                attempts=c.execute(select(personalization_attempts.c.status).where(
+                    personalization_attempts.c.candidate_id.in_(ids))).scalars().all()
+                if any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts):
+                    raise ValueError('A replacement candidate has unresolved provider spend or an open reservation')
+                ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                    personalization_attempts.c.actual_cost_usd)).all()
+                total=Decimal('0')
+                for item in ledger:
+                    row_cost=Decimal(str(item.actual_cost_usd or 0))
+                    if item.status in {'UNKNOWN_SPEND','RESERVED'}:
+                        row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
+                    total+=row_cost
+                if total+budget>Decimal('5.00'):
+                    raise ValueError('The replacement grant would exceed the existing $5.00 global cumulative provider-spend ceiling')
+            elif len(ids)==1:
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0]).with_for_update()).mappings().first()
                 attempts=c.execute(select(personalization_attempts.c.status).where(personalization_attempts.c.candidate_id==ids[0])).scalars().all()
                 if (not candidate or candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0'
@@ -742,6 +802,7 @@ def create_app(database=None):
                 personalization_authorizations.c.status=='APPROVED')).mappings().first()
             if not grant: raise LookupError('Approved personalization budget authorization not found')
         ids=json.loads(grant['candidate_ids'])
+        if len(ids)==50: raise ValueError('The 50-candidate replacement cohort must run through its resumable batch endpoint')
         if len(ids) not in {1,100}: raise ValueError('Persisted authorization has an invalid candidate scope')
         if hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=grant['candidate_ids_sha256']:
             raise ValueError('Approved candidate manifest integrity check failed')
@@ -789,6 +850,155 @@ def create_app(database=None):
                 ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()))
         return result
 
+    @app.get('/api/admin/personalization/replacement-cohort')
+    def replacement_personalization_status(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        from .personalization_batch import (MAX_PER_CANDIDATE_USD,MAX_REPLACEMENT_BUDGET_USD,
+            REPLACEMENT_MANIFEST_SHA256,eligibility,progress,_manifest)
+        with db.transaction() as c:
+            ids=_persisted_replacement_manifest(c)
+            grants=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.candidate_ids_sha256==REPLACEMENT_MANIFEST_SHA256,
+                personalization_authorizations.c.status.in_(['PENDING','APPROVED','RUNNING','PAUSED','COMPLETED','ATTENTION_REQUIRED'])
+            ).order_by(personalization_authorizations.c.created_at.desc())).mappings().all()
+            if len(grants)>1:
+                raise ValueError('Multiple replacement-cohort authorizations exist; administrator reconciliation is required')
+            eligible_count=c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) or 0
+            ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                personalization_attempts.c.actual_cost_usd)).all()
+            global_spend=Decimal('0')
+            for item in ledger:
+                row_cost=Decimal(str(item.actual_cost_usd or 0))
+                if item.status in {'UNKNOWN_SPEND','RESERVED'}:
+                    row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
+                global_spend+=row_cost
+        grant=grants[0] if grants else None
+        if grant:
+            with db.transaction() as c: ids=_manifest(grant,c)
+            result=progress(db,grant,ids)
+            auth_status=grant['status']
+            budget=Decimal(grant['total_budget_usd'])
+        else:
+            result={'authorization_id':None,'status':'NOT_AUTHORIZED','candidate_count':50,
+                'processed':0,'eligible_remaining':int(eligible_count),'quality_pass':0,'quality_fail':0,
+                'provider_attempts':0,'actual_cost_usd':'0','unresolved_reserved_usd':'0',
+                'candidate_ids_sha256':REPLACEMENT_MANIFEST_SHA256,'runner_active':False,
+                'execution_state':'NOT_AUTHORIZED','last_checkpoint_at':None,'last_checkpoint':None,
+                'heartbeat_at':None,'heartbeat':None,'next_retry_at':None}
+            auth_status='NOT_AUTHORIZED';budget=MAX_REPLACEMENT_BUDGET_USD
+        global_headroom=max(Decimal('0'),Decimal('5.00')-global_spend)
+        estimated=min(MAX_PER_CANDIDATE_USD*int(eligible_count),MAX_REPLACEMENT_BUDGET_USD,
+            max(Decimal('0'),budget-Decimal(result.get('actual_cost_usd','0'))-Decimal(result.get('unresolved_reserved_usd','0'))),
+            global_headroom)
+        result.update({'candidate_count':50,'eligible_count':int(eligible_count),
+            'estimated_max_cost_usd':str(estimated),'total_budget_cap_usd':'2.50',
+            'authorization_status':auth_status,'manifest_sha256':REPLACEMENT_MANIFEST_SHA256,
+            'global_spend_including_reservations_usd':str(global_spend),
+            'global_cumulative_cap_usd':'5.00','authorization_created_by':grant['created_by'] if grant else None})
+        return result
+
+    @app.post('/api/admin/personalization/replacement-batch/start')
+    async def start_replacement_personalization_batch(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        required={'candidate_ids_sha256','eligible_count','confirm_budget'}
+        if not isinstance(body,dict) or set(body)!=required or body.get('confirm_budget') is not True:
+            raise ValueError('Confirm the exact 50-candidate replacement manifest and $2.50 maximum budget')
+        from .personalization_batch import (MAX_PER_CANDIDATE_USD,MAX_REPLACEMENT_BUDGET_USD,
+            REPLACEMENT_MANIFEST_SHA256,eligibility,launch,progress,_manifest)
+        if body['candidate_ids_sha256']!=REPLACEMENT_MANIFEST_SHA256:
+            raise ValueError('The requested replacement manifest hash does not match the immutable saved cohort')
+        ident=None;stamp=None;email=request.state.session['email'];ids=None
+        with db.transaction(serialized=True) as c:
+            ids=_persisted_replacement_manifest(c)
+            eligible_count=int(c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) or 0)
+            if eligible_count!=body['eligible_count'] or eligible_count<=0:
+                raise ValueError('Replacement eligibility changed since preview; refresh before confirming')
+            estimated=MAX_PER_CANDIDATE_USD*eligible_count
+            if estimated>MAX_REPLACEMENT_BUDGET_USD:
+                raise ValueError('Worst-case candidate reservations exceed the authorized $2.50 replacement budget')
+            ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                personalization_attempts.c.actual_cost_usd)).all()
+            global_spend=Decimal('0')
+            for item in ledger:
+                row_cost=Decimal(str(item.actual_cost_usd or 0))
+                if item.status in {'UNKNOWN_SPEND','RESERVED'}:
+                    row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
+                global_spend+=row_cost
+            if global_spend+estimated>Decimal('5.00'):
+                raise ValueError('Worst-case replacement reservations would exceed the existing $5.00 global cumulative provider-spend ceiling')
+            matches=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.candidate_ids_sha256==REPLACEMENT_MANIFEST_SHA256,
+                personalization_authorizations.c.total_budget_usd=='2.50').order_by(
+                personalization_authorizations.c.created_at.desc()).with_for_update()).mappings().all()
+            if len(matches)>1:
+                raise ValueError('Multiple grants exist for this replacement manifest; administrator reconciliation is required')
+            if matches:
+                grant=matches[0];ids=_manifest(grant,c);ident=grant['id']
+                if grant['status']=='PENDING':
+                    stamp=now()
+                    c.execute(personalization_authorizations.update().where(
+                        personalization_authorizations.c.id==ident,
+                        personalization_authorizations.c.status=='PENDING').values(
+                            status='RUNNING',approved_by=email,approved_at=stamp))
+                    c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                        event='PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED',
+                        detail=json.dumps({'candidate_ids_sha256':REPLACEMENT_MANIFEST_SHA256,
+                            'total_budget_usd':'2.50','candidate_count':50,
+                            'approved_by':email,'approved_at':stamp,
+                            'eligible_count':eligible_count,'estimated_max_cost_usd':str(estimated)},sort_keys=True),created_at=stamp))
+                    c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                        event='PERSONALIZATION_BATCH_STARTED',
+                        detail=json.dumps({'candidate_ids_sha256':REPLACEMENT_MANIFEST_SHA256,
+                            'candidate_count':50,'scope':'REPLACEMENT_COHORT_50',
+                            'total_budget_usd':'2.50','global_cumulative_cap_usd':'5.00',
+                            'approved_by':email,'eligible_count':eligible_count,
+                            'estimated_max_cost_usd':str(estimated)},sort_keys=True),created_at=stamp))
+                elif grant['status'] in {'APPROVED','RUNNING'}:
+                    if grant['status']=='APPROVED':
+                        stamp=now()
+                        c.execute(personalization_authorizations.update().where(
+                            personalization_authorizations.c.id==ident,
+                            personalization_authorizations.c.status=='APPROVED').values(status='RUNNING'))
+                        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                            event='PERSONALIZATION_BATCH_STARTED',detail=json.dumps({
+                                'candidate_ids_sha256':REPLACEMENT_MANIFEST_SHA256,'candidate_count':50,
+                                'scope':'REPLACEMENT_COHORT_50','total_budget_usd':'2.50',
+                                'global_cumulative_cap_usd':'5.00','approved_by':grant['approved_by'],
+                                'eligible_count':eligible_count,'estimated_max_cost_usd':str(estimated)},sort_keys=True),created_at=stamp))
+                else:
+                    raise ValueError('The existing replacement authorization is not startable; protected spend and terminal states require reconciliation')
+            else:
+                ident='personalization-auth-'+uuid.uuid4().hex;stamp=now()
+                encoded=json.dumps(ids,separators=(',',':'))
+                c.execute(personalization_authorizations.insert().values(id=ident,candidate_ids=encoded,
+                    candidate_ids_sha256=REPLACEMENT_MANIFEST_SHA256,total_budget_usd='2.50',status='RUNNING',
+                    created_by=email,created_at=stamp,approved_by=email,approved_at=stamp))
+                requested={'candidate_count':50,'scope':'REPLACEMENT_COHORT_50',
+                    'candidate_ids_sha256':REPLACEMENT_MANIFEST_SHA256,'total_budget_usd':'2.50',
+                    'created_by':email,'approved_by':email,'approved_at':stamp,
+                    'eligible_count':eligible_count,'estimated_max_cost_usd':str(estimated)}
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
+                    detail=json.dumps(requested,sort_keys=True),created_at=stamp))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED',
+                    detail=json.dumps(requested,sort_keys=True),created_at=stamp))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BATCH_STARTED',
+                    detail=json.dumps({**requested,'global_cumulative_cap_usd':'5.00'},sort_keys=True),created_at=stamp))
+        launched=launch(db,ident)
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().one()
+            ids=_manifest(grant,c)
+        result=progress(db,grant,ids)
+        result.update({'authorization_status':grant['status'],'approved_by':grant['approved_by'],
+            'approved_at':grant['approved_at'],'estimated_max_cost_usd':str(estimated),
+            'total_budget_cap_usd':'2.50','global_cumulative_cap_usd':'5.00',
+            'runner_started':launched,'invitations_created':0})
+        return result
+
     @app.get('/api/admin/personalization/batch')
     def personalization_batch_preview(request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -802,7 +1012,7 @@ def create_app(database=None):
             grant=next((row for row in grants if len(json.loads(row['candidate_ids']))==100),None)
             if not grant:
                 raise LookupError('The existing exact 100-candidate $5.00 authorization was not found')
-            ids=_manifest(grant)
+            ids=_manifest(grant,c)
             saved=_existing_100_manifest_ids(c)
             if not set(ids).issubset(saved):
                 raise ValueError('The saved authorization does not match an intact 100-candidate manifest')
@@ -823,7 +1033,7 @@ def create_app(database=None):
             grant=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.id==ident)).mappings().first()
             if not grant: raise LookupError('Personalization batch authorization not found')
-            ids=_manifest(grant)
+            ids=_manifest(grant,c)
             if len(ids)!=100 or not set(ids).issubset(_existing_100_manifest_ids(c)):
                 raise ValueError('The saved authorization does not match an intact 100-candidate manifest')
         current=progress(db,grant,ids)
@@ -846,7 +1056,7 @@ def create_app(database=None):
                 personalization_authorizations.c.id==ident,
                 personalization_authorizations.c.status=='PENDING').with_for_update()).mappings().first()
             if not grant: raise ValueError('Only the existing pending batch authorization can be started')
-            ids=_manifest(grant)
+            ids=_manifest(grant,c)
             if (len(ids)!=100 or grant['total_budget_usd']!='5.00'
                     or grant['candidate_ids_sha256']!=body['candidate_ids_sha256']
                     or not set(ids).issubset(_existing_100_manifest_ids(c))):
@@ -886,7 +1096,7 @@ def create_app(database=None):
             grant=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
             if not grant: raise LookupError('Personalization batch authorization not found')
-            ids=_manifest(grant)
+            ids=_manifest(grant,c)
         pause(db,ident)
         with db.transaction() as c:
             grant=c.execute(select(personalization_authorizations).where(
@@ -903,7 +1113,7 @@ def create_app(database=None):
             grant=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.id==ident).with_for_update()).mappings().first()
             if not grant: raise LookupError('Personalization batch authorization not found')
-            ids=_manifest(grant)
+            ids=_manifest(grant,c)
             no_progress=False
             if grant['status']=='ATTENTION_REQUIRED':
                 last=c.execute(select(events.c.detail).where(events.c.entity_id==ident,
@@ -1016,21 +1226,21 @@ def create_app(database=None):
         with db.transaction() as c:
             rows=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.status=='RUNNING',
-                personalization_authorizations.c.total_budget_usd=='5.00',
+                personalization_authorizations.c.total_budget_usd.in_(['2.50','5.00']),
                 personalization_authorizations.c.approved_by.is_not(None),
                 personalization_authorizations.c.approved_at.is_not(None))).mappings().all()
             grants=[]
             for row in rows:
                 try:
-                    ids=_manifest(row)
+                    ids=_manifest(row,c)
                 except (TypeError,ValueError):
                     continue
-                if len(ids)==100:
+                if (len(ids)==100 and row['total_budget_usd']=='5.00') or (len(ids)==50 and row['total_budget_usd']=='2.50'):
                     grants.append((row,ids))
         if not grants:
             return {'status':'IDLE','runner_active':db.personalization_batch_active()}
         if len(grants)!=1:
-            raise HTTPException(status_code=409,detail='Multiple approved RUNNING 100-candidate batches require administrator review')
+            raise HTTPException(status_code=409,detail='Multiple approved RUNNING personalization batches require administrator review')
         grant,ids=grants[0]
         active=db.personalization_batch_active()
         launched=False if active else launch(db,grant['id'])

@@ -1718,6 +1718,62 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     assert approved_row['approved_by']=='chen.yuxuan9@northeastern.edu' and approved_row['approved_at']
 
 
+def test_exact_replacement_manifest_authorization_is_admin_scoped_and_idempotent(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import personalization_authorizations,personalization_attempts,events
+    import outreach_v2.personalization_batch as batch
+    ids=[f'replacement-test-{i:02d}' for i in range(50)]
+    digest=hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+    event_id='replacement-test-manifest-event'
+    monkeypatch.setattr(batch,'REPLACEMENT_MANIFEST_SHA256',digest)
+    monkeypatch.setattr(batch,'REPLACEMENT_MANIFEST_EVENT_ID',event_id)
+    for i,ident in enumerate(ids):
+        candidate(db,ident=ident,name=f'Replacement Business {i:02d}',
+            website=f'https://replacement-{i:02d}.example',fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id.in_(ids[40:])).values(kind='hotel'))
+        c.execute(events.insert().values(id=event_id,entity_id='replacement-test-cohort',
+            event='PERSONALIZATION_REPLACEMENT_COHORT_MANIFEST_CREATED',detail=dump({
+                'candidate_ids':ids,'candidate_count':50,'manifest_sha256':digest,
+                'kind_breakdown':{'company':40,'hotel':10}}),created_at=now()))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    monkeypatch.setattr(batch,'launch',lambda _db,_ident:False)
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    preview=TestClient(create_app(db)).get('/api/admin/personalization/replacement-cohort')
+    assert preview.status_code==401
+    assert count(db,personalization_authorizations)==0
+    preview=client.get('/api/admin/personalization/replacement-cohort',headers=headers)
+    assert preview.status_code==200 and preview.json()['eligible_count']==50
+    assert preview.json()['manifest_sha256']==digest
+    assert preview.json()['total_budget_cap_usd']=='2.50'
+    body={'candidate_ids_sha256':digest,'eligible_count':50,'confirm_budget':True}
+    assert client.post('/api/admin/personalization/replacement-batch/start',json=body).status_code==403
+    started=client.post('/api/admin/personalization/replacement-batch/start',headers=headers,json=body)
+    assert started.status_code==200 and started.json()['status']=='RUNNING'
+    assert started.json()['authorization_status']=='RUNNING'
+    assert started.json()['candidate_count']==50 and started.json()['total_budget_cap_usd']=='2.50'
+    # A repeat start is idempotent: it reuses the exact persisted grant.
+    again=client.post('/api/admin/personalization/replacement-batch/start',headers=headers,json=body)
+    assert again.status_code==200 and again.json()['authorization_id']==started.json()['authorization_id']
+    assert count(db,personalization_authorizations)==1
+    assert count(db,personalization_attempts)==0 and count(db,invitations)==0
+    with db.transaction() as c:
+        grant=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id==started.json()['authorization_id'])).mappings().one()
+        audit=c.execute(select(events.c.event,events.c.detail).where(
+            events.c.entity_id==grant['id'])).all()
+    assert grant['candidate_ids']==dump(ids) and grant['candidate_ids_sha256']==digest
+    assert grant['total_budget_usd']=='2.50' and grant['created_by']=='chen.yuxuan9@northeastern.edu'
+    assert grant['approved_by']=='chen.yuxuan9@northeastern.edu' and grant['approved_at']
+    assert {row.event for row in audit}>={'PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
+        'PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED','PERSONALIZATION_BATCH_STARTED'}
+
+
 def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
     from argon2 import PasswordHasher
     from fastapi.testclient import TestClient

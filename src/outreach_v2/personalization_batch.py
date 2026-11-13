@@ -503,10 +503,14 @@ def _run_locked(db, ident):
                 _set_status(db, ident, 'ATTENTION_REQUIRED',
                     'PERSONALIZATION_BATCH_NO_PROGRESS', current_progress, only_running=True)
                 return
-            # Work one bounded chunk per invocation. A scheduled authenticated
-            # tick reacquires the persisted RUNNING grant after this thread
-            # exits, and after any Render restart.
-            return
+            # Continue through additional bounded chunks while this process
+            # owns the PostgreSQL advisory lock. Each call to backfill remains
+            # limited to BATCH_SIZE candidates and retains its own run and
+            # spending ceilings. Durable per-chunk checkpoints make a Render
+            # restart safe: the next authenticated recovery tick reselects
+            # only candidates that remain eligible, without repeating settled
+            # provider attempts.
+            continue
     except Exception as exc:
         _set_status(db, ident, 'ATTENTION_REQUIRED', 'PERSONALIZATION_BATCH_RUNNER_ERROR',
             {'error_type': type(exc).__name__}, only_running=True)

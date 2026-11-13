@@ -2446,6 +2446,54 @@ def test_bounded_runner_releases_local_launch_guard_for_next_scheduler_tick(db,m
     assert batch.is_active('recoverable-runner') is False
 
 
+def test_campaign_runner_continues_after_a_failed_candidate_in_bounded_chunks(db,monkeypatch):
+    import hashlib,json
+    from sqlalchemy import and_
+    from outreach_v2.db import personalization_authorizations
+    import outreach_v2.personalization as personalization
+    import outreach_v2.personalization_batch as batch
+
+    ids=[candidate(db,ident=f'auto-candidate-{i}',name=f'Auto Candidate {i}',
+        personalization=False,fixture=False) for i in range(6)]
+    digest=hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id='auto-continuation',
+            candidate_ids=dump(ids),candidate_ids_sha256=digest,total_budget_usd='5.00',
+            status='RUNNING',created_by='admin@example.org',approved_by='admin@example.org',
+            approved_at=now(),created_at=now()))
+
+    monkeypatch.setattr(batch,'_manifest',lambda _grant,_connection:ids)
+    monkeypatch.setattr(batch,'manifest_budget',lambda _ids:batch.MAX_TOTAL_BUDGET_USD)
+    monkeypatch.setattr(batch,'eligibility',lambda cohort_ids:
+        and_(candidates.c.id.in_(cohort_ids),candidates.c.personalization_analysis_version.is_(None)))
+    monkeypatch.setattr(batch,'_retry_wait',lambda _db,_ids:None)
+    monkeypatch.setattr(batch,'progress',lambda _db,_grant,_ids:{
+        'processed':6,'candidate_count':6,'unresolved_reserved_usd':'0'})
+
+    calls=[]
+    def process_chunk(_db,**kwargs):
+        chunk=list(kwargs['authorized_candidate_ids']);calls.append(chunk)
+        with db.transaction() as c:
+            for ident in chunk:
+                failed=ident==ids[0]
+                c.execute(candidates.update().where(candidates.c.id==ident).values(
+                    personalization_analysis_version='semantic-openai-v1',
+                    personalization_quality_status='FAIL' if failed else 'PASS',
+                    personalization_outcome='SEMANTIC_QUALITY_REJECTED' if failed else 'SEMANTIC_READY'))
+        return {'run_id':f'run-{len(calls)}','attempted':len(chunk),'completed':len(chunk),
+            'incomplete':0,'status':'COMPLETED','actual_cost_usd':'0.10',
+            'unresolved_reserved_usd':'0'}
+    monkeypatch.setattr(personalization,'backfill',process_chunk)
+
+    batch._run(db,'auto-continuation')
+    with db.transaction() as c:
+        grant=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='auto-continuation')).mappings().one()
+    assert [len(chunk) for chunk in calls]==[5,1]
+    assert [ident for chunk in calls for ident in chunk]==ids
+    assert grant['status']=='COMPLETED'
+
+
 def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
     from outreach_v2.db import personalization_authorizations,events
     import outreach_v2.personalization as personalization

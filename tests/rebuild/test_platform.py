@@ -22,7 +22,7 @@ def db(tmp_path):
     os.environ.setdefault('OUTREACH_REPLY_TO','chen.yuxuan9@northeastern.edu')
     result=Database('sqlite:///'+str(tmp_path/'test.db'));result.initialize();return result
 
-def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=True):
+def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=False):
     source_excerpt='GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.'
     p={'data_classification':'OBSERVED','analysis_version':'structured-evidence-v2','pipeline_version':'semantic-openai-v1',
        'business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.',
@@ -97,6 +97,36 @@ def test_invitation_generation_rejects_legacy_ready_quality_pass_without_writing
     assert count(db,invitations)==0
     assert count(db,batches)==0
 
+def test_primary_business_statuses_are_derived_and_mutually_exclusive(db):
+    candidate(db,'status-ready','ready@example.test','https://ready.example.test','Ready Business',fixture=False)
+    # Legacy READY is only a cache: complete semantic PASS plus valid contact is sufficient.
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='status-ready').values(personalization_status='INCOMPLETE'))
+    candidate(db,'status-no-contact','none@example.test','https://none.example.test','No Contact Business',fixture=False)
+    candidate(db,'status-invited','invited@example.test','https://invited.example.test','Invited Business',fixture=False)
+    invite(db,['status-invited'],'status-invited-idempotency-key')
+    candidate(db,'status-pending','pending@example.test','https://pending.example.test','Pending Business',fixture=False,personalization=False)
+    candidate(db,'status-blocked','blocked@example.test','https://blocked.example.test','Blocked Business',fixture=False,suppressed=True)
+    with db.transaction() as c:
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='status-no-contact'))
+        c.execute(candidates.update().where(candidates.c.id=='status-pending').values(
+            personalization_quality_status='UNVERIFIED',personalization_quality_errors='[]'))
+        # Invitation status has precedence even if a later quality audit fails.
+        c.execute(candidates.update().where(candidates.c.id=='status-invited').values(
+            personalization_quality_status='FAIL',personalization_quality_errors='[\"INSUFFICIENT_EVIDENCE\"]'))
+    listed=list_candidates(db,{},1,100)
+    by_id={row['id']:row for row in listed['rows']}
+    assert {ident:by_id[ident]['primary_status'] for ident in (
+        'status-ready','status-no-contact','status-invited','status-pending','status-blocked')}=={
+        'status-ready':'READY_TO_INVITE','status-no-contact':'PERSONALIZED_NO_CONTACT',
+        'status-invited':'ALREADY_INVITED','status-pending':'PENDING_PERSONALIZATION','status-blocked':'BLOCKED'}
+    assert by_id['status-ready']['eligible'] is True
+    assert listed['completed_personalization_count']==3
+    assert sum(listed['status_counts'].values())==5
+    assert list_candidates(db,{'primary_status':'READY_TO_INVITE'})['total']==1
+    assert list_candidates(db,{'primary_status':'ALREADY_INVITED'})['total']==1
+    assert list_candidates(db,{'completed_personalization':'1'})['total']==3
+
 @pytest.mark.parametrize('ident,name,website,summary,detail,relevance', [
     ('geoairesume-owner-test-v1','GeoAIResume controlled test website','https://geo-ai-resume.vercel.app',
      'GeoAIResume is a test website demonstrating how an AI-assisted resume platform can present its features, workflows, and product information to visitors.',
@@ -131,9 +161,10 @@ def test_owner_fixture_batch_generation_uses_exact_synthetic_policy_without_muta
             created_by='unit-test',created_at=now()))
 
     listed=list_candidates(db,{'q':name})
-    assert listed['eligible_matching']==1
-    assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is True
-    assert listed['rows'][0]['owner_test_fixture_ready'] is True
+    assert listed['eligible_matching']==0
+    assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is False
+    assert listed['rows'][0]['primary_status']=='BLOCKED'
+    assert listed['rows'][0]['status_reason'].startswith('This is an owner-controlled test fixture')
 
     result=generate(db,{'ids':[ident]},'owner-fixture-invitation-'+ident)
     assert result['pilot_review_status']=='PENDING_REVIEW'
@@ -220,7 +251,8 @@ def test_two_recipient_package_and_exact_binding(db):
         assert r['questionnaire_url'] in preview_text and r['bulk_subject'] in preview_text
     with db.transaction() as c:
         saved=c.execute(select(invitations).order_by(invitations.c.candidate_id)).mappings().all()
-        assert [json.loads(x['authority'])['method'] for x in saved]==['OWNER_BINDING','OWNER_BINDING']
+        assert [json.loads(x['authority'])['method'] for x in saved]==[
+            'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN']
         assert [x['website'] for x in saved]==['https://geo-ai-resume.vercel.app','https://whisker-haven-demo.vercel.app/']
     assert batch['send_status']=='UNVERIFIED'
     assert invite(db,['a','b'])['package']==batch['package']

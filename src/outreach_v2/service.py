@@ -1,41 +1,77 @@
 from __future__ import annotations
 import hashlib,json,secrets,uuid
-from sqlalchemy import select,func,and_,or_,exists
+from sqlalchemy import select,func,and_,or_,exists,case
 from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, synthetic_fixture_copy
 from outreach_agent.google_forms_integration import prefilled_form_url
 
-FILTERS={'kind','industry','location','website_status','contact','eligibility','personalization_status','invitation_status','consent_status','research_status','q'}
+FILTERS={'kind','industry','location','contact','primary_status','completed_personalization','q'}
 
 def email_contacts():
     # This is a prefilter, not the final email/evidence validation at generation.
     first_party=or_(*[contacts.c.source_url.like(prefix+candidates.c.domain+'/%') for prefix in ('https://','http://','https://www.','http://www.')],
                     *[contacts.c.source_url==prefix+candidates.c.domain for prefix in ('https://','http://','https://www.','http://www.')])
-    return and_(contacts.c.candidate_id==candidates.c.id,contacts.c.email.like('%@%.%'),contacts.c.suppressed.is_(False),
-                contacts.c.verification.not_in(['REJECTED','SUPPRESSED','INVALID']),
+    purpose=func.coalesce(contacts.c.purpose,'')
+    personal_or_restricted=or_(*[purpose.ilike('%'+term+'%') for term in ('privacy','career','recruit','personal','legal','abuse')])
+    return and_(contacts.c.candidate_id==candidates.c.id,contacts.c.email.like('%@%.%'),contacts.c.email.not_like('% %'),contacts.c.suppressed.is_(False),
+                or_(contacts.c.verification.is_(None),contacts.c.verification.not_in(['REJECTED','SUPPRESSED','INVALID'])),
                 or_(first_party, and_(candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED')),
-                ~exists(select(suppressions.c.email).where(suppressions.c.email==contacts.c.email)))
+                ~personal_or_restricted,
+                ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
 
-def readiness():
-    standard_copy=and_(candidates.c.personalization_quality_status=='PASS',
-        candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0,
-        select(func.count(func.distinct(contacts.c.email))).where(email_contacts()).correlate(candidates).scalar_subquery()==1)
-    fixture_copies=[]
-    for ident, fixture in OWNER_TEST_FIXTURES.items():
-        authorized_owner=exists(select(contacts.c.id).where(contacts.c.candidate_id==candidates.c.id,
-            contacts.c.email==fixture['recipient'],contacts.c.verification=='OWNER_AUTHORIZED',
-            contacts.c.suppressed.is_(False),
-            ~exists(select(suppressions.c.email).where(suppressions.c.email==contacts.c.email))))
-        fixture_copies.append(and_(candidates.c.id==ident,candidates.c.website==fixture['website'],
-            candidates.c.fixture.is_(True),candidates.c.personalization.like('%'+SYNTHETIC_CLASSIFICATION+'%'),
-            select(func.count()).where(contacts.c.candidate_id==candidates.c.id).correlate(candidates).scalar_subquery()==1,
-            authorized_owner))
-    safe_copy=or_(standard_copy,*fixture_copies)
-    return and_(candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
-        candidates.c.suppressed.is_(False),candidates.c.personalization_status=='READY',safe_copy,
-        ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
+def completed_personalization():
+    """The persisted semantic quality result is authoritative; legacy READY is a cache."""
+    return and_(candidates.c.personalization_quality_status=='PASS',
+        candidates.c.personalization_analysis_version=='semantic-openai-v1',
+        candidates.c.personalization_version>0,candidates.c.fixture.is_(False))
+
+def authorized_email_count():
+    return select(func.count(func.distinct(func.lower(contacts.c.email)))).where(email_contacts()).correlate(candidates).scalar_subquery()
+
+def has_invitation():
+    return exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
+
+def primary_status_expression():
+    """Mutually exclusive business status derived from persisted facts, never stored."""
+    completed=completed_personalization()
+    blocked=or_(candidates.c.suppressed.is_(True),candidates.c.fixture.is_(True),
+        candidates.c.website_status.is_distinct_from('VERIFIED'),
+        candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+        candidates.c.personalization_quality_status=='FAIL')
+    contact_count=authorized_email_count()
+    return case(
+        (has_invitation(),'ALREADY_INVITED'),
+        (blocked,'BLOCKED'),
+        (~completed,'PENDING_PERSONALIZATION'),
+        (contact_count==0,'PERSONALIZED_NO_CONTACT'),
+        (contact_count>1,'BLOCKED'),
+        else_='READY_TO_INVITE')
+
+STATUS_LABELS={
+    'READY_TO_INVITE':'Ready to Invite',
+    'PERSONALIZED_NO_CONTACT':'Personalized · No Contact',
+    'ALREADY_INVITED':'Already Invited',
+    'PENDING_PERSONALIZATION':'Pending Personalization',
+    'BLOCKED':'Blocked',
+}
+
+def status_reason(row, status):
+    if status=='ALREADY_INVITED': return 'An invitation already exists for this business.'
+    if status=='BLOCKED':
+        if row.get('suppressed'): return 'This business is suppressed.'
+        if row.get('fixture'): return 'This is an owner-controlled test fixture, not a real business record.'
+        if row.get('website_status') in {'IDENTITY_MISMATCH','AMBIGUOUS_IDENTITY'}: return 'The website identity does not match this business; verify the official domain.'
+        if row.get('website_status')!='VERIFIED': return 'Verify the official website and business identity.'
+        if row.get('qualification') not in {'ELIGIBLE','QUALIFIED'}: return 'The business has not passed qualification.'
+        if row.get('personalization_quality_status')=='FAIL': return 'Personalization did not pass its evidence quality checks.'
+        return 'More than one authorized business email is available; resolve recipient ambiguity.'
+    if status=='PENDING_PERSONALIZATION':
+        if row.get('personalization_quality_status')=='FAIL': return 'Personalization did not pass its evidence quality checks.'
+        return 'Complete and quality-check evidence-backed personalization.'
+    if status=='PERSONALIZED_NO_CONTACT': return 'Personalization passed; add one verified, authorized business email to prepare an invitation.'
+    return 'Ready for invitation preparation.'
 
 def owner_test_recipient_authorized(c, row, recipient):
     """Recheck the exact fixture's saved owner binding at every invitation gate."""
@@ -77,34 +113,31 @@ def predicates(filters):
             term='%'+str(value).replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
             clauses.append(or_(candidates.c.name.ilike(term,escape='\\'),candidates.c.website.ilike(term,escape='\\')))
         elif key in {'industry','location'}:clauses.append(getattr(candidates.c,key).ilike('%'+str(value).replace('%','\\%').replace('_','\\_')+'%',escape='\\'))
-        elif key in {'kind','website_status','personalization_status'}:clauses.append(getattr(candidates.c,key)==value)
+        elif key=='kind':clauses.append(candidates.c.kind==value)
         elif key=='contact':
             condition=exists(select(contacts.c.id).where(contacts.c.candidate_id==candidates.c.id,
                 contacts.c.email!='' if value=='email' else contacts.c.url!=''))
             clauses.append(~condition if value=='none' else condition)
-        elif key=='eligibility':clauses.append(readiness() if value=='eligible' else ~readiness())
-        elif key=='invitation_status':
-            condition=exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
-            if value=='NOT_GENERATED':clauses.append(~condition)
-            elif value=='EXPORTED':clauses.append(exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id,invitations.c.exported_at.is_not(None))))
-            else:clauses.append(exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id,invitations.c.send_status==value)))
-        elif key=='consent_status':clauses.append(exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id,invitations.c.consent_status==value)))
-        elif key=='research_status':clauses.append(exists(select(jobs.c.id).join(invitations).where(invitations.c.candidate_id==candidates.c.id,jobs.c.status==value)))
+        elif key=='primary_status':
+            if value not in STATUS_LABELS: raise ValueError('Unknown primary status')
+            clauses.append(primary_status_expression()==value)
+        elif key=='completed_personalization' and value=='1':clauses.append(completed_personalization())
     return clauses
 
 def list_candidates(db,filters=None,page=1,page_size=50):
     filters=filters or {};page=max(1,page);page_size=max(1,min(page_size,100));clauses=predicates(filters)
     with db.transaction() as c:
         total=c.scalar(select(func.count()).select_from(candidates).where(*clauses))
-        eligible=c.scalar(select(func.count()).select_from(candidates).where(*clauses,readiness()))
-        query=select(candidates,readiness().label('eligible')).where(*clauses).order_by(candidates.c.name,candidates.c.id).limit(page_size).offset((page-1)*page_size)
+        status=primary_status_expression()
+        eligible=c.scalar(select(func.count()).select_from(candidates).where(*clauses,status=='READY_TO_INVITE'))
+        completed_count=c.scalar(select(func.count()).select_from(candidates).where(completed_personalization()))
+        status_counts={key:c.scalar(select(func.count()).select_from(candidates).where(status==key)) or 0 for key in STATUS_LABELS}
+        query=select(candidates,status.label('primary_status')).where(*clauses).order_by(candidates.c.name,candidates.c.id).limit(page_size).offset((page-1)*page_size)
         rows=[dict(r) for r in c.execute(query).mappings()]
         for row in rows:
-            p=parse(row['personalization'])
-            row['owner_test_fixture_ready']=bool(row['eligible'] and synthetic_fixture_copy(row,p))
-            standard_personalization=(row.get('personalization_quality_status')=='PASS' and
-                row.get('personalization_analysis_version')=='semantic-openai-v1' and int(row.get('personalization_version') or 0)>0)
-            row['eligible']=bool(row['eligible'] and (row['owner_test_fixture_ready'] or standard_personalization))
+            row['status_label']=STATUS_LABELS[row['primary_status']]
+            row['status_reason']=status_reason(row,row['primary_status'])
+            row['eligible']=row['primary_status']=='READY_TO_INVITE'
             row.pop('personalization',None)
             row['contacts']=[dict(x) for x in c.execute(select(contacts.c.email,contacts.c.url,contacts.c.verification).where(contacts.c.candidate_id==row['id'])).mappings()]
             row['invitation']=c.execute(select(invitations.c.id,invitations.c.send_status,invitations.c.consent_status,invitations.c.exported_at).where(invitations.c.candidate_id==row['id'])).mappings().first()
@@ -120,13 +153,21 @@ def list_candidates(db,filters=None,page=1,page_size=50):
                     .join(jobs, reports.c.job_id==jobs.c.id)
                     .where(jobs.c.invitation_id==row['invitation']['id'])
                 )
-        return {'rows':rows,'total':total,'eligible_matching':eligible,'page':page,'page_size':page_size}
+        return {'rows':rows,'total':total,'eligible_matching':eligible,'completed_personalization_count':completed_count,
+            'status_counts':status_counts,'page':page,'page_size':page_size}
 
 def detail(db,ident):
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().first()
         if not row:raise LookupError('Candidate not found')
         row=dict(row);row['personalization']=parse(row['personalization'])
+        # The exact same derived status expression powers the table, filters, and detail view.
+        row['primary_status']=c.scalar(select(primary_status_expression()).where(candidates.c.id==ident))
+        row['status_label']=STATUS_LABELS[row['primary_status']]
+        row['status_reason']=status_reason(row,row['primary_status'])
+        row['invitation']=c.execute(select(invitations.c.id,invitations.c.send_status,invitations.c.consent_status,
+            invitations.c.exported_at).where(invitations.c.candidate_id==ident)).mappings().first()
+        row['invitation']=dict(row['invitation']) if row['invitation'] else None
         row['contacts']=[dict(r) for r in c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings()]
         from .db import source_rows
         row['evidence']=[dict(r) for r in c.execute(select(source_rows.c.source_id,source_rows.c.source_key,source_rows.c.raw).where(source_rows.c.candidate_id==ident).limit(30)).mappings()]
@@ -271,7 +312,7 @@ def generate(db,selection,key):
             if prior['selection_hash']!=selection_hash:raise ValueError('Request key belongs to a different selection')
             return dict(prior)
         if selection.get('all_matching'):
-            query=select(candidates).where(*predicates(selection.get('filters') or {}),readiness()).order_by(candidates.c.id)
+            query=select(candidates).where(*predicates(selection.get('filters') or {}),primary_status_expression()=='READY_TO_INVITE').order_by(candidates.c.id)
         else:
             ids=selection.get('ids') or []
             if not ids:raise ValueError('Select at least one company')
@@ -332,8 +373,8 @@ def dashboard(db):
         run=c.execute(select(worker_runs).order_by(worker_runs.c.started_at.desc()).limit(1)).mappings().first()
         return {'companies':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='company')),
                 'hotels':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='hotel')),
-                'eligible':c.scalar(select(func.count()).select_from(candidates).where(readiness())),
-                'personalization_ready':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.personalization_status=='READY')),
+                'ready_to_invite':c.scalar(select(func.count()).select_from(candidates).where(primary_status_expression()=='READY_TO_INVITE')),
+                'completed_personalization':c.scalar(select(func.count()).select_from(candidates).where(completed_personalization())),
                 'invitations_exported':c.scalar(select(func.count()).select_from(invitations).where(invitations.c.exported_at.is_not(None))),
                 'form_responses':c.scalar(select(func.count()).select_from(submissions)),
                 'authorized_jobs':c.scalar(select(func.count()).select_from(jobs)),

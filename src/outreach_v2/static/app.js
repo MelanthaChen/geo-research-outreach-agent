@@ -74,9 +74,9 @@ async function loadPersonalizationBatch(other,quiet=false){
   if(data.recoverable_no_progress){const resume=el('button','Resume after selector repair');resume.onclick=async()=>{resume.disabled=true;try{await api(`admin/personalization/batch/${encodeURIComponent(data.authorization_id)}/resume`,{method:'POST',body:'{}'});message('Recovered the same approved batch after the selector repair. No new authorization was created.');await loadPersonalizationBatch(other)}catch(e){message(e.message);resume.disabled=false}};controls.append(resume)}
  }
  if(controls.childNodes.length)card.append(controls);other.append(card);
+ await loadHistoricalScreeningCampaign(other);
  await loadReplacementPersonalizationBatch(other);
  await loadFinalFillPersonalizationBatch(other);
- await loadHistoricalScreeningCampaign(other);
  if(['RUNNING'].includes(data.status)){clearInterval(batchPoll);batchPoll=setInterval(()=>{if(current==='gpt-personalization')loadPersonalizationBatch(other,true)},5000)}
 }
 

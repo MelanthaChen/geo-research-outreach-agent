@@ -867,11 +867,13 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                 'reason':'Approved candidate authorization must be a single-candidate limit no greater than $0.05.'}
         run_budget=min(run_budget,approved_candidate)
     if approved_cohort is not None:
-        if (not Decimal('0') < approved_cohort <= Decimal('2.50') or len(approved_cohort_ids) != 50
+        valid_scope=(len(approved_cohort_ids)==10 and approved_cohort==Decimal('0.50')) or (
+            len(approved_cohort_ids)==50 and approved_cohort==Decimal('2.50'))
+        if (not valid_scope
                 or not set(authorized_ids).issubset(set(approved_cohort_ids))
                 or approved_candidate is not None):
             return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
-                'reason':'Approved replacement-cohort authorization must bind the exact 50-candidate scope and remain within $2.50.'}
+                'reason':'Approved cohort authorization must bind either the exact 10-candidate $0.50 final-fill scope or exact 50-candidate $2.50 replacement scope.'}
     configured_limit = int(os.environ.get('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN', str(limit)))
     if not 1 <= configured_limit <= MAX_PILOT_CANDIDATES:
         return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,'completed':0,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 import hmac,json,os,uuid,hashlib,secrets,re,csv,io
+import unicodedata
+from urllib.parse import urlparse
 from datetime import datetime,timedelta,timezone
 from decimal import Decimal
 from pathlib import Path
@@ -48,6 +50,136 @@ def _persisted_replacement_manifest(connection):
             or hashlib_ids(ids)!=REPLACEMENT_MANIFEST_SHA256):
         raise ValueError('The persisted 50-candidate replacement manifest failed its integrity check')
     return ids
+
+def _normalized_identity(value):
+    value=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode().casefold()
+    return re.sub(r'[^a-z0-9]+','',value)
+
+def _persisted_final_fill_manifest(connection):
+    from .personalization_batch import FINAL_FILL_CANDIDATE_IDS,hashlib_ids
+    ids=list(FINAL_FILL_CANDIDATE_IDS)
+    digest=hashlib_ids(ids)
+    event_id=f'final-fill-{digest}:manifest'
+    detail=connection.execute(select(events.c.detail).where(
+        events.c.id==event_id,events.c.event=='PERSONALIZATION_FINAL_FILL_COHORT_MANIFEST_CREATED'
+    )).scalar_one_or_none()
+    if not detail:
+        return None
+    try: payload=json.loads(detail)
+    except (TypeError,ValueError): payload={}
+    if (payload.get('scope')!='FINAL_FILL_10' or payload.get('candidate_ids')!=ids
+        or payload.get('manifest_sha256')!=digest or payload.get('candidate_count')!=10
+        or payload.get('kind_breakdown')!={'company':5,'hotel':5}
+        or len(payload.get('qualifications',[]))!=10):
+        raise ValueError('The final-fill manifest failed its immutable integrity check')
+    return payload
+
+def _capture_final_fill_manifest(db):
+    """Re-check exact identities, deduplication, first-party evidence and persist one immutable manifest."""
+    from .personalization_batch import FINAL_FILL_CANDIDATE_IDS,hashlib_ids
+    from .personalization import _sample,fetch_page
+    from .template import same_site
+    ids=list(FINAL_FILL_CANDIDATE_IDS);digest=hashlib_ids(ids)
+    event_id=f'final-fill-{digest}:manifest'
+    with db.transaction() as c:
+        existing=_persisted_final_fill_manifest(c)
+        if existing:return existing
+        rows=c.execute(select(candidate_table).where(candidate_table.c.id.in_(ids))).mappings().all()
+        by_id={row['id']:dict(row) for row in rows}
+        if set(by_id)!=set(ids):raise ValueError('The exact final-fill selection contains a missing Neon candidate')
+        if _existing_100_manifest_ids(c).intersection(ids):raise ValueError('A final-fill candidate overlaps the immutable original 100-ID cohort')
+        replacement=_persisted_replacement_manifest(c)
+        if set(replacement).intersection(ids):raise ValueError('A final-fill candidate overlaps the immutable 50-ID replacement cohort')
+        authorized_ids=set()
+        for raw in c.execute(select(personalization_authorizations.c.candidate_ids)).scalars():
+            try: authorized_ids.update(json.loads(raw))
+            except (TypeError,ValueError):continue
+        if authorized_ids.intersection(ids):raise ValueError('A final-fill candidate already belongs to a prior personalization authorization')
+        passes=c.execute(select(candidate_table.c.name,candidate_table.c.domain,candidate_table.c.website).where(
+            candidate_table.c.personalization_analysis_version=='semantic-openai-v1',
+            candidate_table.c.personalization_quality_status=='PASS')).mappings().all()
+        passed_names={_normalized_identity(row['name']) for row in passes}
+        passed_domains={_normalized_identity(row['domain'] or urlparse(row['website'] or '').hostname) for row in passes}
+        names=[];domains=[]
+        for ident in ids:
+            row=by_id[ident]
+            if (row['kind'] not in {'company','hotel'} or row['fixture'] or row['suppressed']
+                or row['website_status']!='VERIFIED' or row['qualification'] not in {'ELIGIBLE','QUALIFIED'}
+                or not row['website'] or not row['domain']):
+                raise ValueError(f'Candidate {ident} no longer meets verified, eligible, unsuppressed company/hotel criteria')
+            n=_normalized_identity(row['name']);d=_normalized_identity(row['domain'] or urlparse(row['website']).hostname)
+            if not n or not d or n in names or d in domains or n in passed_names or d in passed_domains:
+                raise ValueError(f'Candidate {ident} duplicates a normalized name or domain in the saved PASS records or final-fill set')
+            names.append(n);domains.append(d)
+            if c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id==ident)):
+                raise ValueError(f'Candidate {ident} has existing invitation/contact history')
+            if c.scalar(select(func.count()).select_from(personalization_attempts).where(personalization_attempts.c.candidate_id==ident)):
+                raise ValueError(f'Candidate {ident} has a prior provider attempt; it cannot enter the final-fill manifest')
+            if c.scalar(select(func.count()).select_from(candidate_table).where(
+                candidate_table.c.id==ident,candidate_table.c.personalization_analysis_version=='semantic-openai-v1',
+                candidate_table.c.personalization_quality_status=='PASS')):
+                raise ValueError(f'Candidate {ident} already has a semantic PASS')
+            stamp=now()
+            if ((row['personalization_retry_after'] and row['personalization_retry_after']>stamp)
+                or (row['personalization_lease_until'] and row['personalization_lease_until']>stamp)):
+                raise ValueError(f'Candidate {ident} has a future retry restriction or active lease')
+    qualifications=[]
+    offering=re.compile(r'\b(product|service|offer|shop|store|restaurant|coffee|bakery|repair|refurbish|bike|theatre|theater|concert|show|ticket|playhouse|room|guest|hotel|inn|lodging|dining|menu|accommodation|spa|massage|fitness|event|wedding|yurt|breakfast|art|jewelry|clothing|gift|experience|tour|manufacturer|platform|transport|video|system|solution|catering|retreat|stay)\b',re.I)
+    for ident in ids:
+        row=by_id[ident]
+        try:
+            sample=_sample(fetch_page,row['website'],now(),name=row['name'])
+        except Exception as exc:
+            raise ValueError(f'First-party website acquisition failed for {row["name"]} ({ident}): {type(exc).__name__}') from exc
+        profile=sample.get('evidence_profile') or {}
+        pages=profile.get('pages') or []
+        facts=profile.get('facts') or []
+        source_urls=list(dict.fromkeys(str(x) for x in (sample.get('evidence') or {}).get('sampled_urls',[]) if x))
+        if not pages or not source_urls or any(not same_site(row['website'],url) for url in source_urls):
+            raise ValueError(f'First-party site identity or same-domain verification failed for {row["name"]} ({ident})')
+        host_parts=(urlparse(row['website']).hostname or '').lower().removeprefix('www.').split('.')
+        domain_brand=_normalized_identity(host_parts[0] if host_parts else '')
+        stopwords={'the','and','inc','llc','ltd','corp','corporation','company','co','hotel','inn','resort','restaurant','systems','services'}
+        name_tokens=[_normalized_identity(token) for token in re.findall(r'[A-Za-z0-9]+',row['name'])]
+        name_tokens=[token for token in name_tokens if len(token)>=3 and token not in stopwords]
+        page_text=' '.join([*(p.get('title','') for p in pages),*(f.get('statement','') for f in facts)])
+        page_key=_normalized_identity(page_text)
+        if not ((domain_brand and domain_brand in page_key) or any(token in page_key for token in name_tokens)):
+            raise ValueError(f'Fresh first-party content no longer identifies {row["name"]} on its verified domain')
+        cited=[]
+        for fact in facts:
+            statement=' '.join(str(fact.get('statement') or '').split())
+            urls=[str(u) for u in fact.get('source_urls',[]) if same_site(row['website'],str(u))]
+            if len(statement)>=40 and urls:
+                cited.append({'evidence_id':fact.get('id'),'statement':statement[:900],
+                    'source_url':urls[0],'source_title':str(fact.get('source_title') or '')[:300]})
+        usable=[fact for fact in cited if offering.search(fact['statement'])]
+        if len(cited)<2 or not usable:
+            raise ValueError(f'Insufficient first-party offering evidence for {row["name"]} ({ident})')
+        qualifications.append({'candidate_id':ident,'name':row['name'],'kind':row['kind'],
+            'normalized_name':_normalized_identity(row['name']),'official_domain':row['domain'],
+            'normalized_domain':_normalized_identity(row['domain']),'official_website':row['website'],
+            'website_identity_status_before_crawl':row['website_status'],'qualification':row['qualification'],
+            'dedup_checks':{'prior_100_or_50_manifest':False,'prior_authorization':False,
+                'semantic_pass_name_or_domain':False,'existing_invitation':False,'existing_provider_attempt':False,
+                'suppressed':False,'fixture':False},
+            'source_urls':source_urls,'page_titles':[str(p.get('title') or '')[:300] for p in pages],
+            'evidence_ids':[fact['evidence_id'] for fact in cited],
+            'evidence_facts':cited[:12],'supported_offering_fact_ids':[fact['evidence_id'] for fact in usable[:8]],
+            'selection_provenance':'Existing Neon candidate pool; verified website, eligible qualification, no suppression, prior invitation, prior provider attempt, existing authorization, PASS name/domain duplicate, fixture, retry restriction, or active lease; selected from pre-crawled bounded first-party evidence.'})
+    kinds={'company':sum(1 for row in by_id.values() if row['kind']=='company'),
+           'hotel':sum(1 for row in by_id.values() if row['kind']=='hotel')}
+    if kinds!={'company':5,'hotel':5}:raise ValueError('Final-fill selection must remain exactly five companies and five hotels')
+    payload={'scope':'FINAL_FILL_10','candidate_ids':ids,'candidate_count':10,
+        'manifest_sha256':digest,'kind_breakdown':kinds,'acquisition_source':'EXISTING_NEON_POOL',
+        'analysis_version':'semantic-openai-v1','created_at':now(),'qualifications':qualifications}
+    with db.transaction(serialized=True) as c:
+        existing=_persisted_final_fill_manifest(c)
+        if existing:return existing
+        c.execute(events.insert().values(id=event_id,entity_id=event_id,
+            event='PERSONALIZATION_FINAL_FILL_COHORT_MANIFEST_CREATED',
+            detail=json.dumps(payload,sort_keys=True,separators=(',',':')),created_at=payload['created_at']))
+    return payload
 
 def create_app(database=None):
     app=FastAPI(title='GEO Research Outreach',docs_url=None,redoc_url=None,openapi_url=None)
@@ -654,15 +786,20 @@ def create_app(database=None):
             raise ValueError('Provide exact candidate_ids and total_budget_usd')
         ids=list(dict.fromkeys(str(x).strip() for x in body['candidate_ids'] if str(x).strip()))
         if len(ids)!=len(body['candidate_ids']): raise ValueError('Candidate authorization IDs must be non-empty and unique')
-        if len(ids) not in {1,50,100}: raise ValueError('Authorization must name one pilot candidate, the exact 50-candidate replacement manifest, or the existing 100-candidate cohort')
+        if len(ids) not in {1,10,50,100}: raise ValueError('Authorization must name one pilot candidate, the exact 10-candidate final-fill manifest, the exact 50-candidate replacement manifest, or the existing 100-candidate cohort')
         from decimal import Decimal,InvalidOperation
         try: amount=Decimal(str(body['total_budget_usd']))
         except (InvalidOperation,TypeError): raise ValueError('Budget must be a decimal USD amount')
         one_candidate=len(ids)==1
+        final_fill_cohort=len(ids)==10
         replacement_cohort=len(ids)==50
-        if not amount.is_finite() or (one_candidate and not Decimal('0')<amount<=Decimal('0.05')) or (replacement_cohort and amount!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<amount<=Decimal('5.00')):
-            raise ValueError('One-candidate authorization is limited to $0.05, the exact 50-candidate replacement cohort is fixed at $2.50, and the existing 100-candidate cohort is limited to $5.00')
+        if not amount.is_finite() or (one_candidate and not Decimal('0')<amount<=Decimal('0.05')) or (final_fill_cohort and amount!=Decimal('0.50')) or (replacement_cohort and amount!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<amount<=Decimal('5.00')):
+            raise ValueError('One-candidate authorization is limited to $0.05, the exact 10-candidate final-fill cohort to $0.50, the exact 50-candidate replacement cohort to $2.50, and the existing 100-candidate cohort to $5.00')
         with db.transaction() as c:
+            if final_fill_cohort:
+                manifest=_persisted_final_fill_manifest(c)
+                if not manifest or ids!=manifest['candidate_ids']:
+                    raise ValueError('A 10-candidate authorization must match the exact persisted final-fill manifest and order')
             if replacement_cohort and ids!=_persisted_replacement_manifest(c):
                 raise ValueError('A 50-candidate authorization must match the exact persisted replacement manifest and order')
             rows=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
@@ -692,6 +829,27 @@ def create_app(database=None):
                     total+=row_cost
                 if total+amount>Decimal('5.00'):
                     raise ValueError('The new replacement authorization would exceed the existing $5.00 global cumulative provider-spend ceiling')
+            if final_fill_cohort:
+                from .personalization_batch import eligibility
+                if c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) != 10:
+                    raise ValueError('All ten final-fill candidates must remain eligible before authorizing the exact manifest')
+                if c.scalar(select(func.count()).select_from(personalization_attempts).where(personalization_attempts.c.candidate_id.in_(ids))):
+                    raise ValueError('Final-fill candidates with any prior provider attempt cannot receive a new authorization')
+                existing_members=set()
+                for raw in c.execute(select(personalization_authorizations.c.candidate_ids)).scalars():
+                    try: existing_members.update(json.loads(raw))
+                    except (TypeError,ValueError): continue
+                if existing_members.intersection(ids):
+                    raise ValueError('Final-fill candidates overlap a previous personalization authorization')
+                ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                    personalization_attempts.c.actual_cost_usd)).all()
+                total=Decimal('0')
+                for item in ledger:
+                    cost=Decimal(str(item.actual_cost_usd or 0))
+                    if item.status in {'UNKNOWN_SPEND','RESERVED'}:cost=max(cost,Decimal(str(item.reserved_usd or 0)))
+                    total+=cost
+                if total+amount>Decimal('5.00'):
+                    raise ValueError('The final-fill authorization would exceed the existing $5.00 global cumulative provider-spend ceiling')
             if one_candidate:
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0])).mappings().one()
                 if candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0':
@@ -715,7 +873,7 @@ def create_app(database=None):
                 candidate_ids_sha256=digest,total_budget_usd=str(amount),status='PENDING',
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
-                detail=json.dumps({'candidate_count':len(ids),'scope':'ONE_CANDIDATE' if one_candidate else 'REPLACEMENT_COHORT_50' if replacement_cohort else 'COHORT_100',
+                detail=json.dumps({'candidate_count':len(ids),'scope':'ONE_CANDIDATE' if one_candidate else 'FINAL_FILL_10' if final_fill_cohort else 'REPLACEMENT_COHORT_50' if replacement_cohort else 'COHORT_100',
                     'candidate_ids_sha256':digest,'total_budget_usd':str(amount),
                     'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
         return {'id':ident,'candidate_count':len(ids),'candidate_ids_sha256':digest,'total_budget_usd':str(amount),'status':'PENDING'}
@@ -737,6 +895,137 @@ def create_app(database=None):
                 .order_by(candidate_table.c.id)).mappings().all()
             saved_members=_existing_100_manifest_ids(c)
         return {'rows':[dict(row) for row in rows if row['id'] in saved_members]}
+
+    @app.get('/api/admin/personalization/final-fill')
+    def final_fill_personalization_status(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        from .personalization_batch import (FINAL_FILL_CANDIDATE_IDS,MAX_FINAL_FILL_BUDGET_USD,
+            MAX_PER_CANDIDATE_USD,eligibility,hashlib_ids,progress,_manifest)
+        digest=hashlib_ids(list(FINAL_FILL_CANDIDATE_IDS))
+        with db.transaction() as c:
+            manifest=_persisted_final_fill_manifest(c)
+            preview=c.execute(select(candidate_table.c.id,candidate_table.c.name,candidate_table.c.kind,
+                candidate_table.c.domain,candidate_table.c.website,candidate_table.c.website_status,
+                candidate_table.c.qualification).where(candidate_table.c.id.in_(FINAL_FILL_CANDIDATE_IDS))).mappings().all()
+            if manifest:
+                grants=c.execute(select(personalization_authorizations).where(
+                    personalization_authorizations.c.candidate_ids_sha256==digest,
+                    personalization_authorizations.c.status.in_(['PENDING','APPROVED','RUNNING','PAUSED','COMPLETED','ATTENTION_REQUIRED'])
+                ).order_by(personalization_authorizations.c.created_at.desc())).mappings().all()
+                if len(grants)>1:raise ValueError('Multiple final-fill authorizations exist; administrator reconciliation is required')
+                eligible_count=c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(list(FINAL_FILL_CANDIDATE_IDS)))) or 0
+                ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                    personalization_attempts.c.actual_cost_usd)).all()
+                global_spend=Decimal('0')
+                for item in ledger:
+                    cost=Decimal(str(item.actual_cost_usd or 0))
+                    if item.status in {'UNKNOWN_SPEND','RESERVED'}:cost=max(cost,Decimal(str(item.reserved_usd or 0)))
+                    global_spend+=cost
+            else:
+                grants=[];eligible_count=0;global_spend=Decimal('0')
+        grant=grants[0] if grants else None
+        if grant:
+            with db.transaction() as c: ids=_manifest(grant,c)
+            result=progress(db,grant,ids);budget=Decimal(grant['total_budget_usd'])
+            auth_status=grant['status']
+        else:
+            result={'authorization_id':None,'status':'MANIFEST_NOT_AUTHORIZED' if manifest else 'MANIFEST_NOT_CREATED',
+                'candidate_count':10,'processed':0,'eligible_remaining':int(eligible_count),
+                'quality_pass':0,'quality_fail':0,'provider_attempts':0,'actual_cost_usd':'0',
+                'unresolved_reserved_usd':'0','runner_active':False,'execution_state':'NOT_AUTHORIZED',
+                'last_checkpoint_at':None,'last_checkpoint':None,'heartbeat_at':None,'heartbeat':None,'next_retry_at':None}
+            budget=MAX_FINAL_FILL_BUDGET_USD;auth_status='NOT_AUTHORIZED'
+        global_headroom=max(Decimal('0'),Decimal('5.00')-global_spend)
+        estimate=min(MAX_PER_CANDIDATE_USD*int(eligible_count),MAX_FINAL_FILL_BUDGET_USD,
+            max(Decimal('0'),budget-Decimal(result.get('actual_cost_usd','0'))-Decimal(result.get('unresolved_reserved_usd','0'))),
+            global_headroom)
+        result.update({'candidate_count':10,'manifest_sha256':digest,
+            'kind_breakdown':{'company':5,'hotel':5},'manifest':manifest,
+            'candidate_preview':[dict(row) for row in preview],
+            'eligible_count':int(eligible_count),'estimated_max_cost_usd':str(estimate),
+            'total_budget_cap_usd':'0.50','global_cumulative_cap_usd':'5.00',
+            'global_spend_including_reservations_usd':str(global_spend),
+            'authorization_status':auth_status,'authorization_created_by':grant['created_by'] if grant else None,
+            'approved_by':grant['approved_by'] if grant else None,'approved_at':grant['approved_at'] if grant else None})
+        return result
+
+    @app.post('/api/admin/personalization/final-fill/manifest')
+    async def create_final_fill_manifest(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or body!={'confirm_manifest':True}:
+            raise ValueError('Confirm creation of the exact preselected 10-candidate final-fill manifest')
+        manifest=await run_in_threadpool(_capture_final_fill_manifest,db)
+        return {'status':'MANIFEST_CREATED','candidate_count':manifest['candidate_count'],
+            'candidate_ids':manifest['candidate_ids'],'manifest_sha256':manifest['manifest_sha256'],
+            'kind_breakdown':manifest['kind_breakdown'],'qualifications':manifest['qualifications'],
+            'paid_requests_made':0}
+
+    @app.post('/api/admin/personalization/final-fill/start')
+    async def start_final_fill_batch(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if (not isinstance(body,dict) or set(body)!={'candidate_ids_sha256','eligible_count','confirm_budget'}
+            or body.get('confirm_budget') is not True):
+            raise ValueError('Confirm the exact 10-candidate manifest and $0.50 maximum final-fill authorization')
+        from .personalization_batch import (FINAL_FILL_CANDIDATE_IDS,MAX_FINAL_FILL_BUDGET_USD,
+            MAX_PER_CANDIDATE_USD,eligibility,hashlib_ids,launch,progress,_manifest)
+        ids=list(FINAL_FILL_CANDIDATE_IDS);digest=hashlib_ids(ids)
+        if body['candidate_ids_sha256']!=digest:
+            raise ValueError('The requested final-fill manifest hash does not match the immutable saved cohort')
+        ident=None;stamp=None
+        with db.transaction(serialized=True) as c:
+            manifest=_persisted_final_fill_manifest(c)
+            if not manifest or ids!=manifest['candidate_ids']:
+                raise ValueError('Create and verify the immutable final-fill manifest before starting its batch')
+            eligible_count=int(c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids))) or 0)
+            if eligible_count!=body['eligible_count'] or eligible_count<=0:
+                raise ValueError('Final-fill eligibility changed since preview; refresh before starting')
+            estimated=MAX_PER_CANDIDATE_USD*eligible_count
+            if estimated>MAX_FINAL_FILL_BUDGET_USD:
+                raise ValueError('Worst-case reservations exceed the authorized $0.50 final-fill cohort budget')
+            ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                personalization_attempts.c.actual_cost_usd)).all()
+            global_spend=Decimal('0')
+            for item in ledger:
+                cost=Decimal(str(item.actual_cost_usd or 0))
+                if item.status in {'UNKNOWN_SPEND','RESERVED'}:cost=max(cost,Decimal(str(item.reserved_usd or 0)))
+                global_spend+=cost
+            if global_spend+estimated>Decimal('5.00'):
+                raise ValueError('Worst-case final-fill reservations would exceed the existing $5.00 global cumulative provider-spend ceiling')
+            matches=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.candidate_ids_sha256==digest,
+                personalization_authorizations.c.total_budget_usd=='0.50').order_by(
+                personalization_authorizations.c.created_at.desc()).with_for_update()).mappings().all()
+            if len(matches)!=1:
+                raise ValueError('Exactly one persisted $0.50 final-fill authorization is required; create and approve it through the authenticated ADMIN workflow')
+            grant=matches[0];ids=_manifest(grant,c);ident=grant['id']
+            if grant['status'] not in {'APPROVED','RUNNING'} or not grant['approved_by'] or not grant['approved_at']:
+                raise ValueError('The final-fill authorization must be explicitly approved by an authenticated ADMIN before execution')
+            if grant['status']=='APPROVED':
+                stamp=now()
+                c.execute(personalization_authorizations.update().where(
+                    personalization_authorizations.c.id==ident,personalization_authorizations.c.status=='APPROVED'
+                ).values(status='RUNNING'))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,
+                    event='PERSONALIZATION_BATCH_STARTED',detail=json.dumps({
+                        'candidate_count':10,'scope':'FINAL_FILL_10','candidate_ids_sha256':digest,
+                        'total_budget_usd':'0.50','global_cumulative_cap_usd':'5.00',
+                        'approved_by':grant['approved_by'],'approved_at':grant['approved_at'],
+                        'started_by':request.state.session['email'],'eligible_count':eligible_count,
+                        'estimated_max_cost_usd':str(estimated)},sort_keys=True),created_at=stamp))
+        launched=launch(db,ident)
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==ident)).mappings().one()
+            ids=_manifest(grant,c)
+        result=progress(db,grant,ids)
+        result.update({'authorization_status':grant['status'],'approved_by':grant['approved_by'],
+            'approved_at':grant['approved_at'],'estimated_max_cost_usd':str(estimated),
+            'total_budget_cap_usd':'0.50','global_cumulative_cap_usd':'5.00',
+            'runner_started':launched,'invitations_created':0})
+        return result
+
     @app.post('/api/admin/personalization/authorizations/{ident}/approve')
     async def approve_personalization_authorization(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -748,11 +1037,31 @@ def create_app(database=None):
             if not row: raise LookupError('Personalization authorization not found')
             if row['status']!='PENDING': raise ValueError('Authorization is no longer pending')
             ids=json.loads(row['candidate_ids'])
-            if len(ids) not in {1,50,100} or len(set(ids))!=len(ids) or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=row['candidate_ids_sha256']:
+            if len(ids) not in {1,10,50,100} or len(set(ids))!=len(ids) or hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=row['candidate_ids_sha256']:
                 raise ValueError('Authorization candidate manifest is invalid')
             budget=Decimal(row['total_budget_usd'])
-            if not budget.is_finite() or (len(ids)==1 and not Decimal('0')<budget<=Decimal('0.05')) or (len(ids)==50 and budget!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<budget<=Decimal('5.00')):
+            if not budget.is_finite() or (len(ids)==1 and not Decimal('0')<budget<=Decimal('0.05')) or (len(ids)==10 and budget!=Decimal('0.50')) or (len(ids)==50 and budget!=Decimal('2.50')) or (len(ids)==100 and not Decimal('0.25')<budget<=Decimal('5.00')):
                 raise ValueError('Authorization spending limit is invalid for its candidate scope')
+            if len(ids)==10:
+                from .personalization_batch import eligibility
+                manifest=_persisted_final_fill_manifest(c)
+                if not manifest or ids!=manifest['candidate_ids']:
+                    raise ValueError('The final-fill authorization no longer matches its immutable 10-ID manifest')
+                if c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids)))!=10:
+                    raise ValueError('All ten final-fill candidates must remain eligible before approval')
+                if c.scalar(select(func.count()).select_from(personalization_attempts).where(personalization_attempts.c.candidate_id.in_(ids))):
+                    raise ValueError('A final-fill candidate has a prior provider attempt; approval is blocked')
+                if c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id.in_(ids))):
+                    raise ValueError('A final-fill candidate now has existing invitation/contact history')
+                ledger=c.execute(select(personalization_attempts.c.status,personalization_attempts.c.reserved_usd,
+                    personalization_attempts.c.actual_cost_usd)).all()
+                total=Decimal('0')
+                for item in ledger:
+                    cost=Decimal(str(item.actual_cost_usd or 0))
+                    if item.status in {'UNKNOWN_SPEND','RESERVED'}:cost=max(cost,Decimal(str(item.reserved_usd or 0)))
+                    total+=cost
+                if total+budget>Decimal('5.00'):
+                    raise ValueError('Approval would exceed the existing $5.00 global cumulative provider-spend ceiling')
             if len(ids)==50:
                 from .personalization_batch import eligibility
                 if ids!=_persisted_replacement_manifest(c):
@@ -802,7 +1111,7 @@ def create_app(database=None):
                 personalization_authorizations.c.status=='APPROVED')).mappings().first()
             if not grant: raise LookupError('Approved personalization budget authorization not found')
         ids=json.loads(grant['candidate_ids'])
-        if len(ids)==50: raise ValueError('The 50-candidate replacement cohort must run through its resumable batch endpoint')
+        if len(ids) in {10,50}: raise ValueError('Replacement and final-fill cohorts must run through their resumable batch endpoint')
         if len(ids) not in {1,100}: raise ValueError('Persisted authorization has an invalid candidate scope')
         if hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=grant['candidate_ids_sha256']:
             raise ValueError('Approved candidate manifest integrity check failed')

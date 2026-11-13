@@ -16,37 +16,67 @@ from .replay_policy import replay_allowed_for_contract
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
 MAX_REPLACEMENT_BUDGET_USD = Decimal('2.50')
+MAX_FINAL_FILL_BUDGET_USD = Decimal('0.50')
 MAX_PER_CANDIDATE_USD = Decimal('0.05')
 REPLACEMENT_MANIFEST_SHA256 = '62c74ce1ca5c7b762019ef9261fc70bedd7ff3c0b68ab2fdd85b91254c86ea73'
 REPLACEMENT_MANIFEST_EVENT_ID = 'replacement-2026-11-12-v2-62c74ce1ca5c:manifest'
+FINAL_FILL_CANDIDATE_IDS = tuple(sorted((
+    'osm:041499bd10dadf96f3ee16a1',  # Artel Video Systems Corporation
+    'osm:05adb9ce57a77e8a46b861c2',  # Woodstock Playhouse
+    'osm:02f48f5e235dc2500fd67f98',  # The Calaveras
+    'osm:0549524473b3a493506c4ef1',  # The Blue Beret
+    'osm:0120618335516f1f581de9e2',  # Marathon Coffee
+    'osm-hotel:node/10178909926',   # Kenoza Hall
+    'osm-hotel:node/13460516101',   # Yale Manor B&B and Yurts
+    'osm-hotel:node/13538103701',   # Riverside Tower Hotel
+    'osm-hotel:node/14270678366',   # The Crafts Inn
+    'osm-hotel:node/5480090606',    # Waybury Inn
+)))
 _active: set[str] = set()
 _active_lock = threading.Lock()
 
 
 def _manifest(row, connection=None):
     ids = json.loads(row['candidate_ids'])
-    if (not isinstance(ids, list) or len(ids) not in {50, 100} or len(set(ids)) != len(ids)
+    if (not isinstance(ids, list) or len(ids) not in {10, 50, 100} or len(set(ids)) != len(ids)
             or hashlib_ids(ids) != row['candidate_ids_sha256']):
         raise ValueError('The saved personalization manifest failed its integrity check')
-    if len(ids) == 50:
-        if row['candidate_ids_sha256'] != REPLACEMENT_MANIFEST_SHA256 or connection is None:
-            raise ValueError('The 50-candidate authorization is not bound to the verified replacement manifest')
+    if len(ids) in {10, 50}:
+        if connection is None:
+            raise ValueError('A database connection is required to verify the immutable replacement manifest')
+        if len(ids) == 50:
+            if row['candidate_ids_sha256'] != REPLACEMENT_MANIFEST_SHA256:
+                raise ValueError('The 50-candidate authorization is not bound to the verified replacement manifest')
+            event_id = REPLACEMENT_MANIFEST_EVENT_ID
+            event_name = 'PERSONALIZATION_REPLACEMENT_COHORT_MANIFEST_CREATED'
+        else:
+            if ids != list(FINAL_FILL_CANDIDATE_IDS):
+                raise ValueError('The 10-candidate authorization is not bound to the verified final-fill selection')
+            event_id = f'final-fill-{row["candidate_ids_sha256"]}:manifest'
+            event_name = 'PERSONALIZATION_FINAL_FILL_COHORT_MANIFEST_CREATED'
         saved = connection.execute(select(events.c.detail).where(
-            events.c.id == REPLACEMENT_MANIFEST_EVENT_ID,
-            events.c.event == 'PERSONALIZATION_REPLACEMENT_COHORT_MANIFEST_CREATED')).scalar_one_or_none()
+            events.c.id == event_id, events.c.event == event_name)).scalar_one_or_none()
         try:
             detail = json.loads(saved or '{}')
         except (TypeError, ValueError):
             detail = {}
-        if (detail.get('manifest_sha256') != REPLACEMENT_MANIFEST_SHA256
-                or detail.get('candidate_ids') != ids or detail.get('candidate_count') != 50
-                or detail.get('kind_breakdown') != {'company': 40, 'hotel': 10}):
+        if len(ids) == 50:
+            valid = (detail.get('manifest_sha256') == REPLACEMENT_MANIFEST_SHA256
+                and detail.get('candidate_ids') == ids and detail.get('candidate_count') == 50
+                and detail.get('kind_breakdown') == {'company': 40, 'hotel': 10})
+        else:
+            valid = (detail.get('manifest_sha256') == row['candidate_ids_sha256']
+                and detail.get('candidate_ids') == ids and detail.get('candidate_count') == 10
+                and detail.get('kind_breakdown') == {'company': 5, 'hotel': 5}
+                and detail.get('scope') == 'FINAL_FILL_10')
+        if not valid:
             raise ValueError('The persisted replacement manifest failed its audit binding check')
     return ids
 
 
 def manifest_budget(ids):
-    return MAX_REPLACEMENT_BUDGET_USD if len(ids) == 50 else MAX_TOTAL_BUDGET_USD
+    return (MAX_FINAL_FILL_BUDGET_USD if len(ids) == 10 else
+            MAX_REPLACEMENT_BUDGET_USD if len(ids) == 50 else MAX_TOTAL_BUDGET_USD)
 
 
 def hashlib_ids(ids):
@@ -376,7 +406,7 @@ def _run_locked(db, ident):
                 authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids,
                 approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD),
                 approved_cohort_budget_usd=str(cohort_cap),
-                approved_cohort_candidate_ids=ids if len(ids) == 50 else None)
+                approved_cohort_candidate_ids=ids if len(ids) in {10, 50} else None)
             detail = {'candidate_count': len(next_ids), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
                 'candidate_ids': list(next_ids),
                 'run_id': result.get('run_id'), 'attempted': result.get('attempted', 0),

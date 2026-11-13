@@ -2,7 +2,9 @@ name: Outreach personalization batch recovery
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # Offset away from the top of the hour, when GitHub documents scheduled
+    # run delays and drops. This default-branch change re-registers the cron.
+    - cron: '2-59/5 * * * *'
   workflow_dispatch:
 
 permissions:

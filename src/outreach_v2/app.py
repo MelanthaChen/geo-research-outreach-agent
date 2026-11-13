@@ -55,6 +55,35 @@ def _normalized_identity(value):
     value=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode().casefold()
     return re.sub(r'[^a-z0-9]+','',value)
 
+def _verified_invitation_senders():
+    """Explicit deployment allowlist; ADMIN status alone never grants SendAs."""
+    return {address.strip().casefold() for address in
+        os.environ.get('OUTREACH_VERIFIED_INVITATION_SENDERS','').split(',') if address.strip()}
+
+def _invitation_sender_choices(connection):
+    configured=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
+    configured_name=os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip()
+    admins=connection.execute(select(admin_users.c.email).where(
+        admin_users.c.role=='ADMIN',admin_users.c.status=='ACTIVE').order_by(admin_users.c.email)).scalars().all()
+    choices=[];seen=set();verified=_verified_invitation_senders()
+    identities=[(configured,'CONFIGURED_INVITATION_SENDER'),*((email,'ACTIVE_ADMIN') for email in admins)]
+    for address,source in identities:
+        address=str(address or '').strip();key=address.casefold()
+        if not address or key in seen:continue
+        seen.add(key);delivery_authorized=key in verified
+        if delivery_authorized:status='Verified mailbox configured for invitation delivery'
+        elif source=='CONFIGURED_INVITATION_SENDER':status='Configured Outlook identity; mailbox sending permission is not verified'
+        else:status='ADMIN identity only; not configured for actual delivery'
+        choices.append({'kind':'INVITATION','email':address,
+            'display_name':configured_name if key==configured.casefold() else '',
+            'identity_source':source,'selectable':True,'delivery_authorized':delivery_authorized,
+            'delivery_status':status,'authorization':status})
+    return choices
+
+def _invitation_sender_allowed(connection,sender):
+    target=str(sender or '').strip().casefold()
+    return any(choice['email'].casefold()==target for choice in _invitation_sender_choices(connection))
+
 def _persisted_final_fill_manifest(connection):
     from .personalization_batch import FINAL_FILL_CANDIDATE_IDS,hashlib_ids
     ids=list(FINAL_FILL_CANDIDATE_IDS)
@@ -339,6 +368,10 @@ def create_app(database=None):
             if not batch:raise LookupError('Batch not found')
             if batch['pilot_review_status']!='APPROVED':
                 raise PermissionError('Invitation batch must be reviewed before recording a send')
+            sender_addresses=c.execute(select(invitations.c.sender_email).where(invitations.c.batch_id==ident)).scalars().all()
+            verified=_verified_invitation_senders()
+            if not sender_addresses or any(not address or str(address).casefold() not in verified for address in sender_addresses):
+                raise PermissionError('Actual sending is blocked: every sender must be listed in OUTREACH_VERIFIED_INVITATION_SENDERS after mailbox or delegated SendAs verification')
             c.execute(batches.update().where(batches.c.id==ident).values(send_status='OPERATOR_REPORTED',send_evidence=evidence,send_recorded_at=now()))
             c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='OPERATOR_REPORTED'))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='OPERATOR_REPORTED_SEND',detail=evidence,created_at=now()))
@@ -459,13 +492,14 @@ def create_app(database=None):
         report_sender=os.environ.get('OUTREACH_REPORT_SENDER','').strip()
         graph_ready=all(os.environ.get(k) for k in ('OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET'))
         senders=[]
-        if invitation_sender:
-            senders.append({'kind':'INVITATION','email':invitation_sender,'display_name':os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip(),
-                'authorization':'Configured Outlook mail-merge sender'})
-        if report_sender and graph_ready:
-            senders.append({'kind':'REPORT','email':report_sender,'display_name':'','authorization':'Configured Microsoft Graph report sender'})
         with db.transaction() as c:
+            invitation_choices=_invitation_sender_choices(c)
             rows=[dict(r) for r in c.execute(select(email_templates).order_by(email_templates.c.version.desc())).mappings()]
+        senders.extend(invitation_choices)
+        if report_sender and graph_ready:
+            senders.append({'kind':'REPORT','email':report_sender,'display_name':'','authorization':'Configured Microsoft Graph report sender',
+                'identity_source':'REPORT_CONFIGURATION','selectable':True,'delivery_authorized':True,
+                'delivery_status':'Configured Microsoft Graph report sender'})
         return {'rows':rows,'authorized_senders':senders,
             'defaults':{'INVITATION':{'subject':__import__('outreach_v2.template',fromlist=['DEFAULT_INVITATION_SUBJECT']).DEFAULT_INVITATION_SUBJECT,
                 'body':__import__('outreach_v2.template',fromlist=['DEFAULT_INVITATION_BODY']).DEFAULT_INVITATION_BODY,
@@ -492,10 +526,12 @@ def create_app(database=None):
             validate_invitation_template(subject,content,sender=sender,sender_name=sender_name,reply_to=reply_to,
                 researcher_name=researcher_name,university_affiliation=affiliation)
             configured_sender=os.environ.get('OUTREACH_INVITATION_SENDER','').strip()
-            if not configured_sender or sender.lower()!=configured_sender.lower():
-                raise ValueError('Invitation sender must match the configured researcher mailbox')
+            with db.transaction() as c:
+                if not _invitation_sender_allowed(c,sender):
+                    raise ValueError('Invitation sender must be the configured sender or an ACTIVE ADMIN identity')
+                delivery_authorized=sender.casefold() in _verified_invitation_senders()
             configured_sender_name=os.environ.get('OUTREACH_INVITATION_SENDER_NAME','').strip()
-            if configured_sender_name and sender_name.casefold()!=configured_sender_name.casefold():
+            if sender.casefold()==configured_sender.casefold() and configured_sender_name and sender_name.casefold()!=configured_sender_name.casefold():
                 raise ValueError('Invitation sender display name must match the configured researcher identity')
         else:
             from .template import validate_report_template
@@ -505,6 +541,8 @@ def create_app(database=None):
                 raise ValueError('Template sender must match the authorized report mailbox')
             if sender_name and len(sender_name)>120:raise ValueError('Report sender display name is too long')
         with db.transaction(serialized=True) as c:
+            if kind=='INVITATION' and not _invitation_sender_allowed(c,sender):
+                raise ValueError('Invitation sender is no longer an ACTIVE authorized template identity')
             version=(c.scalar(select(func.max(email_templates.c.version)).where(email_templates.c.template_kind==kind)) or 0)+1
             ident='email-template-'+uuid.uuid4().hex
             c.execute(email_templates.update().where(email_templates.c.template_kind==kind).values(active=False))
@@ -514,7 +552,8 @@ def create_app(database=None):
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='EMAIL_TEMPLATE_VERSION_ACTIVATED',
                 detail=json.dumps({'kind':kind,'version':version,'created_by':request.state.session['email']},sort_keys=True),created_at=now()))
         return {'id':ident,'version':version,'kind':kind,'active':True,
-            'sender_configured':bool(configured_sender and sender.lower()==configured_sender.lower())}
+            'sender_configured':bool(configured_sender and sender.lower()==configured_sender.lower()),
+            'delivery_authorized':delivery_authorized if kind=='INVITATION' else True}
 
     @app.post('/api/admin/email-templates/{ident}/activate')
     async def activate_email_template(ident:str,request:Request):
@@ -523,6 +562,8 @@ def create_app(database=None):
             row=c.execute(select(email_templates).where(email_templates.c.id==ident)).mappings().first()
             if not row:raise LookupError('Email template version not found')
             if row['template_kind']=='INVITATION':
+                if not _invitation_sender_allowed(c,row['sender']):
+                    raise ValueError('This sender is no longer the configured sender or an ACTIVE ADMIN identity')
                 from .template import validate_invitation_template
                 validate_invitation_template(row['subject'],row['body'],sender=row['sender'],sender_name=row.get('sender_name'),
                     reply_to=row['reply_to'],researcher_name=row['researcher_name'],university_affiliation=row['university_affiliation'])
@@ -544,6 +585,7 @@ def create_app(database=None):
             template=c.execute(select(email_templates).where(email_templates.c.id==ident)).mappings().first()
             if not template:raise LookupError('Email template version not found')
             questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
+            invitation_choices=_invitation_sender_choices(c) if template['template_kind']=='INVITATION' else []
         from .template import render_template
         if template['template_kind']=='INVITATION':
             company=str(body.get('company_name') or 'Example business')
@@ -551,16 +593,23 @@ def create_app(database=None):
             fields=json.loads(questionnaire['field_map']) if questionnaire else {}
             form_url=__import__('outreach_agent.google_forms_integration',fromlist=['prefilled_form_url']).prefilled_form_url(
                 'PREVIEW-NOT-SENDABLE',form_url=form,entry_id=fields.get('invitation_reference_entry_id') or INVITATION_REFERENCE_ENTRY)
+            sender=str(body.get('sender',template['sender']) or '').strip()
+            sender_name=str(body.get('sender_name',template.get('sender_name') or '') or '').strip()
+            reply_to=str(body.get('reply_to',template.get('reply_to') or '') or '').strip()
+            researcher_name=str(body.get('researcher_name',template.get('researcher_name') or '') or '').strip()
+            affiliation=str(body.get('university_affiliation',template.get('university_affiliation') or '') or '').strip()
+            with db.transaction() as c:
+                if not _invitation_sender_allowed(c,sender):
+                    raise ValueError('Preview sender must be the configured sender or an ACTIVE ADMIN identity')
             values={'label':'REVIEW PREVIEW / NOT SENT\n\n','company_name':company,'website':str(body.get('website') or 'https://example.invalid'),
                 'business_summary':str(body.get('business_summary') or '[Business summary placeholder]'),
                 'distinctive_detail':str(body.get('distinctive_detail') or '[Distinctive detail placeholder]'),
                 'research_relevance':str(body.get('research_relevance') or '[Research relevance placeholder]'),
                 'observation':'','form_url':form_url,'reference':'PREVIEW-NOT-SENDABLE',
-                'researcher_name':template['researcher_name'] or '',
-                'university_affiliation':template['university_affiliation'] or '',
-                'reply_to':template['reply_to'] or '','sender_name':template.get('sender_name') or ''}
+                'researcher_name':researcher_name,'university_affiliation':affiliation,
+                'reply_to':reply_to,'sender_name':sender_name}
             from .template import validate_invitation_template
-            validate_invitation_template(template['subject'],template['body'],sender=template['sender'],sender_name=values['sender_name'],
+            validate_invitation_template(template['subject'],template['body'],sender=sender,sender_name=values['sender_name'],
                 reply_to=values['reply_to'],researcher_name=values['researcher_name'],university_affiliation=values['university_affiliation'])
         else:
             company=str(body.get('company_name') or 'Example business')
@@ -573,8 +622,14 @@ def create_app(database=None):
                 reply_to=template['reply_to'] or '',sender_name=template.get('sender_name') or '')
         return {'id':ident,'version':template['version'],'kind':template['template_kind'],'status':'REVIEW_PREVIEW_NOT_SENT',
             'subject':render_template(template['subject'],values),'body':render_template(template['body'],values),
-            'sender':template['sender'],'sender_name':template.get('sender_name'),'reply_to':template['reply_to'],
+            'sender':sender if template['template_kind']=='INVITATION' else template['sender'],
+            'sender_name':values.get('sender_name') if template['template_kind']=='INVITATION' else template.get('sender_name'),
+            'reply_to':values.get('reply_to') if template['template_kind']=='INVITATION' else template['reply_to'],
             'questionnaire_url':values.get('form_url'),'reference':'PREVIEW-NOT-SENDABLE' if template['template_kind']=='INVITATION' else None,
+            'delivery_authorized':next((choice['delivery_authorized'] for choice in invitation_choices
+                if choice['email'].casefold()==str(template['sender'] or '').casefold()),False) if template['template_kind']=='INVITATION' else True,
+            'delivery_status':next((choice['delivery_status'] for choice in invitation_choices
+                if choice['email'].casefold()==str(template['sender'] or '').casefold()),'Sender is not currently selectable') if template['template_kind']=='INVITATION' else 'Report delivery configuration is unchanged',
             'sent':False,'persisted_invitation':False}
 
     @app.get('/api/admin/questionnaires')

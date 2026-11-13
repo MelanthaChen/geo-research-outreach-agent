@@ -924,6 +924,80 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     assert still_original['template_version']==saved['template_version'] and still_original['subject']==saved['subject']
     assert still_original['body']==saved['body'] and still_original['sender_name']=='Yuxuan Chen'
 
+def test_email_template_sender_choices_include_active_admins_but_not_inactive_and_preview_selected_identity(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import admin_users
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    monkeypatch.setenv('OUTREACH_INVITATION_SENDER','researcher@northeastern.edu')
+    monkeypatch.setenv('OUTREACH_INVITATION_SENDER_NAME','Yuxuan Chen')
+    monkeypatch.setenv('OUTREACH_REPLY_TO','reply@northeastern.edu')
+    monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Yuxuan Chen')
+    monkeypatch.delenv('OUTREACH_VERIFIED_INVITATION_SENDERS',raising=False)
+    with db.transaction() as c:
+        for ident,email,status in [('admin-shan','g.shan@northeastern.edu','ACTIVE'),
+                ('admin-hbs','gshan@hbs.edu','ACTIVE'),('admin-inactive','inactive@example.edu','INACTIVE')]:
+            c.execute(admin_users.insert().values(id=ident,email=email,password_hash='unused',role='ADMIN',
+                status=status,created_by='test',created_at=now()))
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    listing=client.get('/api/admin/email-templates').json()
+    choices=[item for item in listing['authorized_senders'] if item['kind']=='INVITATION']
+    assert {item['email'] for item in choices}=={
+        'researcher@northeastern.edu','g.shan@northeastern.edu','gshan@hbs.edu'}
+    assert all(item['selectable'] is True and item['delivery_authorized'] is False for item in choices)
+    assert 'not verified' in next(item['delivery_status'] for item in choices if item['email']=='researcher@northeastern.edu')
+    assert 'not configured' in next(item['delivery_status'] for item in choices if item['email']=='gshan@hbs.edu')
+    template={'kind':'INVITATION','subject':'{{company_name}} research invitation',
+        'body':('Hello {{company_name}}. {{business_summary}} {{distinctive_detail}} {{research_relevance}} '
+            'Questionnaire {{form_url}} Reference {{reference}}. Research interest and research authorization questions. '
+            '{{sender_name}} {{researcher_name}} {{university_affiliation}} {{reply_to}}'),
+        'sender':'gshan@hbs.edu','sender_name':'G Shan','reply_to':'gshan@hbs.edu',
+        'researcher_name':'G Shan','university_affiliation':'Harvard Business School'}
+    unauthorized=client.post('/api/admin/email-templates',headers=headers,json={**template,'sender':'inactive@example.edu'})
+    assert unauthorized.status_code==422
+    saved=client.post('/api/admin/email-templates',headers=headers,json=template)
+    assert saved.status_code==200 and saved.json()['delivery_authorized'] is False
+    row=next(row for row in client.get('/api/admin/email-templates').json()['rows'] if row['id']==saved.json()['id'])
+    assert row['sender']=='gshan@hbs.edu' and row['sender_name']=='G Shan'
+    assert row['reply_to']=='gshan@hbs.edu' and row['researcher_name']=='G Shan'
+    preview=client.post(f"/api/admin/email-templates/{saved.json()['id']}/preview",headers=headers,json={
+        'company_name':'Preview Business','sender':'g.shan@northeastern.edu','sender_name':'G Shan',
+        'reply_to':'g.shan@northeastern.edu','researcher_name':'G Shan',
+        'university_affiliation':'Northeastern University'})
+    assert preview.status_code==200
+    rendered=preview.json()
+    assert rendered['sender']=='g.shan@northeastern.edu' and rendered['reply_to']=='g.shan@northeastern.edu'
+    assert rendered['sender_name']=='G Shan' and rendered['delivery_authorized'] is False
+    assert 'G Shan' in rendered['body'] and 'Yuxuan Chen' not in rendered['body']
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','gshan@hbs.edu')
+    verified=client.get('/api/admin/email-templates').json()['authorized_senders']
+    assert next(item for item in verified if item['email']=='gshan@hbs.edu')['delivery_authorized'] is True
+
+def test_manual_send_record_requires_explicitly_verified_invitation_mailbox(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    monkeypatch.setenv('OUTREACH_INVITATION_SENDER','researcher@northeastern.edu')
+    monkeypatch.delenv('OUTREACH_VERIFIED_INVITATION_SENDERS',raising=False)
+    candidate(db,ident='send-authorization-test',email='contact@send-auth.example',
+        website='https://send-auth.example',name='Send Authorization Test',fixture=False)
+    batch=invite(db,['send-authorization-test'],key='send-auth-template-test-key')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+        'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
+    headers={'X-CSRF-Token':login.json()['csrf']}
+    review=client.get(f"/api/batches/{batch['id']}/review")
+    approved=client.post(f"/api/batches/{batch['id']}/approve",headers=headers,json={
+        'package_sha256':review.json()['package_sha256'],'confirm_reviewed':True})
+    assert approved.status_code==200
+    blocked=client.post(f"/api/batches/{batch['id']}/send-record",headers=headers,json={'evidence':'operator reported send'})
+    assert blocked.status_code==403 and 'OUTREACH_VERIFIED_INVITATION_SENDERS' in blocked.json()['error']
+
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)
     monkeypatch.setenv('GEO_OUTREACH_RESEARCH_JOB_ALLOWLIST',leased['idempotency_key'])

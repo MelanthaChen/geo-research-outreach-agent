@@ -1535,7 +1535,7 @@ def create_app(database=None):
         with db.transaction() as c:
             rows=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.status=='RUNNING',
-                personalization_authorizations.c.total_budget_usd.in_(['2.50','5.00']),
+                personalization_authorizations.c.total_budget_usd.in_(['0.50','2.50','5.00']),
                 personalization_authorizations.c.approved_by.is_not(None),
                 personalization_authorizations.c.approved_at.is_not(None))).mappings().all()
             grants=[]
@@ -1544,7 +1544,9 @@ def create_app(database=None):
                     ids=_manifest(row,c)
                 except (TypeError,ValueError):
                     continue
-                if (len(ids)==100 and row['total_budget_usd']=='5.00') or (len(ids)==50 and row['total_budget_usd']=='2.50'):
+                if ((len(ids)==10 and row['total_budget_usd']=='0.50')
+                    or (len(ids)==50 and row['total_budget_usd']=='2.50')
+                    or (len(ids)==100 and row['total_budget_usd']=='5.00')):
                     grants.append((row,ids))
         if not grants:
             return {'status':'IDLE','runner_active':db.personalization_batch_active()}

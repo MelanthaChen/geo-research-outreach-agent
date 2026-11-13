@@ -107,8 +107,16 @@ personalization_attempts = table('personalization_attempts', col('id', String, p
 personalization_authorizations = table('personalization_authorizations', col('id', String, primary_key=True),
     col('candidate_ids', Text, nullable=False), col('candidate_ids_sha256', String, nullable=False),
     col('total_budget_usd', String, nullable=False), col('status', String, nullable=False),
-    col('created_by', String, nullable=False), col('created_at', nullable=False),
+    col('created_by', String, nullable=False), col('created_at', nullable=False), col('campaign_id', String),
     col('approved_by'), col('approved_at'))
+personalization_campaigns = table('personalization_campaigns', col('id', String, primary_key=True),
+    col('source_job_id', String, nullable=False), col('source_run_version', String, nullable=False),
+    col('source_manifest_sha256', String, nullable=False, unique=True), col('source_candidate_ids', Text, nullable=False),
+    col('execution_candidate_ids', Text, nullable=False), col('execution_candidate_ids_sha256', String, nullable=False),
+    col('source_candidate_count', Integer, nullable=False), col('company_count', Integer, nullable=False),
+    col('hotel_count', Integer, nullable=False), col('criteria_json', Text, nullable=False),
+    col('status', String, nullable=False), col('created_by', String, nullable=False), col('created_at', nullable=False),
+    col('approved_by'), col('approved_at'), col('authorization_id', String), col('last_checkpoint_at'), col('completed_at'))
 sessions = table('sessions', col('token_hash', String, primary_key=True), col('csrf_hash'), col('email'),
     col('expires_at'), col('created_at'))
 auth_attempts = table('auth_attempts', col('id', String, primary_key=True), col('source', String, index=True),
@@ -183,6 +191,8 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     }
 }), (10, 'immutable-report-regeneration-versions', {
     'reports': {'renderer_version': 'TEXT', 'regenerated_from': 'TEXT'}
+}), (11, 'historical-screening-personalization-campaign', {
+    'personalization_authorizations': {'campaign_id': 'TEXT'}
 })]
 
 class Database:

@@ -76,7 +76,39 @@ async function loadPersonalizationBatch(other,quiet=false){
  if(controls.childNodes.length)card.append(controls);other.append(card);
  await loadReplacementPersonalizationBatch(other);
  await loadFinalFillPersonalizationBatch(other);
+ await loadHistoricalScreeningCampaign(other);
  if(['RUNNING'].includes(data.status)){clearInterval(batchPoll);batchPoll=setInterval(()=>{if(current==='gpt-personalization')loadPersonalizationBatch(other,true)},5000)}
+}
+
+async function loadHistoricalScreeningCampaign(other){
+ if(currentRole!=='ADMIN')return;
+ const card=el('section',undefined,'card');
+ card.append(el('h2','Original Initial-Screening Campaign'),el('p','This campaign is bound to the exact historical deterministic-screen membership. It does not alter prior authorizations. No invitations or emails are created or sent.'));
+ try{
+  const data=await(await api('admin/personalization/historical-screening')).json();
+  const stats=[['Historical members',data.source_candidate_count],['Companies',data.kind_breakdown?.company],['Hotels',data.kind_breakdown?.hotel],['Existing semantic PASS',data.semantic_pass],['Currently eligible',data.eligible_now],['Future retry wait',data.future_retry],['Protected / skipped',data.blocked_or_skipped],['Pending',data.pending_count]];
+  const grid=el('div',undefined,'cards');for(const [label,value] of stats){const item=el('div',undefined,'card');item.append(el('span',label),el('strong',String(value??0)));grid.append(item)}card.append(grid);
+  card.append(el('p',`Source: ${data.source_job_id} · ${data.source_run_version} · membership SHA-256 ${data.source_manifest_sha256}`));
+  card.append(el('p',`Execution manifest: ${data.execution_candidate_count} candidates · SHA-256 ${data.execution_manifest_sha256} · Open-ended total authorization · $${Number(data.per_candidate_cap_usd||0.05).toFixed(2)} maximum per candidate · $${Number(data.per_run_cap_usd||0.25).toFixed(2)} per run · ${data.max_candidates_per_run||5} candidates per run`));
+  card.append(el('p',data.campaign_id?`Campaign ${data.campaign_id} · ${data.status} · Authorization ${data.authorization_id} (${data.authorization_status})`:'Campaign not started'));
+  if(data.campaign_id){
+   card.append(el('p',`Persisted: PASS ${data.semantic_pass||0} · FAIL ${data.semantic_fail||0} · eligible now ${data.eligible_now||0} · future retry ${data.future_retry||0} · pending ${data.pending_count||0} · provider attempts ${data.campaign_provider_attempts||0} · actual spend $${Number(data.campaign_actual_cost_usd||0).toFixed(5)} · unresolved reserve $${Number(data.campaign_unresolved_reserved_usd||0).toFixed(5)}`));
+   if(data.last_checkpoint_at)card.append(el('p',`Last durable checkpoint: ${data.last_checkpoint_at}`));
+   if(data.approved_by)card.append(el('p',`Authorized by ${data.approved_by} at ${data.approved_at||'recorded'}`));
+  }
+  const controls=el('div',undefined,'template-actions');
+  if(!data.campaign_id){
+   const start=el('button','Authorize & Start Original Cohort');start.disabled=!data.eligible_now;
+   start.onclick=async()=>{const lines=['Start the exact historical initial-screen cohort?',`Source members: ${data.source_candidate_count}`,`Companies: ${data.kind_breakdown.company}`,`Hotels: ${data.kind_breakdown.hotel}`,`Existing semantic PASS to skip: ${data.semantic_pass}`,`Currently eligible: ${data.eligible_now}`,`Execution manifest SHA-256: ${data.execution_manifest_sha256}`,'One ADMIN authorization; open-ended total, $0.05 maximum per candidate, $0.25 per run, up to five candidates per run. Existing provider and quality safeguards remain in force. No invitation or email action will occur.'];if(!confirm(lines.join('\n')))return;start.disabled=true;try{await api('admin/personalization/historical-screening/start',{method:'POST',body:JSON.stringify({source_manifest_sha256:data.source_manifest_sha256,execution_manifest_sha256:data.execution_manifest_sha256,eligible_count:Number(data.eligible_now),confirm_open_ended:true})});message('The exact original-screen cohort was authorized and started.');await loadPersonalizationBatch(other)}catch(e){message(e.message);start.disabled=false}};controls.append(start)
+  }else if(data.status==='RUNNING'){
+   const pause=el('button','Pause Campaign','secondary');pause.onclick=async()=>{try{await api(`admin/personalization/batch/${encodeURIComponent(data.authorization_id)}/pause`,{method:'POST',body:'{}'});message('Pause recorded; the active bounded batch will finish safely.');await loadPersonalizationBatch(other)}catch(e){message(e.message)}};controls.append(pause);
+   card.append(el('p','Scheduled authenticated recovery resumes bounded work after ordinary process restarts. Provider calls are single-owner and checkpointed.'));
+  }else if(data.status==='PAUSED'){
+   const resume=el('button','Resume Campaign');resume.onclick=async()=>{try{await api(`admin/personalization/batch/${encodeURIComponent(data.authorization_id)}/resume`,{method:'POST',body:'{}'});message('The same authorized campaign resumed from its durable checkpoints.');await loadPersonalizationBatch(other)}catch(e){message(e.message)}};controls.append(resume)
+  }else if(data.status==='ATTENTION_REQUIRED')card.append(el('p','The campaign needs administrator review; unresolved provider outcomes remain protected from automatic retry.'));
+  if(controls.childNodes.length)card.append(controls);
+ }catch(e){card.append(el('p',`Historical campaign status unavailable: ${e.message}`))}
+ other.append(card);
 }
 
 async function loadFinalFillPersonalizationBatch(other){

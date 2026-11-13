@@ -10,8 +10,10 @@ from decimal import Decimal
 
 from sqlalchemy import and_, exists, func, or_, select
 
-from .db import candidates, events, invitations, now, personalization_attempts, personalization_authorizations
+from .db import (candidates, events, invitations, now, personalization_attempts,
+    personalization_authorizations, personalization_campaigns)
 from .replay_policy import replay_allowed_for_contract
+from .screening_campaign import OPEN_ENDED_BUDGET, ids_sha256, EXPECTED_SOURCE_SHA256, EXPECTED_SOURCE_COUNT
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
@@ -38,9 +40,33 @@ _active_lock = threading.Lock()
 
 def _manifest(row, connection=None):
     ids = json.loads(row['candidate_ids'])
-    if (not isinstance(ids, list) or len(ids) not in {10, 50, 100} or len(set(ids)) != len(ids)
+    open_ended = row.get('total_budget_usd') == OPEN_ENDED_BUDGET
+    valid_count = (len(ids) > 100 if isinstance(ids, list) and open_ended else
+                   isinstance(ids, list) and len(ids) in {10, 50, 100})
+    if (not valid_count or len(set(ids)) != len(ids)
             or hashlib_ids(ids) != row['candidate_ids_sha256']):
         raise ValueError('The saved personalization manifest failed its integrity check')
+    if open_ended:
+        if connection is None or not row.get('campaign_id'):
+            raise ValueError('An open-ended manifest must be bound to its immutable historical-screen campaign')
+        campaign = connection.execute(select(personalization_campaigns).where(
+            personalization_campaigns.c.id == row['campaign_id'],
+            personalization_campaigns.c.authorization_id == row['id'],
+            personalization_campaigns.c.status.in_(['RUNNING', 'PAUSED', 'COMPLETED', 'ATTENTION_REQUIRED', 'COMPLETED_WITH_BLOCKERS'])
+        )).mappings().first()
+        if not campaign:
+            raise ValueError('The persisted open-ended campaign authorization has no matching campaign')
+        source_ids = json.loads(campaign['source_candidate_ids'])
+        if (campaign['source_job_id'] != 'full-screening-aIdr0NtN__ISCA'
+                or campaign['source_run_version'] != 'full-us-outreach-screening/v2-soft-size'
+                or campaign['source_manifest_sha256'] != EXPECTED_SOURCE_SHA256
+                or campaign['source_candidate_count'] != EXPECTED_SOURCE_COUNT
+                or ids_sha256(source_ids) != EXPECTED_SOURCE_SHA256
+                or not set(ids).issubset(set(source_ids))
+                or campaign['execution_candidate_ids_sha256'] != row['candidate_ids_sha256']
+                or json.loads(campaign['execution_candidate_ids']) != ids):
+            raise ValueError('The open-ended campaign is not bound to the exact historical screened cohort')
+        return ids
     if len(ids) in {10, 50}:
         if connection is None:
             raise ValueError('A database connection is required to verify the immutable replacement manifest')
@@ -76,7 +102,8 @@ def _manifest(row, connection=None):
 
 def manifest_budget(ids):
     return (MAX_FINAL_FILL_BUDGET_USD if len(ids) == 10 else
-            MAX_REPLACEMENT_BUDGET_USD if len(ids) == 50 else MAX_TOTAL_BUDGET_USD)
+            MAX_REPLACEMENT_BUDGET_USD if len(ids) == 50 else
+            None if len(ids) > 100 else MAX_TOTAL_BUDGET_USD)
 
 
 def hashlib_ids(ids):
@@ -287,6 +314,10 @@ def _set_status(db, ident, status, event_name, detail=None, *, only_running=Fals
             return False
         c.execute(personalization_authorizations.update().where(
             personalization_authorizations.c.id == ident).values(status=status))
+        if row.get('campaign_id'):
+            c.execute(personalization_campaigns.update().where(
+                personalization_campaigns.c.id==row['campaign_id']).values(
+                    status=status,completed_at=now() if status in {'COMPLETED','COMPLETED_WITH_BLOCKERS'} else None))
         c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident, event=event_name,
             detail=json.dumps(detail or {}, sort_keys=True, separators=(',', ':')), created_at=now()))
         return True
@@ -394,19 +425,33 @@ def _run_locked(db, ident):
                             created_at=now()))
                     return
                 current_progress = progress(db, current, ids)
-                final = ('ATTENTION_REQUIRED'
-                    if (Decimal(current_progress['unresolved_reserved_usd']) > 0
-                        or current_progress['processed'] < current_progress['candidate_count'])
-                    else 'COMPLETED')
+                if cohort_cap is None:
+                    from .screening_campaign import terminal_summary
+                    with db.transaction() as c:
+                        campaign=c.execute(select(personalization_campaigns).where(
+                            personalization_campaigns.c.authorization_id==ident)).mappings().first()
+                    terminal=terminal_summary(db, json.loads(campaign['source_candidate_ids']), ids)
+                    current_progress.update(terminal)
+                    final='COMPLETED_WITH_BLOCKERS' if terminal['pending_count']==0 else 'ATTENTION_REQUIRED'
+                else:
+                    final = ('ATTENTION_REQUIRED'
+                        if (Decimal(current_progress['unresolved_reserved_usd']) > 0
+                            or current_progress['processed'] < current_progress['candidate_count'])
+                        else 'COMPLETED')
                 _set_status(db, ident, final, 'PERSONALIZATION_BATCH_FINISHED', current_progress, only_running=True)
                 return
 
             from .personalization import backfill
+            batch_options = {'approved_cumulative_budget_usd':str(MAX_TOTAL_BUDGET_USD),
+                'approved_cohort_budget_usd':str(cohort_cap),
+                'approved_cohort_candidate_ids':ids if len(ids) in {10, 50} else None}
+            if cohort_cap is None:
+                batch_options = {'open_ended_campaign_authorization_id':ident,
+                    'open_ended_campaign_manifest_sha256':grant['candidate_ids_sha256'],
+                    'open_ended_campaign_candidate_ids':ids,
+                    'approved_per_candidate_budget_usd':str(MAX_PER_CANDIDATE_USD)}
             result = backfill(db, limit=len(next_ids), concurrency=1, time_budget_seconds=300,
-                authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids,
-                approved_cumulative_budget_usd=str(MAX_TOTAL_BUDGET_USD),
-                approved_cohort_budget_usd=str(cohort_cap),
-                approved_cohort_candidate_ids=ids if len(ids) in {10, 50} else None)
+                authorized_candidate_ids=next_ids, retry_candidate_ids=next_ids, **batch_options)
             detail = {'candidate_count': len(next_ids), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
                 'candidate_ids': list(next_ids),
                 'run_id': result.get('run_id'), 'attempted': result.get('attempted', 0),
@@ -418,6 +463,9 @@ def _run_locked(db, ident):
                 c.execute(events.insert().values(id=uuid.uuid4().hex, entity_id=ident,
                     event='PERSONALIZATION_BATCH_CHECKPOINT',
                     detail=json.dumps(detail, sort_keys=True, separators=(',', ':')), created_at=now()))
+                if current.get('campaign_id'):
+                    c.execute(personalization_campaigns.update().where(
+                        personalization_campaigns.c.id==current['campaign_id']).values(last_checkpoint_at=now()))
             if result.get('status') in {'BLOCKED_CONFIGURATION', 'DISABLED'} or (
                     result.get('budget_stopped') and result.get('attempted', 0) == 0):
                 current_progress = progress(db, grant, ids)

@@ -12,7 +12,7 @@ from sqlalchemy import select,func
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
-    personalization_authorizations,personalization_attempts,candidates as candidate_table)
+    personalization_authorizations,personalization_attempts,personalization_campaigns,candidates as candidate_table)
 from . import auth,service
 from .consent import record_owner_identity_binding
 from .migrate import dump
@@ -102,6 +102,70 @@ def _persisted_final_fill_manifest(connection):
         or len(payload.get('qualifications',[]))!=10):
         raise ValueError('The final-fill manifest failed its immutable integrity check')
     return payload
+
+def _historical_screening_campaign_state(db):
+    from .personalization_batch import _manifest,progress
+    from .screening_campaign import (OPEN_ENDED_BUDGET,execution_scope,load_original_screen,
+        terminal_summary)
+    with db.transaction() as c:
+        source=load_original_screen(c)
+        scope=execution_scope(c,source['candidate_ids'])
+        campaign=c.execute(select(personalization_campaigns).where(
+            personalization_campaigns.c.source_manifest_sha256==source['manifest_sha256'])).mappings().first()
+        grant=None
+        if campaign and campaign['authorization_id']:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==campaign['authorization_id'])).mappings().first()
+        if campaign and not grant:
+            raise ValueError('The frozen historical campaign is missing its linked authorization record')
+        if campaign:
+            ids=json.loads(campaign['execution_candidate_ids'])
+            if ids!=scope['candidate_ids']:
+                # Once frozen, eligibility/exclusions are immutable. A later
+                # suppression or invitation is enforced by the live selector
+                # and reported separately; it must not rewrite this manifest.
+                ids=json.loads(campaign['execution_candidate_ids'])
+        else:
+            ids=scope['candidate_ids']
+    summary=terminal_summary(db,source['candidate_ids'],ids)
+    if campaign and grant:
+        current=progress(db,grant,ids)
+        state={**current,**summary}
+        state['authorization_status']=grant['status']
+        state['authorization_id']=grant['id']
+        state['approved_by']=grant['approved_by']
+        state['approved_at']=grant['approved_at']
+        state['campaign_id']=campaign['id']
+        with db.transaction() as c:
+            paid=c.execute(select(personalization_attempts.c.status,
+                personalization_attempts.c.actual_cost_usd,personalization_attempts.c.reserved_usd).where(
+                    personalization_attempts.c.candidate_id.in_(source['candidate_ids']),
+                    personalization_attempts.c.created_at>=campaign['created_at'])).all()
+        incremental_cost=Decimal('0');incremental_reserved=Decimal('0')
+        for item in paid:
+            incremental_cost+=Decimal(str(item.actual_cost_usd or 0))
+            if item.status in {'UNKNOWN_SPEND','RESERVED'}:
+                incremental_reserved+=max(Decimal(str(item.actual_cost_usd or 0)),Decimal(str(item.reserved_usd or 0)))
+        state['campaign_provider_attempts']=len(paid)
+        state['campaign_actual_cost_usd']=str(incremental_cost)
+        state['campaign_unresolved_reserved_usd']=str(incremental_reserved)
+    else:
+        state={**summary,'status':'NOT_STARTED','authorization_status':'NOT_AUTHORIZED',
+            'authorization_id':None,'campaign_id':None,'processed':summary['semantic_pass']+summary['semantic_fail'],
+            'provider_attempts':0,'campaign_provider_attempts':0,'campaign_actual_cost_usd':'0',
+            'campaign_unresolved_reserved_usd':'0','runner_active':False,'execution_state':'NOT_STARTED',
+            'last_checkpoint_at':None,'last_checkpoint':None,'heartbeat_at':None,'heartbeat':None,
+            'next_retry_at':None,'approved_by':None,'approved_at':None}
+    state.update({'source_job_id':source['job_id'],'source_run_version':source['run_version'],
+        'source_status':source['status'],'source_candidate_count':source['candidate_count'],
+        'source_kind_breakdown':source['kind_breakdown'],'kind_breakdown':source['kind_breakdown'],
+        'source_manifest_sha256':source['manifest_sha256'],
+        'execution_candidate_count':len(ids),'execution_manifest_sha256':scope['candidate_ids_sha256'] if not campaign else campaign['execution_candidate_ids_sha256'],
+        'excluded_reason_counts':scope['excluded_reason_counts'] if not campaign else json.loads(campaign['criteria_json']).get('excluded_reason_counts',scope['excluded_reason_counts']),
+        'criteria':source['criteria'],'budget_mode':'OPEN_ENDED','total_budget_cap_usd':'OPEN_ENDED',
+        'per_candidate_cap_usd':'0.05','per_run_cap_usd':'0.25','max_candidates_per_run':5,
+        'invitations_created':0,'emails_sent':0})
+    return state
 
 def _capture_final_fill_manifest(db):
     """Re-check exact identities, deduplication, first-party evidence and persist one immutable manifest."""
@@ -1363,6 +1427,92 @@ def create_app(database=None):
             'runner_started':launched,'invitations_created':0})
         return result
 
+    @app.get('/api/admin/personalization/historical-screening')
+    def historical_screening_personalization_status(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        return _historical_screening_campaign_state(db)
+
+    @app.post('/api/admin/personalization/historical-screening/start')
+    async def start_historical_screening_personalization(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        required={'source_manifest_sha256','execution_manifest_sha256','eligible_count','confirm_open_ended'}
+        if (not isinstance(body,dict) or set(body)!=required
+                or body.get('confirm_open_ended') is not True
+                or type(body.get('eligible_count')) is not int):
+            raise ValueError('Confirm the exact original-screen manifest and explicitly open-ended campaign authorization')
+        if os.environ.get('OUTREACH_AI_PERSONALIZATION_ENABLED','').casefold()!='true':
+            raise ValueError('The deployed GPT personalization feature is disabled; no campaign grant was recorded')
+        if not os.environ.get('OPENAI_API_KEY','').strip():
+            raise ValueError('The deployed runtime has no OpenAI credential; no campaign grant was recorded')
+        from .personalization_batch import eligibility,hashlib_ids,launch
+        from .screening_campaign import (OPEN_ENDED_BUDGET,execution_scope,load_original_screen,
+            terminal_summary)
+        ident=None;campaign_id=None;stamp=None;email=request.state.session['email']
+        with db.transaction(serialized=True) as c:
+            source=load_original_screen(c)
+            if body['source_manifest_sha256']!=source['manifest_sha256']:
+                raise ValueError('The historical source membership hash changed; refusing to authorize a different cohort')
+            scope=execution_scope(c,source['candidate_ids'])
+            if body['execution_manifest_sha256']!=scope['candidate_ids_sha256']:
+                raise ValueError('The currently permitted execution membership changed; refresh the campaign preview')
+            eligible_count=int(c.scalar(select(func.count()).select_from(candidate_table).where(
+                eligibility(scope['candidate_ids']))) or 0)
+            if eligible_count!=body['eligible_count']:
+                raise ValueError('Current eligible count changed since the campaign preview; refresh before approval')
+            if not scope['candidate_ids']:
+                raise ValueError('No candidates remain in the permitted original-screen campaign scope')
+            existing=c.execute(select(personalization_campaigns).where(
+                personalization_campaigns.c.source_manifest_sha256==source['manifest_sha256']).with_for_update()).mappings().first()
+            if existing:
+                raise ValueError('The exact original-screen campaign already exists; its manifest or authorization will not be replaced')
+            campaign_id='screened-v2-'+source['manifest_sha256'][:16]
+            ident='personalization-auth-'+uuid.uuid4().hex
+            stamp=now();encoded_source=json.dumps(source['candidate_ids'],separators=(',',':'))
+            encoded_execution=json.dumps(scope['candidate_ids'],separators=(',',':'))
+            criteria={**source['criteria'],'excluded_reason_counts':scope['excluded_reason_counts'],
+                'excluded_candidate_ids':scope['excluded'],'execution_scope':'source membership minus current suppression, fixture, prior invitation, NO_AUTOMATIC_RETRY, and UNKNOWN_SPEND/RESERVED records',
+                'spending_safeguards':{'total_budget':'OPEN_ENDED','per_candidate_cap_usd':'0.05',
+                    'per_run_cap_usd':'0.25','max_candidates_per_run':5,'provider_concurrency':1,
+                    'unknown_spend_auto_retry':False,'invitations_created':False,'emails_sent':False}}
+            c.execute(personalization_campaigns.insert().values(id=campaign_id,
+                source_job_id=source['job_id'],source_run_version=source['run_version'],
+                source_manifest_sha256=source['manifest_sha256'],source_candidate_ids=encoded_source,
+                execution_candidate_ids=encoded_execution,execution_candidate_ids_sha256=scope['candidate_ids_sha256'],
+                source_candidate_count=source['candidate_count'],company_count=source['kind_breakdown']['company'],
+                hotel_count=source['kind_breakdown']['hotel'],criteria_json=json.dumps(criteria,sort_keys=True,separators=(',',':')),
+                status='RUNNING',created_by=email,created_at=stamp,approved_by=email,approved_at=stamp,
+                authorization_id=ident))
+            c.execute(personalization_authorizations.insert().values(id=ident,candidate_ids=encoded_execution,
+                candidate_ids_sha256=scope['candidate_ids_sha256'],total_budget_usd=OPEN_ENDED_BUDGET,
+                status='RUNNING',created_by=email,created_at=stamp,campaign_id=campaign_id,
+                approved_by=email,approved_at=stamp))
+            requested={'campaign_id':campaign_id,'source_job_id':source['job_id'],
+                'source_run_version':source['run_version'],'source_candidate_count':source['candidate_count'],
+                'source_manifest_sha256':source['manifest_sha256'],'candidate_count':len(scope['candidate_ids']),
+                'candidate_ids_sha256':scope['candidate_ids_sha256'],'total_budget_usd':'OPEN_ENDED',
+                'per_candidate_cap_usd':'0.05','per_run_cap_usd':'0.25','max_candidates_per_run':5,
+                'approved_by':email,'approved_at':stamp,'eligible_count':eligible_count,
+                'excluded_reason_counts':scope['excluded_reason_counts']}
+            for event_name in ('PERSONALIZATION_BUDGET_AUTHORIZATION_REQUESTED',
+                'PERSONALIZATION_BUDGET_AUTHORIZATION_APPROVED','PERSONALIZATION_BATCH_STARTED'):
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event=event_name,
+                    detail=json.dumps(requested,sort_keys=True,separators=(',',':')),created_at=stamp))
+            c.execute(events.insert().values(id=campaign_id+':manifest',entity_id=campaign_id,
+                event='PERSONALIZATION_HISTORICAL_SCREENING_MANIFEST_CREATED',
+                detail=json.dumps({'campaign_id':campaign_id,'source_job_id':source['job_id'],
+                    'source_run_version':source['run_version'],'candidate_count':source['candidate_count'],
+                    'source_manifest_sha256':source['manifest_sha256'],'execution_candidate_count':len(scope['candidate_ids']),
+                    'execution_manifest_sha256':scope['candidate_ids_sha256'],
+                    'kind_breakdown':source['kind_breakdown'],'criteria':source['criteria']},
+                    sort_keys=True,separators=(',',':')),created_at=stamp))
+        launched=launch(db,ident)
+        result=_historical_screening_campaign_state(db)
+        result.update({'authorization_status':'RUNNING','approved_by':email,'approved_at':stamp,
+            'runner_started':launched,'campaign_id':campaign_id,'authorization_id':ident,
+            'invitations_created':0,'emails_sent':0})
+        return result
+
     @app.get('/api/admin/personalization/batch')
     def personalization_batch_preview(request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -1590,7 +1740,7 @@ def create_app(database=None):
         with db.transaction() as c:
             rows=c.execute(select(personalization_authorizations).where(
                 personalization_authorizations.c.status=='RUNNING',
-                personalization_authorizations.c.total_budget_usd.in_(['0.50','2.50','5.00']),
+                personalization_authorizations.c.total_budget_usd.in_(['0.50','2.50','5.00','OPEN_ENDED']),
                 personalization_authorizations.c.approved_by.is_not(None),
                 personalization_authorizations.c.approved_at.is_not(None))).mappings().all()
             grants=[]
@@ -1601,7 +1751,8 @@ def create_app(database=None):
                     continue
                 if ((len(ids)==10 and row['total_budget_usd']=='0.50')
                     or (len(ids)==50 and row['total_budget_usd']=='2.50')
-                    or (len(ids)==100 and row['total_budget_usd']=='5.00')):
+                    or (len(ids)==100 and row['total_budget_usd']=='5.00')
+                    or (len(ids)>100 and row['total_budget_usd']=='OPEN_ENDED' and row.get('campaign_id'))):
                     grants.append((row,ids))
         if not grants:
             return {'status':'IDLE','runner_active':db.personalization_batch_active()}

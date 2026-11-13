@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 from sqlalchemy import and_, exists, func, or_, select
 
 from .db import (candidates, contacts, events, invitations, now, personalization_runs,
-                 personalization_attempts, personalization_versions)
+                 personalization_attempts, personalization_versions,
+                 personalization_authorizations, personalization_campaigns)
 from .migrate import dump
 from .service import email_contacts
 from .template import same_site, validate
@@ -783,7 +784,9 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
              authorized_candidate_ids=None, selected_candidate_ids=None, retry_candidate_ids=None,
              backend_factory=None, token_count=None, approved_cumulative_budget_usd=None,
              approved_candidate_budget_usd=None, approved_cohort_budget_usd=None,
-             approved_cohort_candidate_ids=None):
+             approved_cohort_candidate_ids=None, open_ended_campaign_authorization_id=None,
+             open_ended_campaign_manifest_sha256=None, open_ended_campaign_candidate_ids=None,
+             approved_per_candidate_budget_usd=None):
     """Run the real semantic pipeline; paid execution is disabled unless explicitly configured.
 
     Candidate websites are fetched and attributed before an OpenAI request is possible.
@@ -841,16 +844,50 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     approved_cumulative=(Decimal(str(approved_cumulative_budget_usd)) if approved_cumulative_budget_usd is not None else None)
     approved_candidate=(Decimal(str(approved_candidate_budget_usd)) if approved_candidate_budget_usd is not None else None)
     approved_cohort=(Decimal(str(approved_cohort_budget_usd)) if approved_cohort_budget_usd is not None else None)
+    approved_per_candidate=(Decimal(str(approved_per_candidate_budget_usd)) if approved_per_candidate_budget_usd is not None else None)
     approved_cohort_ids=tuple(dict.fromkeys(str(x).strip() for x in (approved_cohort_candidate_ids or ()) if str(x).strip()))
+    open_ended_campaign_ids=tuple(dict.fromkeys(str(x).strip() for x in (open_ended_campaign_candidate_ids or ()) if str(x).strip()))
+    open_ended_campaign=False
+    if open_ended_campaign_authorization_id is not None:
+        from .screening_campaign import OPEN_ENDED_BUDGET, ids_sha256
+        if (not db.postgres or len(open_ended_campaign_ids)<101
+                or ids_sha256(list(open_ended_campaign_ids))!=open_ended_campaign_manifest_sha256
+                or not set(authorized_ids).issubset(set(open_ended_campaign_ids))
+                or approved_cumulative is not None or approved_candidate is not None or approved_cohort is not None
+                or approved_per_candidate!=Decimal('0.05')):
+            return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
+                'reason':'Open-ended execution requires the exact persisted historical-screen ADMIN grant with the $0.05 per-candidate cap.'}
+        with db.transaction() as c:
+            grant=c.execute(select(personalization_authorizations).where(
+                personalization_authorizations.c.id==open_ended_campaign_authorization_id,
+                personalization_authorizations.c.status=='RUNNING',
+                personalization_authorizations.c.total_budget_usd==OPEN_ENDED_BUDGET,
+                personalization_authorizations.c.candidate_ids_sha256==open_ended_campaign_manifest_sha256,
+                personalization_authorizations.c.approved_by.is_not(None),
+                personalization_authorizations.c.approved_at.is_not(None))).mappings().first()
+            campaign=c.execute(select(personalization_campaigns).where(
+                personalization_campaigns.c.authorization_id==open_ended_campaign_authorization_id,
+                personalization_campaigns.c.execution_candidate_ids_sha256==open_ended_campaign_manifest_sha256,
+                personalization_campaigns.c.status=='RUNNING')).mappings().first()
+        if (not grant or not campaign
+                or json.loads(grant['candidate_ids'])!=list(open_ended_campaign_ids)
+                or json.loads(campaign['execution_candidate_ids'])!=list(open_ended_campaign_ids)):
+            return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
+                'reason':'The historical-screen open-ended ADMIN authorization does not match its immutable campaign manifest.'}
+        open_ended_campaign=True
+        cumulative_budget=None
+    elif approved_per_candidate is not None:
+        return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
+            'reason':'A cohort per-candidate limit requires the authenticated open-ended screening campaign authorization.'}
     if not (Decimal('0') < run_budget <= Decimal(MAX_PILOT_SPEND_USD) and
-            Decimal('0') < cumulative_budget <= Decimal(MAX_PILOT_SPEND_USD) and
+            (cumulative_budget is None or Decimal('0') < cumulative_budget <= Decimal(MAX_PILOT_SPEND_USD)) and
             Decimal('0') < per_candidate_cap <= Decimal(str(MAX_ESTIMATED_USD))):
         return {'status': 'BLOCKED_CONFIGURATION', 'disabled': True, 'attempted': 0,
                 'reason': 'Run and cumulative budgets must be positive and no greater than the authorized $0.25 pilot ceiling; per-candidate cap must remain within $0.05.'}
     if approved_cumulative is not None:
         # Larger lifetime budgets are accepted only from a separately persisted
         # administrator-approved grant; the per-run and per-candidate caps stay fixed.
-        if not Decimal('0') < approved_cumulative <= Decimal('5.00'):
+        if not open_ended_campaign and not Decimal('0') < approved_cumulative <= Decimal('5.00'):
             return {'status':'BLOCKED_CONFIGURATION','disabled':True,'attempted':0,
                 'reason':'Approved cumulative authorization must be positive and no more than $5.00.'}
         # A persisted batch grant may raise only the cumulative ceiling to its
@@ -907,7 +944,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
     domain_cooldown=(datetime.now(timezone.utc)-timedelta(minutes=15)).isoformat()
     with db.transaction(serialized=True) as c:
         c.execute(personalization_runs.insert().values(id=run_id, started_at=stamp, status='RUNNING',
-            candidate_limit=limit, run_budget_usd=str(run_budget), cumulative_budget_usd=str(cumulative_budget),
+            candidate_limit=limit, run_budget_usd=str(run_budget), cumulative_budget_usd=str(cumulative_budget or 'OPEN_ENDED'),
             reserved_usd='0', actual_cost_usd='0', detail='{}'))
         recent=set(c.execute(select(candidates.c.domain).select_from(
             events.join(candidates,events.c.entity_id==candidates.c.id)).where(
@@ -1110,7 +1147,7 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                         if item.status in {'RESERVED','UNKNOWN_SPEND'}:
                             row_cost=max(row_cost,Decimal(str(item.reserved_usd or 0)))
                         spent += row_cost
-                        if approved_candidate is not None and item.candidate_id == row['id']:
+                        if (approved_candidate is not None or approved_per_candidate is not None) and item.candidate_id == row['id']:
                             candidate_spent += row_cost
                         if approved_cohort is not None and item.candidate_id in approved_cohort_ids:
                             cohort_spent += row_cost
@@ -1119,20 +1156,41 @@ def backfill(db, limit=10, fetcher=fetch_page, *, concurrency=1, time_budget_sec
                     budget_failures=[]
                     if run_reserved+request_reservation>run_budget:
                         budget_failures.append('run_budget')
-                    if spent+request_reservation>cumulative_budget:
+                    if cumulative_budget is not None and spent+request_reservation>cumulative_budget:
                         budget_failures.append('cumulative_budget')
                     if approved_candidate is not None and candidate_spent+request_reservation>approved_candidate:
                         budget_failures.append('approved_candidate_budget')
+                    if approved_per_candidate is not None and candidate_spent+request_reservation>approved_per_candidate:
+                        budget_failures.append('approved_per_candidate_budget')
                     if approved_cohort is not None and cohort_spent+request_reservation>approved_cohort:
                         budget_failures.append('approved_cohort_budget')
                     if budget_failures:
+                        if budget_failures == ['approved_per_candidate_budget']:
+                            # Candidate exhaustion is terminal for this member,
+                            # not a cohort-wide stop; continue independent work.
+                            at=now(); prior_attempts=int(row.get('personalization_attempts') or 0)+1
+                            c.execute(candidates.update().where(candidates.c.id==row['id'],
+                                candidates.c.personalization_lease_token==lease_token).values(
+                                    personalization_status='INCOMPLETE',
+                                    personalization_error='AUTHORIZED_PER_CANDIDATE_SPEND_LIMIT_REACHED',
+                                    personalization_outcome='NO_AUTOMATIC_RETRY',
+                                    personalization_attempts=prior_attempts,
+                                    personalization_retry_after=_retry_time('PERMANENT_EVIDENCE',prior_attempts,at),
+                                    personalization_lease_token=None,personalization_lease_until=None))
+                            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row['id'],
+                                event='PERSONALIZATION_CANDIDATE_BUDGET_EXHAUSTED',
+                                detail=_safe_json({'candidate_spend_including_reservations_usd':str(candidate_spent),
+                                    'request_worst_case_usd':str(request_reservation),
+                                    'authorized_candidate_cap_usd':str(approved_per_candidate)}),created_at=at))
+                            result['skipped_existing_attempt']+=1
+                            continue
                         result['budget_stopped']=True
                         result['budget_stop_detail']={
                             'failed_comparisons':budget_failures,
                             'request_worst_case_usd':str(request_reservation),
                             'run_reserved_usd':str(run_reserved),'run_budget_usd':str(run_budget),
                             'ledger_spend_including_reservations_usd':str(spent),
-                            'cumulative_budget_usd':str(cumulative_budget),
+                            'cumulative_budget_usd':str(cumulative_budget) if cumulative_budget is not None else 'OPEN_ENDED',
                             'candidate_spend_including_reservations_usd':str(candidate_spent),
                             'approved_candidate_budget_usd':str(approved_candidate) if approved_candidate is not None else None,
                             'cohort_spend_including_reservations_usd':str(cohort_spent),

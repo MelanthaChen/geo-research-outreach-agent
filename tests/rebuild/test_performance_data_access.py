@@ -3,9 +3,54 @@ import pytest
 
 from sqlalchemy import event, select, func, text
 
-from outreach_v2.db import Database, candidates, contacts, invitations, now
+from outreach_v2.db import Database, candidates, contacts, invitations, now, SCHEMA
 from outreach_v2.migrate import dump
 from outreach_v2.service import list_candidates, generate, preview_generation
+
+
+class _Result:
+    def __init__(self, row=None): self.row=row
+    def first(self): return self.row
+
+
+class _IndexMigrationConnection:
+    def __init__(self, migration_row, index_row):
+        self.migration_row=migration_row;self.index_row=index_row;self.sql=[]
+    def __enter__(self): return self
+    def __exit__(self,*args): return False
+    def execution_options(self,**kwargs): return self
+    def execute(self,statement,params=None):
+        sql=str(statement);self.sql.append(sql)
+        if 'pg_advisory_lock' in sql or 'pg_advisory_unlock' in sql:return _Result()
+        if 'pg_class index_name' in sql:return _Result(self.index_row)
+        if 'schema_migrations.version' in sql:return _Result(self.migration_row)
+        return _Result()
+
+
+class _IndexMigrationEngine:
+    def __init__(self,connection): self.connection=connection
+    def connect(self): return self.connection
+
+
+def test_postgres_v12_repairs_missing_index_even_when_version_row_exists():
+    connection=_IndexMigrationConnection(migration_row=(12,),index_row=None)
+    database=Database.__new__(Database);database.postgres=True
+    database.engine=_IndexMigrationEngine(connection)
+    database._apply_online_candidate_index_migration()
+    create=next(sql for sql in connection.sql if 'CREATE INDEX CONCURRENTLY' in sql)
+    assert f'{SCHEMA}.ix_candidates_name_id' in create
+    assert f'ON {SCHEMA}.candidates (name, id)' in create
+    assert not any('INSERT INTO' in sql and 'schema_migrations' in sql for sql in connection.sql)
+
+
+def test_postgres_v12_records_existing_valid_index_without_rebuilding():
+    connection=_IndexMigrationConnection(migration_row=None,index_row=type(
+        'IndexState',(),{'indisvalid':True,'indisready':True})())
+    database=Database.__new__(Database);database.postgres=True
+    database.engine=_IndexMigrationEngine(connection)
+    database._apply_online_candidate_index_migration()
+    assert not any('CREATE INDEX CONCURRENTLY' in sql for sql in connection.sql)
+    assert any('INSERT INTO' in sql and 'schema_migrations' in sql for sql in connection.sql)
 
 
 @pytest.fixture

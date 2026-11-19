@@ -307,6 +307,11 @@ class Database:
                 if version == 12 and not self.postgres:
                     c.execute(text('CREATE INDEX IF NOT EXISTS ix_candidates_name_id '
                                    'ON candidates (name, id)'))
+                # The PostgreSQL online index migration runs after this
+                # transaction because CREATE INDEX CONCURRENTLY is forbidden
+                # inside a transaction. Leave its version marker to that step.
+                if version == 12 and self.postgres:
+                    continue
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
         if self.postgres:
             self._apply_online_candidate_index_migration()
@@ -318,22 +323,26 @@ class Database:
             connection=connection.execution_options(isolation_level='AUTOCOMMIT')
             connection.execute(text('SELECT pg_advisory_lock(:lock_id)'),{'lock_id':lock_id})
             try:
-                if connection.execute(select(schema_migrations.c.version).where(
-                        schema_migrations.c.version==12)).first():
-                    return
+                migration_record=connection.execute(select(schema_migrations.c.version).where(
+                    schema_migrations.c.version==12)).first()
                 index_state=connection.execute(text("""SELECT i.indisvalid, i.indisready
                     FROM pg_class index_name
                     JOIN pg_namespace n ON n.oid=index_name.relnamespace
                     JOIN pg_index i ON i.indexrelid=index_name.oid
                     WHERE n.nspname=:schema AND index_name.relname='ix_candidates_name_id'"""),
                     {'schema':SCHEMA}).first()
-                if index_state and not (index_state.indisvalid and index_state.indisready):
+                if index_state and index_state.indisvalid and index_state.indisready:
+                    if not migration_record:
+                        connection.execute(schema_migrations.insert().values(version=12,
+                            name='candidate-name-id-pagination-index',applied_at=now()))
+                    return
+                if index_state:
                     connection.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS {SCHEMA}.ix_candidates_name_id'))
-                if not index_state or not (index_state.indisvalid and index_state.indisready):
-                    connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_candidates_name_id '
-                                            f'ON {SCHEMA}.candidates (name, id)'))
-                connection.execute(schema_migrations.insert().values(version=12,
-                    name='candidate-name-id-pagination-index',applied_at=now()))
+                connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS {SCHEMA}.ix_candidates_name_id '
+                                        f'ON {SCHEMA}.candidates (name, id)'))
+                if not migration_record:
+                    connection.execute(schema_migrations.insert().values(version=12,
+                        name='candidate-name-id-pagination-index',applied_at=now()))
             finally:
                 connection.execute(text('SELECT pg_advisory_unlock(:lock_id)'),{'lock_id':lock_id})
 

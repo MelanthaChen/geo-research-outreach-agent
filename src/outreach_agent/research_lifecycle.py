@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 from outreach_agent.integration import CONTRACT_VERSION, PROFILE_VERSION, OWNER_CONTROLLED_TEST
 from outreach_agent.database import connect_database, is_postgres_target
 from outreach_agent.geographic_eligibility import classify_geography, is_us_eligible
+from outreach_agent.contact_eligibility import verified_business_email_channels
 from outreach_agent.google_forms_integration import make_invitation_reference, prefilled_form_url
 from outreach_agent.google_forms_integration import parse_sheet_row
 
@@ -59,32 +60,8 @@ def _same_first_party_site(website: str, source_url: str) -> bool:
 
 
 def _discovered_official_email_channels(record: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return public business emails eligible for draft preparation.
-
-    This is deliberately not a verification decision.  A verified official
-    site plus first-party evidence is enough to prepare a human-reviewable
-    draft, while the contact remains CONTACT_REVIEW_PENDING/NOT_VERIFIED.
-    """
-    if str(record.get("identity_verification_status", "")).upper() != "VERIFIED":
-        return []
-    website = str(record.get("official_website") or "").strip()
-    channels = record.get("contact_channels") or []
-    eligible: dict[str, dict[str, Any]] = {}
-    for item in channels:
-        if not isinstance(item, dict) or str(item.get("channel_type") or "").upper() not in _DISCOVERED_EMAIL_TYPES:
-            continue
-        email = str(item.get("email") or "").strip().casefold()
-        source_url = str(item.get("source_url") or item.get("channel_url") or "").strip()
-        if not EMAIL_RE.match(email) or not _same_first_party_site(website, source_url):
-            continue
-        local_part = email.split("@", 1)[0].replace(".", " ").replace("-", " ").replace("_", " ")
-        purpose = " ".join(str(item.get(key) or "").casefold() for key in ("purpose", "evidence", "email"))
-        if any(re.search(rf"\b{re.escape(token)}\b", local_part + " " + purpose) for token in _EXCLUDED_EMAIL_PURPOSES):
-            continue
-        if str(item.get("review_status") or "").upper() == "REJECTED":
-            continue
-        eligible[email] = item
-    return [eligible[email] for email in sorted(eligible)]
+    """Return only verified, first-party, evidence-matched business emails."""
+    return verified_business_email_channels(record)
 
 
 def configured_confirmation_policy() -> str:
@@ -286,6 +263,18 @@ def _initialize_registry(path: Path | str = REGISTRY_DB) -> Path | str:
           profile_id TEXT PRIMARY KEY, recipient TEXT NOT NULL, label TEXT NOT NULL,
           active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS contact_recovery_runs (
+          run_id TEXT PRIMARY KEY, max_candidates INTEGER NOT NULL,
+          selected INTEGER NOT NULL DEFAULT 0, recovered INTEGER NOT NULL DEFAULT 0,
+          pending INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS contact_recovery_audit (
+          recovery_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, profile_id TEXT NOT NULL,
+          email TEXT, source_url TEXT, evidence_hash TEXT, method TEXT NOT NULL,
+          outcome TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+          UNIQUE(run_id, profile_id, email, evidence_hash)
+        );
+        CREATE INDEX IF NOT EXISTS contact_recovery_run_idx ON contact_recovery_audit(run_id, outcome);
         CREATE INDEX IF NOT EXISTS research_filter_idx ON research_records(profile_type, recruitment_status, consent_status, geo_research_status);
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(questionnaire_submissions)")}
@@ -630,6 +619,14 @@ def personalized_recruitment_draft(profile_id: str, *, recipient: str, questionn
     record = get_record(profile_id, path)
     if record["profile_type"] == "owner_controlled_test":
         raise PermissionError("owner-controlled test fixture cannot receive normal recruitment")
+    verified = {str(item["email"]).strip().casefold() for item in verified_business_email_channels(record)}
+    selected = recipient.strip().casefold()
+    if not verified:
+        raise PermissionError("invitation personalization requires a verified, evidence-matched first-party business email")
+    if selected not in verified:
+        raise PermissionError("select a verified first-party recipient before invitation personalization")
+    if record["qualification_status"] not in {"ELIGIBLE", "QUALIFIED"} or record.get("suppression_status") == "SUPPRESSED" or record.get("withdrawal_status") == "WITHDRAWN" or record["consent_status"] in {"DECLINED", "WITHDRAWN"} or record["recruitment_status"] in {"EXCLUDED", "UNSUBSCRIBED"}:
+        raise PermissionError("company is unqualified, suppressed, or withdrawn")
     screenings = record.get("screenings", [])
     observations = []
     if screenings:
@@ -640,7 +637,7 @@ def personalized_recruitment_draft(profile_id: str, *, recipient: str, questionn
             f"Our preliminary, unvalidated review noted: {observation_text}. These are research hypotheses, not measured improvements.\n\n"
             f"Participation details and the company-specific questionnaire are here: {questionnaire_url}\n\n"
             "No website changes or experiments are performed without separate approval.\n")
-    return create_email_draft(profile_id, recipient, body, path=path, template_version=template_version)
+    return create_email_draft(profile_id, selected, body, path=path, template_version=template_version)
 
 
 def approve_email_batch(draft_ids: list[str], reviewer: str, *, path: Path = REGISTRY_DB) -> dict[str, int]:
@@ -910,9 +907,13 @@ def create_manual_invitation_draft(
     # requires explicit draft approval before any manual send.
     discovered = _discovered_official_email_channels(record)
     official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})
-    intended = official[0] if len(official) == 1 else None
-    if not test_override and not intended:
-        raise PermissionError("no single eligible first-party company email is available")
+    intended = None
+    if not test_override:
+        if not official:
+            raise PermissionError("no verified, evidence-matched first-party business email is available")
+        if recipient not in official:
+            raise PermissionError("select a verified first-party recipient before invitation generation")
+        intended = recipient
 
     personalization = stored_invitation_personalization(record)
     content_key = _hash(json.dumps([profile_id, recipient, record["official_website"], personalization, "manual-invitation-v1/evidence-2"], sort_keys=True))
@@ -971,7 +972,8 @@ def create_manual_invitation_draft(
 
 
 def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path = REGISTRY_DB,
-                              max_batch_size: int = 500) -> dict[str, Any]:
+                              max_batch_size: int = 500,
+                              recipient_selections: dict[str, str] | None = None) -> dict[str, Any]:
     """Generate existing manual invitation drafts for a bounded selection.
 
     This is a thin orchestration layer over the existing invitation workflow.
@@ -988,7 +990,7 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
     generated: list[dict[str, Any]] = []
     categories = {key: [] for key in (
         "ready_for_approval", "discovered_unverified_recipient", "missing_verified_recipient", "insufficient_verified_evidence",
-        "duplicate_already_invited", "owner_controlled_test_excluded", "generation_failed",
+        "recipient_selection_required", "duplicate_already_invited", "owner_controlled_test_excluded", "generation_failed",
     )}
     for profile_id in unique_ids:
         try:
@@ -1006,10 +1008,18 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
                 continue
             discovered = _discovered_official_email_channels(record)
             official = sorted({str(item.get("email", "")).strip().casefold() for item in discovered})
-            if len(official) != 1:
+            if not official:
                 categories["missing_verified_recipient"].append(profile_id)
                 continue
-            result = create_manual_invitation_draft(profile_id, delivery_recipient=official[0], secret=secret, path=path)
+            selected = str((recipient_selections or {}).get(profile_id) or "").strip().casefold()
+            if len(official) > 1 and not selected:
+                categories["recipient_selection_required"].append({"profile_id": profile_id, "recipients": official})
+                continue
+            selected = selected or official[0]
+            if selected not in official:
+                categories["insufficient_verified_evidence"].append({"profile_id": profile_id, "error": "selected recipient is not a verified, evidence-matched first-party business email"})
+                continue
+            result = create_manual_invitation_draft(profile_id, delivery_recipient=selected, secret=secret, path=path)
             generated.append({**result, "profile_id": profile_id})
             categories["duplicate_already_invited" if result["status"] == "EXISTING" else "ready_for_approval"].append(profile_id)
             if not any(str(item.get("review_status") or "").upper() in {"APPROVED", "VERIFIED", "CONTACT_VERIFIED"} for item in discovered if str(item.get("email") or "").strip().casefold() == official[0]):
@@ -1026,6 +1036,7 @@ def generate_invitation_batch(profile_ids: list[str], *, secret: str, path: Path
         "ready_for_approval": len(categories["ready_for_approval"]),
         "discovered_unverified_recipient": len(categories["discovered_unverified_recipient"]),
         "missing_verified_recipient": len(categories["missing_verified_recipient"]),
+        "recipient_selection_required": len(categories["recipient_selection_required"]),
         "insufficient_verified_evidence": len(categories["insufficient_verified_evidence"]),
         "duplicate_already_invited": len(categories["duplicate_already_invited"]),
         "owner_controlled_test_excluded": len(categories["owner_controlled_test_excluded"]),
@@ -1165,6 +1176,12 @@ def persist_combined_screening_and_draft(profile_id: str, *, result: dict[str, A
             raise PermissionError("combined screening requires VERIFIED_US geographic eligibility")
         if record["consent_status"] in {"DECLINED", "WITHDRAWN"} or record["recruitment_status"] in {"EXCLUDED", "UNSUBSCRIBED"}:
             raise PermissionError("profile is suppressed or excluded")
+        verified_channels = verified_business_email_channels(dict(record))
+        verified_recipients = {str(item["email"]).strip().casefold() for item in verified_channels}
+        if not verified_recipients:
+            raise PermissionError("invitation personalization requires a verified, evidence-matched first-party business email")
+        if recipient.strip().casefold() not in verified_recipients:
+            raise PermissionError("selected invitation recipient is not a verified first-party business email")
         prior = db.execute("SELECT analysis_id FROM screening_analysis_results WHERE profile_id=? AND content_hash=? AND mode=?", (profile_id, content_hash, str(result.get("mode", "RULE_BASED")))).fetchone()
         if prior:
             existing = db.execute("SELECT draft_id,invitation_id,body FROM email_drafts WHERE analysis_id=?", (prior["analysis_id"],)).fetchone()

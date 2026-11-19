@@ -11,6 +11,8 @@ from outreach_agent.preliminary_screening import ScreeningConfig, _fetch, _hash
 from outreach_agent.outreach_pipeline import mail_merge_safe_subject
 from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, get_record, now, persist_combined_screening_and_draft
 from outreach_agent.screening_provider import PROMPT_VERSION, call as call_ai, configured_provider
+from outreach_agent.contact_eligibility import verified_business_email_channels
+from outreach_agent.geographic_eligibility import is_us_eligible
 
 MODES = {"RULE_BASED", "LOCAL_LLM", "PAID_API"}
 RATINGS = {"HIGH", "MEDIUM", "LOW", "INSUFFICIENT_EVIDENCE"}
@@ -94,12 +96,40 @@ def run_combined_analysis(profile_id: str, *, mode: str = "RULE_BASED", recipien
     if mode not in MODES:
         raise ValueError(f"mode must be one of {sorted(MODES)}")
     record = get_record(profile_id, path)
+    if record.get("profile_type") == "owner_controlled_test":
+        raise PermissionError("owner-controlled test fixture cannot use normal paid invitation personalization")
+    if not is_us_eligible(record.get("geographic_classification")):
+        raise PermissionError("invitation personalization requires VERIFIED_US eligibility")
+    if record.get("qualification_status") not in {"ELIGIBLE", "QUALIFIED"}:
+        raise PermissionError("invitation personalization requires a qualified business")
+    if record.get("suppression_status") == "SUPPRESSED" or record.get("withdrawal_status") == "WITHDRAWN" or record.get("consent_status") in {"DECLINED", "WITHDRAWN"} or record.get("recruitment_status") in {"EXCLUDED", "UNSUBSCRIBED"}:
+        raise PermissionError("invitation personalization is blocked for suppressed or withdrawn records")
+    contacts = verified_business_email_channels(record)
+    verified_recipients = sorted({str(item["email"]).strip().casefold() for item in contacts})
+    selected_recipient = recipient.strip().casefold()
+    if not verified_recipients:
+        raise PermissionError("paid invitation personalization requires a verified, evidence-matched first-party business email")
+    if selected_recipient not in verified_recipients:
+        raise PermissionError("select a verified first-party recipient for this company before invitation personalization")
     cached = None if force_refetch else _cached_pages(profile_id, path)
     if cached:
         pages, prior = cached
         fetch_meta = {"mode": "CACHED", "source_analysis_id": prior.get("analysis_id")}
     else:
         pages, fetch_meta = _fetch(record["official_website"], config or ScreeningConfig(), mock=False, name=record["name"], industry=record.get("industry"))
+    evidence = [{"url": page.get("url", ""), "excerpt": str(page.get("text") or "")[:800], "captured_at": now(), "content_hash": _hash(str(page.get("text") or "")), "fetch": fetch_meta} for page in pages]
+    content_hash = _hash(json.dumps([{"url": p.get("url"), "content_hash": _hash(str(p.get("text") or ""))} for p in pages], sort_keys=True))
+    # Reuse the exact completed analysis when the evidence fingerprint matches.
+    # This prevents a retry or dashboard refresh from repeating paid GPT work.
+    with _connect(path) as db:
+        previous = db.execute("SELECT analysis_id,result_json FROM screening_analysis_results WHERE profile_id=? AND content_hash=? AND mode=?", (profile_id, content_hash, mode)).fetchone()
+    if previous:
+        prior_result = json.loads(previous["result_json"])
+        validate_analysis_result(prior_result)
+        persisted = persist_combined_screening_and_draft(profile_id, result=prior_result, recipient=selected_recipient, secret=secret, path=path, base_url=base_url)
+        return {**prior_result, **persisted, "status": "IDEMPOTENT_EXISTING", "provider_call_reused": True}
+    if str(record.get("personalization_status") or "NOT_STARTED").upper() == "COMPLETE":
+        raise PermissionError("completed personalization is preserved; new paid personalization is not started")
     input_tokens = output_tokens = 0
     provider = mode
     model = None
@@ -116,8 +146,6 @@ def run_combined_analysis(profile_id: str, *, mode: str = "RULE_BASED", recipien
         input_tokens, output_tokens = usage["input_tokens"], usage["output_tokens"]
         provider = "OPENAI_COMPATIBLE_" + mode
         model = provider_config.model
-    evidence = [{"url": page.get("url", ""), "excerpt": str(page.get("text") or "")[:800], "captured_at": now(), "content_hash": _hash(str(page.get("text") or "")), "fetch": fetch_meta} for page in pages]
-    content_hash = _hash(json.dumps([{"url": p.get("url"), "content_hash": _hash(str(p.get("text") or ""))} for p in pages], sort_keys=True))
     result = {"mode": mode, "provider": provider, "model": model, "prompt_version": PROMPT_VERSION if mode != "RULE_BASED" else "rule-based-preliminary/v1", "content_hash": content_hash, "pages": pages, "evidence": evidence, "screening": screening, "invitation": _invitation(name=record["name"], industry=record.get("industry"), location=record.get("location"), screening=screening), "input_tokens": input_tokens, "output_tokens": output_tokens, "estimated_cost_usd": 0}
     validate_analysis_result(result)
     result.update(persist_combined_screening_and_draft(profile_id, result=result, recipient=recipient, secret=secret, path=path, base_url=base_url))

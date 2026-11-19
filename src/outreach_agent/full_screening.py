@@ -23,10 +23,14 @@ from typing import Any
 
 from outreach_agent.research_lifecycle import REGISTRY_DB, init_registry, now
 from outreach_agent.screening_provider import PROMPT_VERSION, call as call_ai, configured_provider, estimate_cost
+from outreach_agent.contact_eligibility import (
+    contact_readiness_counts,
+    first_party_business_email_evidence,
+    verified_business_email_channels,
+)
 
 RUN_VERSION = "full-us-outreach-screening/v2-soft-size"
 EMAIL_TYPES = {"GENERAL_BUSINESS_EMAIL", "SALES_MARKETING_EMAIL", "PARTNERSHIP_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL", "NAMED_PERSON_EMAIL"}
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = ROOT / "data" / "full_screening"
 
@@ -48,13 +52,7 @@ def _channels(row: sqlite3.Row) -> list[dict[str, Any]]:
 
 
 def _email_channels(row: sqlite3.Row) -> list[dict[str, Any]]:
-    result = []
-    for item in _channels(row):
-        if str(item.get("review_status", "PENDING")).upper() == "REJECTED":
-            continue
-        if str(item.get("channel_type", "")).upper() in EMAIL_TYPES and EMAIL_RE.match(str(item.get("email") or "")):
-            result.append(item)
-    return result
+    return verified_business_email_channels(row)
 
 
 def deterministic_gate(row: sqlite3.Row) -> tuple[str, list[str], list[dict[str, Any]]]:
@@ -68,13 +66,18 @@ def deterministic_gate(row: sqlite3.Row) -> tuple[str, list[str], list[dict[str,
         reasons.append(f"IDENTITY_{row['identity_verification_status']}")
     if row["qualification_status"] != "ELIGIBLE":
         reasons.append("QUALIFICATION_NOT_ELIGIBLE")
+    if str(row["personalization_status"] or "NOT_STARTED").upper() == "COMPLETE":
+        reasons.append("PERSONALIZATION_ALREADY_COMPLETE")
     if not str(row["official_website"] or "").strip():
         reasons.append("MISSING_OFFICIAL_WEBSITE")
     # Size is retained as a preference signal only. Missing employee/revenue
     # evidence must not block a verified US business from screening.
     emails = _email_channels(row)
     if not emails:
-        reasons.append("NO_VALID_PUBLIC_BUSINESS_EMAIL")
+        if first_party_business_email_evidence(row):
+            reasons.append("BUSINESS_EMAIL_PENDING_VERIFICATION")
+        else:
+            reasons.append("NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")
     if row["consent_status"] in {"DECLINED", "WITHDRAWN"}:
         reasons.append("CONSENT_SUPPRESSED")
     if row["recruitment_status"] in {"EXCLUDED", "UNSUBSCRIBED"}:
@@ -169,9 +172,26 @@ def run_full_job(job_id: str, path: Path = REGISTRY_DB) -> dict[str, Any]:
             if config is None:
                 raise RuntimeError("AI_PROVIDER_NOT_CONFIGURED")
             from outreach_agent.preliminary_screening import ScreeningConfig, _fetch
-            queue = db.execute("SELECT q.profile_id,r.profile_version,r.name,r.industry,r.location,r.official_website FROM full_screening_queue q JOIN research_records r USING(profile_id) WHERE q.job_id=? AND q.status='PENDING_AI' ORDER BY q.profile_id", (job_id,)).fetchall()
-            processed = success = failed = input_tokens = output_tokens = 0
+            queue = db.execute("SELECT q.profile_id,r.* FROM full_screening_queue q JOIN research_records r USING(profile_id) WHERE q.job_id=? AND q.status='PENDING_AI' ORDER BY q.profile_id", (job_id,)).fetchall()
+            processed = success = failed = input_tokens = output_tokens = contact_skipped = eligibility_skipped = already_personalized = 0
             for item in queue:
+                # Campaign membership is immutable. Recheck current contact
+                # readiness immediately before work and defer this member if
+                # its verified first-party recipient is missing or revoked.
+                eligibility, blockers, _ = deterministic_gate(item)
+                if eligibility != "ELIGIBLE_FOR_AI_SCREENING":
+                    if "PERSONALIZATION_ALREADY_COMPLETE" in blockers:
+                        queue_status, eligibility_status = "SKIPPED_ALREADY_PERSONALIZED", "BLOCKED_ALREADY_PERSONALIZED"
+                        already_personalized += 1
+                    elif any(reason in blockers for reason in ("BUSINESS_EMAIL_PENDING_VERIFICATION", "NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")):
+                        queue_status, eligibility_status = "DEFERRED_CONTACT_INELIGIBLE", "BLOCKED_CONTACT_INELIGIBLE"
+                        contact_skipped += 1
+                    else:
+                        queue_status, eligibility_status = "DEFERRED_ELIGIBILITY_CHANGE", "BLOCKED_DETERMINISTIC"
+                        eligibility_skipped += 1
+                    db.execute("UPDATE full_screening_queue SET eligibility_status=?,blocking_reasons_json=?,status=?,last_error=? WHERE job_id=? AND profile_id=? AND status='PENDING_AI'", (eligibility_status, json.dumps(blockers, sort_keys=True), queue_status, "Paid personalization deferred: " + ",".join(blockers), job_id, item["profile_id"]))
+                    processed += 1
+                    continue
                 try:
                     pages, meta = _fetch(item["official_website"], ScreeningConfig(), mock=False, name=item["name"], industry=item["industry"])
                     result, usage = call_ai(config, name=item["name"], industry=item["industry"], location=item["location"], pages=pages)
@@ -192,8 +212,9 @@ def run_full_job(job_id: str, path: Path = REGISTRY_DB) -> dict[str, Any]:
                 processed += 1
             cost = input_tokens / 1_000_000 * config.input_cost_per_million + output_tokens / 1_000_000 * config.output_cost_per_million
             status = "COMPLETE" if failed == 0 else "COMPLETE_WITH_FAILURES"
-            db.execute("UPDATE full_screening_jobs SET status=?,completed_at=?,processed=?,ai_screened=?,failed=?,token_input=?,token_output=?,estimated_cost_usd=?,error_summary_json=? WHERE job_id=?", (status, now(), processed, success, failed, input_tokens, output_tokens, cost, json.dumps({"failed": failed}), job_id))
-            return {"job_id": job_id, "status": status, "processed": processed, "ai_screened": success, "failed": failed, "token_input": input_tokens, "token_output": output_tokens, "estimated_cost_usd": cost, "provider": provider, "paid_calls": processed}
+            blocked = contact_skipped + eligibility_skipped + already_personalized
+            db.execute("UPDATE full_screening_jobs SET status=?,completed_at=?,processed=?,ai_screened=?,ai_blocked=ai_blocked+?,failed=?,token_input=?,token_output=?,estimated_cost_usd=estimated_cost_usd+?,error_summary_json=? WHERE job_id=?", (status, now(), processed, success, blocked, failed, input_tokens, output_tokens, cost, json.dumps({"failed": failed, "deferred_contact_ineligible": contact_skipped, "deferred_eligibility_change": eligibility_skipped, "already_personalized": already_personalized}), job_id))
+            return {"job_id": job_id, "status": status, "processed": processed, "ai_screened": success, "contact_skipped": contact_skipped, "eligibility_skipped": eligibility_skipped, "already_personalized_skipped": already_personalized, "failed": failed, "token_input": input_tokens, "token_output": output_tokens, "estimated_cost_usd": cost, "provider": provider, "paid_calls": success}
         raise RuntimeError(f"Provider {provider} is declared but no safe adapter is installed")
 
 

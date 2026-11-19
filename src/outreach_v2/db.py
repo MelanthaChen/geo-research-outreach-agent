@@ -338,7 +338,11 @@ class Database:
                     return
                 if index_state:
                     connection.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS {SCHEMA}.ix_candidates_name_id'))
-                connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS {SCHEMA}.ix_candidates_name_id '
+                # PostgreSQL derives the index namespace from the target table;
+                # its CREATE INDEX grammar does not accept a schema-qualified
+                # index name here. Qualify the table so the index lands in the
+                # intended schema.
+                connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_candidates_name_id '
                                         f'ON {SCHEMA}.candidates (name, id)'))
                 if not migration_record:
                     connection.execute(schema_migrations.insert().values(version=12,

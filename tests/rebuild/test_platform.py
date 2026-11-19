@@ -157,6 +157,60 @@ def test_dedicated_invitation_worker_is_disabled_by_default_and_processes_one_ch
     assert client.post('/api/internal/invitation-generation-tick',headers=headers,json={'batch_id':'unrelated'}).status_code==400
 
 
+def test_dedicated_invitation_worker_empty_queue_is_successful_and_side_effect_free(db,monkeypatch):
+    from contextlib import contextmanager
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    token='test-empty-invitation-worker-token-'+('x'*32)
+    monkeypatch.setenv('OUTREACH_WORKER_TOKEN',token)
+    monkeypatch.setenv('OUTREACH_INVITATION_GENERATION_ENABLED','true')
+    db.postgres=True
+    @contextmanager
+    def lock():yield True
+    monkeypatch.setattr(db,'worker_lock',lock)
+    before_invitations=count(db,invitations)
+    response=TestClient(create_app(db)).post('/api/internal/invitation-generation-tick',
+        headers={'Authorization':'Bearer '+token},json={})
+    assert response.status_code==200
+    assert response.json()['status']=='COMPLETED'
+    assert response.json()['processed_chunks']==0
+    assert response.json()['external_provider_calls']==0
+    assert response.json()['emails_sent']==0
+    assert count(db,invitations)==before_invitations==0
+    from outreach_v2.db import invitation_generation_batches
+    assert count(db,invitation_generation_batches)==0
+
+
+def test_admin_batch_list_exposes_durable_generation_failure(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2.db import invitation_generation_batches
+    candidate(db,'generation-visible-error')
+    selection={'ids':['generation-visible-error']}
+    preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},
+        'generation-visible-error-request-key')
+    with db.transaction() as c:
+        c.execute(invitation_generation_batches.update().where(
+            invitation_generation_batches.c.batch_id==queued['batch_id']).values(
+                status='RETRY_PENDING',error='Chunk transaction rolled back; checkpoint is recoverable'))
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-worker-status-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db))
+    login=client.post('/api/auth/login',json={'email':'chen.yuxuan9@northeastern.edu',
+        'password':'local-only-worker-status-password'})
+    assert login.status_code==200 and login.json()['role']=='ADMIN'
+    listed=client.get('/api/batches').json()['rows']
+    batch=next(row for row in listed if row['id']==queued['batch_id'])
+    assert batch['generation_status']=='RETRY_PENDING'
+    assert batch['generation_completed']==0 and batch['generation_total']==1
+    assert batch['generation_error']=='Chunk transaction rolled back; checkpoint is recoverable'
+    progress=client.get(f"/api/batches/{queued['batch_id']}/generation").json()
+    assert progress['error']==batch['generation_error']
+    assert count(db,invitations)==0
+
+
 def test_durable_invitation_generation_rolls_back_and_recovers_same_chunk(db,monkeypatch):
     from outreach_v2 import invitation_generation
     from outreach_v2.db import invitation_generation_batches

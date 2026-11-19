@@ -381,7 +381,8 @@ def create_app(database=None):
             query=select(*[x for x in batches.c if x.name!='package'],
                 invitation_generation_batches.c.status.label('generation_status'),
                 invitation_generation_batches.c.completed_items.label('generation_completed'),
-                invitation_generation_batches.c.total_items.label('generation_total')).select_from(
+                invitation_generation_batches.c.total_items.label('generation_total'),
+                invitation_generation_batches.c.error.label('generation_error')).select_from(
                     batches.outerjoin(invitation_generation_batches,
                         invitation_generation_batches.c.batch_id==batches.c.id))
             return {'rows':[dict(r) for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]}

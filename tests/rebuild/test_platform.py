@@ -43,7 +43,7 @@ def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https:/
         errors=quality_reasons(p) if personalization else ['INSUFFICIENT_EVIDENCE']
         c.execute(candidates.insert().values(id=ident,kind='company',name=name,website=website,domain=website.split('//')[1],industry='Software',location='Unknown',website_status='VERIFIED',qualification='ELIGIBLE',geography='UNKNOWN',suppressed=suppressed,source='isolated-unit-test',personalization=dump(p if personalization else {}),personalization_status='READY' if personalization else 'INCOMPLETE',personalization_quality_status='PASS' if not errors else 'FAIL',personalization_quality_errors=dump(errors),fixture=fixture,personalization_version=1 if personalization else 0,personalization_analysis_version='semantic-openai-v1' if personalization else None,personalization_fingerprint='unit-test-fingerprint' if personalization else None,created_at=now(),updated_at=now()))
         c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',email=email,source_url=website,
-            evidence='Public business email listed on the verified official website',verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',suppressed=False))
+            evidence=f'For general business inquiries, contact {email} on the verified official website.',verification='OWNER_AUTHORIZED' if fixture else 'VERIFIED',purpose='general business',verified_at=None if fixture else now(),verification_reason='unit-test fresh page verification',authorization_reason='Exact address in first-party evidence; general business purpose.',suppressed=False))
     return ident
 
 def invite(db,ids=['a'],key='stable-request-key-123'):
@@ -55,7 +55,7 @@ def reviewed_generate(db,selection,key):
     return generate(db,{**selection,'preview_sha256':preview['preview_sha256']},key)
 
 def test_durable_invitation_generation_is_chunked_idempotent_and_review_gated(db):
-    candidate(db,'generation-a');candidate(db,'generation-b',email='other@example.com',website='https://generation-b.example.com',name='Generation B')
+    candidate(db,'generation-a');candidate(db,'generation-b',email='contact@generation-b.org',website='https://generation-b.org',name='Generation B')
     selection={'ids':['generation-a','generation-b']}
     preview=preview_generation(db,selection)
     queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'durable-generation-request-key')
@@ -154,7 +154,7 @@ def test_durable_invitation_generation_bounds_ambiguous_chunk_retries(db,monkeyp
 
 def test_manual_batch_recovery_reuses_checkpoint_without_duplicate_invitations(db):
     from outreach_v2.db import invitation_generation_batches
-    candidate(db,'generation-resume-a');candidate(db,'generation-resume-b',email='resume-b@example.com',website='https://generation-resume-b.example.com',name='Generation Resume B')
+    candidate(db,'generation-resume-a');candidate(db,'generation-resume-b',email='contact@generation-resume-b.org',website='https://generation-resume-b.org',name='Generation Resume B')
     selection={'ids':['generation-resume-a','generation-resume-b']};preview=preview_generation(db,selection)
     queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'generation-manual-recovery-key')
     first=process_invitation_chunk(db,chunk_size=1)
@@ -217,15 +217,15 @@ def test_invitation_generation_rejects_legacy_ready_quality_pass_without_writing
     assert count(db,batches)==0
 
 def test_primary_business_statuses_are_derived_and_mutually_exclusive(db):
-    candidate(db,'status-ready','ready@example.test','https://ready.example.test','Ready Business',fixture=False)
+    candidate(db,'status-ready','ready@businessmail.org','https://ready.example.test','Ready Business',fixture=False)
     # Legacy READY is only a cache: complete semantic PASS plus valid contact is sufficient.
     with db.transaction() as c:
         c.execute(candidates.update().where(candidates.c.id=='status-ready').values(personalization_status='INCOMPLETE'))
-    candidate(db,'status-no-contact','none@example.test','https://none.example.test','No Contact Business',fixture=False)
-    candidate(db,'status-invited','invited@example.test','https://invited.example.test','Invited Business',fixture=False)
+    candidate(db,'status-no-contact','none@businessmail.org','https://none.example.test','No Contact Business',fixture=False)
+    candidate(db,'status-invited','invited@businessmail.org','https://invited.example.test','Invited Business',fixture=False)
     invite(db,['status-invited'],'status-invited-idempotency-key')
-    candidate(db,'status-pending','pending@example.test','https://pending.example.test','Pending Business',fixture=False,personalization=False)
-    candidate(db,'status-blocked','blocked@example.test','https://blocked.example.test','Blocked Business',fixture=False,suppressed=True)
+    candidate(db,'status-pending','pending@businessmail.org','https://pending.example.test','Pending Business',fixture=False,personalization=False)
+    candidate(db,'status-blocked','blocked@businessmail.org','https://blocked.example.test','Blocked Business',fixture=False,suppressed=True)
     with db.transaction() as c:
         c.execute(contacts.delete().where(contacts.c.candidate_id=='status-no-contact'))
         c.execute(candidates.update().where(candidates.c.id=='status-pending').values(
@@ -464,8 +464,8 @@ def test_fresh_owner_binding_preserves_distinct_verified_google_and_invitation_a
 
 
 @pytest.mark.parametrize(('ident','website','recipient','respondent'),[
-    ('simulated-company-one','https://one.example/','contact@one.example','owner-one@gmail.com'),
-    ('simulated-company-two','https://two.example/','contact@two.example','owner-two@gmail.com'),
+    ('simulated-company-one','https://one.example/','contact@one.org','owner-one@gmail.com'),
+    ('simulated-company-two','https://two.example/','contact@two.org','owner-two@gmail.com'),
 ])
 def test_generic_admin_identity_binding_authorizes_two_distinct_company_scopes(db,ident,website,recipient,respondent):
     from outreach_v2.consent import record_owner_identity_binding
@@ -527,7 +527,7 @@ def test_duplicate_legacy_blocked_scope_does_not_revalidate_without_verified_ide
         assert invitation['consent_status']=='BLOCKED_SCOPE'
         assert c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitation['id'])) is None
 
-    candidate(db,ident='ordinary-company',email='owner@ordinary.example',website='https://ordinary.example',name='Ordinary Company',fixture=False)
+    candidate(db,ident='ordinary-company',email='owner@ordinary.org',website='https://ordinary.example',name='Ordinary Company',fixture=False)
     invite(db,['ordinary-company'],key='ordinary-mismatch-test-key')
     ordinary=response(db,id='ordinary-company');ordinary['Business Name']='Ordinary Co';ordinary['Business Website']='https://unrelated.example'
     # Respondent-entered scope labels are ignored; this non-fixture still cannot
@@ -542,28 +542,28 @@ def test_withdrawn_candidate_cannot_create_research_job(db):
     assert process(db,response(db))=='WITHDRAWN';assert count(db,jobs)==0
 
 def test_foreign_representative_does_not_redirect_report(db):
-    candidate(db);invite(db);row=response(db,email='someone@other.example')
+    candidate(db);invite(db);row=response(db,email='someone@other.org')
     assert process(db,row)=='BLOCKED_IDENTITY';assert count(db,jobs)==0
     with db.transaction() as c:assert c.scalar(select(invitations.c.recipient))=='yuxuan.chen.1031@outlook.com'
 
 def test_real_company_requires_google_verified_invited_mailbox(db):
-    candidate(db,ident='real',email='research@company.example',website='https://company.example',name='Example Company',fixture=False)
+    candidate(db,ident='real',email='research@company.org',website='https://company.example',name='Example Company',fixture=False)
     invite(db,['real'],key='real-invite-key-12345')
-    row=response(db,id='real',email='research@company.example')
+    row=response(db,id='real',email='research@company.org')
     assert process(db,row)=='BLOCKED_IDENTITY'
     assert count(db,jobs)==0
-    identity={'provider':'GOOGLE_FORMS_VERIFIED','email':'research@company.example','response_id':'forms-response-1','email_collection_type':'VERIFIED'}
+    identity={'provider':'GOOGLE_FORMS_VERIFIED','email':'research@company.org','response_id':'forms-response-1','email_collection_type':'VERIFIED'}
     assert process(db,row,verified_identity=identity)=='AUTHORIZED'
     assert count(db,jobs)==1
     with db.transaction() as c:
         sub=c.execute(select(submissions).where(submissions.c.identity_reference=='forms-response-1')).mappings().one()
-        assert sub['identity_provider']=='GOOGLE_FORMS_VERIFIED' and sub['identity_verified_email']=='research@company.example'
+        assert sub['identity_provider']=='GOOGLE_FORMS_VERIFIED' and sub['identity_verified_email']=='research@company.org'
 
-@pytest.mark.parametrize('email',[None,'someone@company.example','research@other.example'])
+@pytest.mark.parametrize('email',[None,'someone@company.org','research@other.org'])
 def test_real_company_verified_identity_must_match_invited_recipient(db,email):
-    candidate(db,ident='real',email='research@company.example',website='https://company.example',name='Example Company',fixture=False)
+    candidate(db,ident='real',email='research@company.org',website='https://company.example',name='Example Company',fixture=False)
     invite(db,['real'],key='real-invite-key-12345')
-    row=response(db,id='real',email='research@company.example')
+    row=response(db,id='real',email='research@company.org')
     identity={'provider':'GOOGLE_FORMS_VERIFIED','email':email or '','response_id':'forms-response-1','email_collection_type':'VERIFIED'}
     assert process(db,row,verified_identity=identity)=='BLOCKED_IDENTITY'
     assert count(db,jobs)==0
@@ -571,12 +571,12 @@ def test_real_company_verified_identity_must_match_invited_recipient(db,email):
 def test_google_forms_verified_rows_require_verified_collection_and_match_sheet_contract():
     from outreach_v2.consent import REQUIRED_HEADERS
     form={'settings':{'emailCollectionType':'VERIFIED'},'items':[{'title':h,'questionItem':{'question':{'questionId':str(i)}}} for i,h in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))]}
-    row={'responseId':'r1','respondentEmail':'research@company.example','lastSubmittedTime':'2026-10-28T06:00:00Z',
+    row={'responseId':'r1','respondentEmail':'research@company.org','lastSubmittedTime':'2026-10-28T06:00:00Z',
          'answers':{str(i):{'textAnswers':{'answers':[{'value':'GEO-1'}]}} for i,_ in enumerate(sorted(REQUIRED_HEADERS-{'Timestamp'}))}}
     historical=row|{'responseId':'old','lastSubmittedTime':'2026-10-27T22:15:44Z'}
     result=verified_form_rows(form,[historical,row],list(REQUIRED_HEADERS))
     assert len(result)==1 and isinstance(result[0],VerifiedFormResponse)
-    assert result[0].identity['email']=='research@company.example'
+    assert result[0].identity['email']=='research@company.org'
     assert result[0].answers['Invitation Reference']=='GEO-1'
     form['settings']['emailCollectionType']='RESPONDER_INPUT'
     with pytest.raises(ConfigurationBlocked,match='VERIFIED'):verified_form_rows(form,[row],list(REQUIRED_HEADERS))
@@ -603,7 +603,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==13
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==14
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -611,18 +611,18 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
         c.execute('CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL)')
         c.executemany('INSERT INTO schema_migrations VALUES(?,?,?)',[(i,f'v{i}','2026-01-01') for i in range(1,7)])
         c.execute('CREATE TABLE email_templates (id TEXT PRIMARY KEY,version INTEGER NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,sender TEXT,active BOOLEAN NOT NULL,created_by TEXT,created_at TEXT NOT NULL)')
-        c.execute("INSERT INTO email_templates VALUES('report-v1',1,'Report','Existing report template','reports@example.org',1,'admin','2026-01-01')")
+        c.execute("INSERT INTO email_templates VALUES('report-v1',1,'Report','Existing report template','reports@businessmail.org',1,'admin','2026-01-01')")
         c.execute('CREATE TABLE invitations (id TEXT PRIMARY KEY,reference TEXT,recipient TEXT,company_name TEXT,body TEXT)')
-        c.execute("INSERT INTO invitations VALUES('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')")
+        c.execute("INSERT INTO invitations VALUES('inv-legacy','GEO-LEGACY','owner@businessmail.org','Legacy Company','Original persisted body')")
     db=Database('sqlite:///'+str(path));db.initialize()
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==13
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==14
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
-    assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
+    assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@businessmail.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
-    assert tuple(template[:6])==('report-v1',1,'Report','Existing report template','reports@example.org',1)
+    assert tuple(template[:6])==('report-v1',1,'Report','Existing report template','reports@businessmail.org',1)
     assert template.template_kind=='REPORT' and template.sender_name is None
     db.engine.dispose()
 
@@ -802,8 +802,8 @@ def test_worker_does_not_report_failed_form_ingestion_as_completed(db,monkeypatc
         assert 'HTTP 403' in run['detail']
 
 def test_scheduled_claim_is_restricted_to_one_allowlisted_job_and_safe_stages(db,monkeypatch):
-    candidate(db,ident='allowed',email='owner@allowed.example',website='https://allowed.example/',fixture=False)
-    candidate(db,ident='other',email='owner@other.example',website='https://other.example/',fixture=False)
+    candidate(db,ident='allowed',email='owner@allowed.org',website='https://allowed.example/',fixture=False)
+    candidate(db,ident='other',email='owner@other.org',website='https://other.example/',fixture=False)
     invite(db,['allowed','other'])
     for ident in ('allowed','other'):
         row=response(db,id=ident)
@@ -914,10 +914,10 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     with pytest.raises(ConfigurationBlocked,match='Exact DOCX version awaits approval'):
         delivery_step(db,leased,forbidden_mail_factory)
     assert count(db,deliveries)==0
-    monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
+    monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@businessmail.org')
     with db.transaction() as c:
         c.execute(email_templates.insert().values(id='mail-template-test',version=1,subject='Approved report notice',
-            body='Your {{report_name}} for {{company_name}} is ready. Reply to {{reply_to}}.',sender='reports@example.org',sender_name='Yuxuan Chen',reply_to='reports-reply@example.org',active=True,
+            body='Your {{report_name}} for {{company_name}} is ready. Reply to {{reply_to}}.',sender='reports@businessmail.org',sender_name='Yuxuan Chen',reply_to='reports-reply@businessmail.org',active=True,
             created_by='chen.yuxuan9@northeastern.edu',created_at=now()))
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
@@ -926,14 +926,14 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     assert login.status_code==200 and login.json()['role']=='ADMIN'
     from outreach_v2.db import admin_users
     approver_password='local-approver-password-strong'
-    with db.transaction() as c:c.execute(admin_users.insert().values(id='report-approver',email='approver@example.org',
+    with db.transaction() as c:c.execute(admin_users.insert().values(id='report-approver',email='approver@businessmail.org',
         password_hash=PasswordHasher().hash(approver_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
     approver=TestClient(create_app(db));approver_login=approver.post('/api/auth/login',json={
-        'email':'approver@example.org','password':approver_password})
+        'email':'approver@businessmail.org','password':approver_password})
     assert approver_login.status_code==200 and approver_login.json()['role']=='APPROVER'
     approver_headers={'X-CSRF-Token':approver_login.json()['csrf']}
     assert approver.get('/api/admin/users').status_code==403
-    assert approver.post('/api/admin/invites',headers=approver_headers,json={'email':'new@example.org','role':'APPROVER'}).status_code==403
+    assert approver.post('/api/admin/invites',headers=approver_headers,json={'email':'new@businessmail.org','role':'APPROVER'}).status_code==403
     stale=approver.post(f"/api/reports/{report['id']}/review",headers=approver_headers,
         json={'decision':'APPROVED','document_sha256':'0'*64})
     assert stale.status_code==422
@@ -952,8 +952,8 @@ def test_report_delivery_requires_approval_of_exact_docx_version(db,monkeypatch)
     monkeypatch.setenv('OUTREACH_REPORT_DELIVERY_ENABLED','true')
     delivery_step(db,leased,lambda:mail)
     assert [call[0] for call in mail.calls]==['configure','reconcile','create','send']
-    assert mail.calls[0][:4]==('configure','Approved report notice','Your GEO research report for GeoAIResume is ready. Reply to reports-reply@example.org.','reports@example.org')
-    assert mail.calls[0][4]=={'reply_to':'reports-reply@example.org','sender_name':'Yuxuan Chen'}
+    assert mail.calls[0][:4]==('configure','Approved report notice','Your GEO research report for GeoAIResume is ready. Reply to reports-reply@businessmail.org.','reports@businessmail.org')
+    assert mail.calls[0][4]=={'reply_to':'reports-reply@businessmail.org','sender_name':'Yuxuan Chen'}
     assert mail.calls[2][2]==report['document']
     with db.transaction() as c:
         current=dict(c.execute(select(reports).where(reports.c.id==report['id'])).mappings().one())
@@ -971,7 +971,7 @@ def test_admin_invites_are_one_time_and_role_scoped(db,monkeypatch):
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
     csrf=login.json()['csrf'];headers={'X-CSRF-Token':csrf}
-    invite_result=client.post('/api/admin/invites',headers=headers,json={'email':'reviewer@example.org','role':'APPROVER'})
+    invite_result=client.post('/api/admin/invites',headers=headers,json={'email':'reviewer@businessmail.org','role':'APPROVER'})
     assert invite_result.status_code==200 and invite_result.json()['delivery']=='MANUAL_HANDOFF_REQUIRED'
     token=invite_result.json()['token']
     too_short=client.post('/api/admin/invites/accept',json={'token':token,'password':'lower12char'})
@@ -980,7 +980,7 @@ def test_admin_invites_are_one_time_and_role_scoped(db,monkeypatch):
     assert accepted.status_code==200 and accepted.json()['role']=='APPROVER'
     assert client.post('/api/admin/invites/accept',json={'token':token,'password':'lower12char!'}).status_code==403
     reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={
-        'email':'reviewer@example.org','password':'lower12char!'})
+        'email':'reviewer@businessmail.org','password':'lower12char!'})
     assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
     assert reviewer.get('/api/admin/users').status_code==403
     frontend=(Path(__file__).parents[2]/'src/outreach_v2/static/app.js').read_text()
@@ -1000,7 +1000,7 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     candidate(db,ident='pilot-fixture',email='fixture@pilot-example.org',
         website='https://fixture-company.pilot-example.org',name='Pilot Fixture',fixture=True)
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
-    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false');monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@example.org')
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false');monkeypatch.setenv('OUTREACH_REPORT_SENDER','reports@businessmail.org')
     for key in ('OUTREACH_GRAPH_TENANT_ID','OUTREACH_GRAPH_CLIENT_ID','OUTREACH_GRAPH_CLIENT_SECRET'):monkeypatch.setenv(key,'test-configured')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
@@ -1016,11 +1016,11 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert len(question_rows)==2 and [r['active'] for r in question_rows]==[True,False]
     saved=client.post('/api/admin/email-templates',headers=headers,json={'kind':'REPORT','subject':'{{company_name}} research report',
         'body':'Hello {{company_name}}, the {{report_name}} is ready. Reply to {{reply_to}}.',
-        'sender':'reports@example.org','sender_name':'Yuxuan Chen','reply_to':'reply@northeastern.edu',
+        'sender':'reports@businessmail.org','sender_name':'Yuxuan Chen','reply_to':'reply@northeastern.edu',
         'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'})
     assert saved.status_code==200 and saved.json()['sender_configured'] is True and saved.json()['active'] is True
     report_rows=client.get('/api/admin/email-templates').json()
-    assert any(s['kind']=='REPORT' and s['email']=='reports@example.org' for s in report_rows['authorized_senders'])
+    assert any(s['kind']=='REPORT' and s['email']=='reports@businessmail.org' for s in report_rows['authorized_senders'])
     assert report_rows['rows'][0]['body']=='Hello {{company_name}}, the {{report_name}} is ready. Reply to {{reply_to}}.'
     report_preview=client.post(f"/api/admin/email-templates/{saved.json()['id']}/preview",headers=headers,json={'company_name':'Sample Company'})
     assert report_preview.status_code==200 and report_preview.json()['status']=='REVIEW_PREVIEW_NOT_SENT'
@@ -1077,7 +1077,7 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
         'researcher_name':'Yuxuan Chen','university_affiliation':'Northeastern University'}
     missing=client.post('/api/admin/email-templates',headers=headers,json={**template,'body':'Hello {{company_name}}'})
     assert missing.status_code==422
-    arbitrary=client.post('/api/admin/email-templates',headers=headers,json={**template,'sender':'arbitrary@example.org'})
+    arbitrary=client.post('/api/admin/email-templates',headers=headers,json={**template,'sender':'arbitrary@businessmail.org'})
     assert arbitrary.status_code==422
     first=client.post('/api/admin/email-templates',headers=headers,json=template)
     second=client.post('/api/admin/email-templates',headers=headers,json=template)
@@ -1093,7 +1093,7 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     assert len(invitation_versions)==2 and invitation_versions[0]['active'] is True and invitation_versions[1]['active'] is False
     assert invitation_versions[0]['body']==template['body']
     assert all(row['sender']=='researcher@northeastern.edu' and row['reply_to']=='reply@northeastern.edu' for row in invitation_versions)
-    candidate(db,ident='templated',email='contact@templated.example',website='https://templated.example',
+    candidate(db,ident='templated',email='contact@templated.org',website='https://templated.example',
         name='Templated Company',fixture=False)
     batch=invite(db,['templated'],key='versioned-template-stable-request')
     with db.transaction() as c:
@@ -1109,10 +1109,10 @@ def test_versioned_invitation_template_is_validated_used_and_keeps_shared_bulk_s
     assert rows[0]['sender_name']=='Yuxuan Chen'
     from outreach_v2.db import admin_users
     reviewer_password='local-approver-password-strong'
-    with db.transaction() as c:c.execute(admin_users.insert().values(id='template-approver',email='approver@example.org',
+    with db.transaction() as c:c.execute(admin_users.insert().values(id='template-approver',email='approver@businessmail.org',
         password_hash=PasswordHasher().hash(reviewer_password),role='APPROVER',status='ACTIVE',created_by='test',created_at=now()))
     reviewer=TestClient(create_app(db));review_login=reviewer.post('/api/auth/login',json={
-        'email':'approver@example.org','password':reviewer_password})
+        'email':'approver@businessmail.org','password':reviewer_password})
     assert review_login.status_code==200 and review_login.json()['role']=='APPROVER'
     reviewer_headers={'X-CSRF-Token':review_login.json()['csrf']}
     batch_review=reviewer.get(f"/api/batches/{batch['id']}/review")
@@ -1195,7 +1195,7 @@ def test_manual_send_record_requires_explicitly_verified_invitation_mailbox(db,m
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
     monkeypatch.setenv('OUTREACH_INVITATION_SENDER','researcher@northeastern.edu')
     monkeypatch.delenv('OUTREACH_VERIFIED_INVITATION_SENDERS',raising=False)
-    candidate(db,ident='send-authorization-test',email='contact@send-auth.example',
+    candidate(db,ident='send-authorization-test',email='contact@send-auth.org',
         website='https://send-auth.example',name='Send Authorization Test',fixture=False)
     batch=invite(db,['send-authorization-test'],key='send-auth-template-test-key')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
@@ -1228,7 +1228,7 @@ def test_migration_preserves_hotels_and_resume(db,tmp_path):
         c.execute('create table candidates(candidate_id text primary key,company_name text,website text,location text)')
         c.executemany('insert into candidates values(?,?,?,?)',[('h1','Hotel One','https://chain.example','Boston'),('h2','Hotel Two','https://chain.example','Chicago')])
         c.execute('create table hotel_contact_channels(candidate_id text,email text,source_url text)')
-        c.execute("insert into hotel_contact_channels values('h2','chicago@chain.example','https://chain.example/chicago')")
+        c.execute("insert into hotel_contact_channels values('h2','chicago@chain.org','https://chain.example/chicago')")
     m=Migrator(db,batch_size=1);m.sqlite(source,'hotel');before=m.report();Migrator(db,batch_size=1).sqlite(source,'hotel')
     assert count(db,candidates)==2 and count(db,contacts)==1
     assert before['counts_reconcile']
@@ -1251,7 +1251,7 @@ def test_lean_snapshot_import_keeps_archive_refs_without_duplicate_payloads(tmp_
             domain='example.test',industry='Software',location='Boston',description=p['business_description'],website_status='VERIFIED',
             qualification='ELIGIBLE',geography='UNKNOWN',suppressed=False,source='source.db',personalization=dump(p),
             personalization_status='READY',fixture=False,created_at=now(),updated_at=now()))
-        c.execute(contacts.insert().values(id='contact-1',candidate_id='company-1',kind='EMAIL',email='hello@example.test',
+        c.execute(contacts.insert().values(id='contact-1',candidate_id='company-1',kind='EMAIL',email='hello@businessmail.org',
             source_url='https://example.test/contact',evidence='Published contact page',verification='VERIFIED',
             purpose='business',suppressed=False,raw=raw))
         c.execute(sources.insert().values(id='source-1',path='source.db',relation='candidates',fingerprint='f',expected=1,
@@ -1284,7 +1284,7 @@ def c_count(db, relation):
 def test_semantic_personalization_is_disabled_by_default_and_performs_no_fetch_or_write(db, monkeypatch):
     from outreach_v2.personalization import backfill
     from outreach_v2.db import personalization_runs
-    candidate(db,ident='real-backfill',email='hello@example.com',website='https://example.com',name='Example',
+    candidate(db,ident='real-backfill',email='hello@businessmail.org',website='https://example.com',name='Example',
         personalization=False,fixture=False)
     called=[]
     result=backfill(db,limit=1,fetcher=lambda url: called.append(url),time_budget_seconds=10)
@@ -1301,8 +1301,8 @@ def test_semantic_personalization_is_disabled_by_default_and_performs_no_fetch_o
 def test_semantic_backfill_fails_closed_without_exact_authorized_cohort(db, monkeypatch):
     from outreach_v2.db import personalization_runs, personalization_attempts
     from outreach_v2.personalization import backfill
-    candidate(db,ident='unapproved-a',email='a@example.com',website='https://a.example',name='A',personalization=False,fixture=False)
-    candidate(db,ident='unapproved-b',email='b@example.com',website='https://b.example',name='B',personalization=False,fixture=False)
+    candidate(db,ident='unapproved-a',email='a@businessmail.org',website='https://a.example',name='A',personalization=False,fixture=False)
+    candidate(db,ident='unapproved-b',email='b@businessmail.org',website='https://b.example',name='B',personalization=False,fixture=False)
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
     called=[]
     result=backfill(db,limit=5,fetcher=lambda url:called.append(url))
@@ -1347,8 +1347,8 @@ def test_semantic_business_analysis_does_not_require_a_verified_email_and_includ
 def test_semantic_backfill_never_expands_explicit_cohort_across_repeated_runs(db, monkeypatch):
     from outreach_v2.db import personalization_runs, personalization_attempts
     from outreach_v2.personalization import backfill
-    candidate(db,ident='approved-a',email='a@example.com',website='https://a.example',name='A',personalization=False,fixture=False)
-    candidate(db,ident='outside-b',email='b@example.com',website='https://b.example',name='B',personalization=False,fixture=False)
+    candidate(db,ident='approved-a',email='a@businessmail.org',website='https://a.example',name='A',personalization=False,fixture=False)
+    candidate(db,ident='outside-b',email='b@businessmail.org',website='https://b.example',name='B',personalization=False,fixture=False)
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.25')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
@@ -1383,7 +1383,7 @@ def test_semantic_backfill_never_expands_explicit_cohort_across_repeated_runs(db
 
 def test_semantic_backfill_rejects_budget_above_authorized_pilot_cap(db, monkeypatch):
     from outreach_v2.personalization import backfill
-    candidate(db,ident='over-budget',email='budget@example.com',website='https://budget.example',name='Budget',personalization=False,fixture=False)
+    candidate(db,ident='over-budget',email='budget@businessmail.org',website='https://budget.example',name='Budget',personalization=False,fixture=False)
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.26')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
@@ -1739,7 +1739,7 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
 
     geo_id='geoairesume-owner-test-v1'
     candidate(db,ident=geo_id,name='GeoAIResume controlled test website')
-    candidate(db,ident='ordinary-company',email='contact@ordinary.example',
+    candidate(db,ident='ordinary-company',email='contact@ordinary.org',
               website='https://ordinary.example',name='Ordinary Company')
     invite(db,[geo_id],key='geoairesume-existing-invitation-123')
     geo_response=response(db,id=geo_id)
@@ -1852,7 +1852,7 @@ def test_recipient_preview_is_read_only_and_lists_contact_blockers(db):
 def test_reviewed_generation_rechecks_suppression_and_first_party_contact_provenance(db):
     from outreach_v2.service import eligible_recipient,preview_generation
     from outreach_v2.db import suppressions
-    candidate(db,'contact-guard','person@example.org',website='https://example.org',name='Example Company',fixture=False)
+    candidate(db,'contact-guard','person@businessmail.org',website='https://example.org',name='Example Company',fixture=False)
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='contact-guard')).mappings().one()
         c.execute(contacts.update().where(contacts.c.candidate_id=='contact-guard').values(source_url='https://unrelated.example/contact'))
@@ -1860,7 +1860,7 @@ def test_reviewed_generation_rechecks_suppression_and_first_party_contact_proven
     assert result is None and 'No single valid first-party business email' in reasons
     with db.transaction() as c:
         c.execute(contacts.update().where(contacts.c.candidate_id=='contact-guard').values(source_url='https://example.org/contact'))
-        c.execute(suppressions.insert().values(email='person@example.org',reason='test suppression',recorded_at=now()))
+        c.execute(suppressions.insert().values(email='person@businessmail.org',reason='test suppression',recorded_at=now()))
         row=c.execute(select(candidates).where(candidates.c.id=='contact-guard')).mappings().one()
         result,reasons=eligible_recipient(c,row)
     assert result is None and 'No single valid first-party business email' in reasons
@@ -1870,27 +1870,107 @@ def test_reviewed_generation_rechecks_suppression_and_first_party_contact_proven
 
 def test_multiple_authorized_contacts_are_ready_but_require_explicit_recipient_choice(db):
     from outreach_v2.service import preview_generation
-    candidate(db,'multi-contact','first@example.org',website='https://example.org',name='Example Company',fixture=False)
+    candidate(db,'multi-contact','first@businessmail.org',website='https://example.org',name='Example Company',fixture=False)
     with db.transaction() as c:
         c.execute(contacts.insert().values(id='contact-second',candidate_id='multi-contact',kind='EMAIL',
-            email='second@example.org',source_url='https://example.org/contact',evidence='Listed on official contact page',
-            verification='VERIFIED',purpose='general business',suppressed=False))
+            email='second@businessmail.org',source_url='https://example.org/contact',evidence='For general business inquiries, contact second@businessmail.org.',
+            verification='VERIFIED',purpose='general business',verified_at=now(),verification_reason='fresh',
+            authorization_reason='Exact address in first-party evidence; general business purpose.',suppressed=False))
     row=list_candidates(db,{'q':'Example Company'})['rows'][0]
     assert row['primary_status']=='READY_TO_INVITE' and row['contact_readiness']=='MANUAL_RECIPIENT_SELECTION'
     selection={'ids':['multi-contact']};preview=preview_generation(db,selection)
-    assert preview['valid_recipient_count']==0 and preview['excluded'][0]['recipient_options']==['first@example.org','second@example.org']
-    chosen={**selection,'recipient_choices':{'multi-contact':'second@example.org'}}
+    assert preview['valid_recipient_count']==0 and preview['excluded'][0]['recipient_options']==['first@businessmail.org','second@businessmail.org']
+    chosen={**selection,'recipient_choices':{'multi-contact':'second@businessmail.org'}}
     approved=preview_generation(db,chosen)
     assert approved['valid_recipient_count']==1 and approved['excluded_count']==0
     generated=generate(db,{**chosen,'preview_sha256':approved['preview_sha256']},'manual-recipient-choice-key')
     assert count(db,invitations)==1
     with db.transaction() as c:
-        assert c.scalar(select(invitations.c.recipient).where(invitations.c.candidate_id=='multi-contact'))=='second@example.org'
+        assert c.scalar(select(invitations.c.recipient).where(invitations.c.candidate_id=='multi-contact'))=='second@businessmail.org'
+
+@pytest.mark.parametrize('state',['PENDING','UNKNOWN'])
+def test_pending_and_unknown_contacts_never_count_as_verified_recipients(db,state):
+    from outreach_v2.service import preview_generation
+    candidate(db,'unverified-contact','contact@businessmail.org',website='https://company.example',name='Company',fixture=False)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id=='unverified-contact').values(
+            verification=state,verified_at=None,evidence='For general business inquiries contact contact@businessmail.org.'))
+    row=list_candidates(db,{'q':'Company'})['rows'][0]
+    assert row['primary_status']=='PERSONALIZED_NO_CONTACT'
+    preview=preview_generation(db,{'ids':['unverified-contact']})
+    assert preview['valid_recipient_count']==0
+    assert 'Contact has not completed explicit verification' in preview['excluded'][0]['reasons']
+
+@pytest.mark.parametrize('evidence,expected',[
+    ('General business contact: info@businessmail.org.',1),
+    ('General business contact: prefixinfo@businessmail.org.evil',0),
+])
+def test_recipient_requires_complete_exact_address_in_preserved_evidence(db,evidence,expected):
+    from outreach_v2.service import preview_generation
+    candidate(db,'exact-evidence','info@businessmail.org',website='https://business.example',name='Evidence Business',fixture=False)
+    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='exact-evidence').values(evidence=evidence))
+    preview=preview_generation(db,{'ids':['exact-evidence']})
+    assert preview['valid_recipient_count']==expected
+
+@pytest.mark.parametrize('email,purpose',[
+    ('press@businessmail.org','general business'),('newsletter@businessmail.org','general business'),
+    ('info@businessmail.org','hotel reservations'),('reservations@businessmail.org','general business'),
+    ('info@mysite.com','general business'),('info@businessmail.org','PR')])
+def test_recipient_purpose_and_placeholder_domains_are_rejected(db,email,purpose):
+    from outreach_v2.service import preview_generation
+    candidate(db,'restricted-contact',email,website='https://business.example',name='Purpose Business',fixture=False)
+    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='restricted-contact').values(purpose=purpose))
+    preview=preview_generation(db,{'ids':['restricted-contact']})
+    assert preview['valid_recipient_count']==0
+
+def test_stale_or_undated_verified_contact_is_not_invitation_ready(db):
+    from datetime import datetime,timedelta,timezone
+    from outreach_v2.service import preview_generation
+    candidate(db,'stale-contact','contact@businessmail.org',website='https://business.example',name='Stale Company',fixture=False)
+    stale=(datetime.now(timezone.utc)-timedelta(days=181)).isoformat()
+    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='stale-contact').values(verified_at=stale))
+    preview=preview_generation(db,{'ids':['stale-contact']})
+    assert preview['valid_recipient_count']==0
+    assert 'Contact verification is missing a timestamp or is older than 180 days' in preview['excluded'][0]['reasons']
+
+def test_generation_timeout_after_commit_reconciles_original_request_key(db,monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2 import invitation_generation
+    from outreach_v2.app import create_app
+    from outreach_v2.service import preview_generation
+    candidate(db,'timeout-after-commit')
+    selection={'ids':['timeout-after-commit']};preview=preview_generation(db,selection)
+    body={**selection,'preview_sha256':preview['preview_sha256']};key='timeout-after-commit-request-01'
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('timeout-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
+    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={'email':'chen.yuxuan9@northeastern.edu','password':'timeout-test-password'})
+    assert login.status_code==200
+    headers={'X-CSRF-Token':login.json()['csrf'],'Idempotency-Key':key}
+    calls={'n':0};real_enqueue=invitation_generation.enqueue
+    def commit_then_drop_response(database,payload,request_key):
+        result=real_enqueue(database,payload,request_key);calls['n']+=1
+        if calls['n']==1:raise OSError('simulated connection loss after durable enqueue')
+        return result
+    monkeypatch.setattr(invitation_generation,'enqueue',commit_then_drop_response)
+    lost=client.post('/api/batches',headers=headers,json=body)
+    assert lost.status_code==503
+    recovered=client.get('/api/batches/by-request-key/'+key)
+    assert recovered.status_code==200 and recovered.json()['generation_status']=='QUEUED'
+    assert recovered.json()['invitation_count']==0
+    retried=client.post('/api/batches',headers=headers,json=body)
+    assert retried.status_code==200 and retried.json()['batch_id']==recovered.json()['batch_id']
+    assert retried.json()['idempotent_replay'] is True
+    assert count(db,batches)==1 and count(db,invitations)==0
+    generated=process_invitation_chunk(db,chunk_size=1)
+    assert generated['status']=='COMPLETED' and generated['invitation_count']==1
+    final=client.get('/api/batches/by-request-key/'+key)
+    assert final.json()['generation_status']=='COMPLETED' and final.json()['invitation_count']==1
 
 def test_invitation_oriented_pilot_cohort_requires_verified_first_party_contact(db):
     from outreach_v2.service import select_pilot_cohort
     candidate(db,'no-contact-for-pilot',None,website='https://no-contact.example',name='No Contact Business',fixture=False)
-    candidate(db,'contact-for-pilot','pilot@has-contact.example',website='https://has-contact.example',name='Contact Business',fixture=False)
+    candidate(db,'contact-for-pilot','pilot@has-contact.org',website='https://has-contact.example',name='Contact Business',fixture=False)
     with db.transaction() as c:
         c.execute(contacts.update().where(contacts.c.candidate_id=='no-contact-for-pilot').values(verification='VERIFIED',evidence='No address evidence'))
         rows=select_pilot_cohort(c,100)
@@ -1899,56 +1979,56 @@ def test_invitation_oriented_pilot_cohort_requires_verified_first_party_contact(
 def test_first_party_contact_discovery_persists_verifiable_provenance_without_creating_invitation(db):
     from outreach_v2.service import add_contact_from_first_party_page,detail
     candidate(db,'contact-discovery',None,website='https://business.example',name='Business Example',fixture=False)
-    html='<html><main><p>For business inquiries, contact info@business.example.</p></main></html>'
-    record=add_contact_from_first_party_page(db,'contact-discovery','info@business.example','https://business.example/contact',
+    html='<html><main><p>For business inquiries, contact info@business.org.</p></main></html>'
+    record=add_contact_from_first_party_page(db,'contact-discovery','info@business.org','https://business.example/contact',
         fetcher=lambda url:('https://business.example/contact',html,False))
     assert record['verification']=='VERIFIED' and record['purpose']=='general business'
     saved=detail(db,'contact-discovery')['contacts']
     assert len(saved)==2
-    found=next(row for row in saved if row['email']=='info@business.example')
+    found=next(row for row in saved if row['email']=='info@business.org')
     assert found['source_url']=='https://business.example/contact'
     assert found['source_checksum']==hashlib.sha256(html.encode()).hexdigest()
-    assert 'info@business.example' in found['evidence']
+    assert 'info@business.org' in found['evidence']
     assert count(db,invitations)==0
 
 def test_first_party_contact_discovery_cannot_authorize_suppressed_or_unrelated_contacts(db):
     from outreach_v2.service import add_contact_from_first_party_page
     from outreach_v2.db import suppressions
     from sqlalchemy import insert
-    candidate(db,'suppressed-discovery','ignored@business.example',website='https://business.example',name='Business Example',suppressed=True,fixture=False)
+    candidate(db,'suppressed-discovery','ignored@business.org',website='https://business.example',name='Business Example',suppressed=True,fixture=False)
     candidate(db,'global-suppression-discovery',None,website='https://business.example',name='Business Example',fixture=False)
-    html='<html><main><p>Contact info@business.example for business inquiries.</p></main></html>'
+    html='<html><main><p>Contact info@business.org for business inquiries.</p></main></html>'
     fetcher=lambda url:('https://business.example/contact',html,False)
     with pytest.raises(ValueError,match='verified website identity|suppressed'):
-        add_contact_from_first_party_page(db,'suppressed-discovery','info@business.example','https://business.example/contact',fetcher)
+        add_contact_from_first_party_page(db,'suppressed-discovery','info@business.org','https://business.example/contact',fetcher)
     with db.transaction() as c:
-        c.execute(suppressions.insert().values(email='info@business.example',reason='test',recorded_at=now()))
+        c.execute(suppressions.insert().values(email='info@business.org',reason='test',recorded_at=now()))
     with pytest.raises(ValueError,match='global suppression'):
-        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.example','https://business.example/contact',fetcher)
+        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.org','https://business.example/contact',fetcher)
     with pytest.raises(ValueError,match='verified business website'):
-        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.example','https://unrelated.example/contact',fetcher)
+        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.org','https://unrelated.example/contact',fetcher)
     assert count(db,invitations)==0
 
 def test_first_party_contact_discovery_rejects_nonbusiness_purpose_and_unpublished_email(db):
     from outreach_v2.service import add_contact_from_first_party_page
     candidate(db,'purpose-discovery',None,website='https://business.example',name='Business Example',fixture=False)
     def fetcher(url):return ('https://business.example/careers',
-        '<html><main><p>Send resumes to jobs@business.example.</p></main></html>',False)
+        '<html><main><p>Send resumes to jobs@business.org.</p></main></html>',False)
     with pytest.raises(ValueError,match='restricted contact purpose'):
-        add_contact_from_first_party_page(db,'purpose-discovery','jobs@business.example','https://business.example/careers',fetcher)
+        add_contact_from_first_party_page(db,'purpose-discovery','jobs@business.org','https://business.example/careers',fetcher)
     def no_email(url):return ('https://business.example/contact','<html><main>Call our office.</main></html>',False)
     with pytest.raises(ValueError,match='not visible'):
-        add_contact_from_first_party_page(db,'purpose-discovery','info@business.example','https://business.example/contact',no_email)
+        add_contact_from_first_party_page(db,'purpose-discovery','info@business.org','https://business.example/contact',no_email)
     assert count(db,invitations)==0
 
 def test_review_hash_invalidates_if_contact_is_suppressed_after_preview(db):
     from outreach_v2.service import preview_generation
     from outreach_v2.db import suppressions
-    candidate(db,'review-race','race@example.org',website='https://example.org',name='Example Company',fixture=False)
+    candidate(db,'review-race','race@businessmail.org',website='https://example.org',name='Example Company',fixture=False)
     selection={'ids':['review-race']};preview=preview_generation(db,selection)
     assert preview['valid_recipient_count']==1
     with db.transaction() as c:
-        c.execute(suppressions.insert().values(email='race@example.org',reason='new suppression',recorded_at=now()))
+        c.execute(suppressions.insert().values(email='race@businessmail.org',reason='new suppression',recorded_at=now()))
     with pytest.raises(ValueError,match='eligibility changed'):
         generate(db,{**selection,'preview_sha256':preview['preview_sha256']},'stale-recipient-review-key')
     assert count(db,batches)==0 and count(db,invitations)==0
@@ -1957,16 +2037,16 @@ def test_exported_unsent_invitation_correction_is_versioned_and_preserves_origin
     from outreach_v2.db import invitation_corrections
     from outreach_v2.service import create_invitation_correction,approve_invitation_correction
     from sqlalchemy import update
-    candidate(db,'correction-candidate','owner@example.org',website='https://example.org',name='Example Company',fixture=False)
+    candidate(db,'correction-candidate','owner@businessmail.org',website='https://example.org',name='Example Company',fixture=False)
     batch=invite(db,['correction-candidate'],key='versioned-correction-source-key')
     with db.transaction() as c:
         original=c.execute(select(invitations).where(invitations.c.candidate_id=='correction-candidate')).mappings().one()
         c.execute(batches.update().where(batches.c.id==batch['id']).values(send_status='NOT_SENT'))
         c.execute(invitations.update().where(invitations.c.id==original['id']).values(send_status='NOT_SENT'))
     with pytest.raises(ValueError,match='attestation'):
-        create_invitation_correction(db,original['id'],'admin@example.org',attest_not_sent=False)
-    draft=create_invitation_correction(db,original['id'],'admin@example.org',attest_not_sent=True)
-    approved=approve_invitation_correction(db,draft['id'],'reviewer@example.org',draft['sha256'])
+        create_invitation_correction(db,original['id'],'admin@businessmail.org',attest_not_sent=False)
+    draft=create_invitation_correction(db,original['id'],'admin@businessmail.org',attest_not_sent=True)
+    approved=approve_invitation_correction(db,draft['id'],'reviewer@businessmail.org',draft['sha256'])
     with db.transaction() as c:
         saved=c.execute(select(invitations).where(invitations.c.id==original['id'])).mappings().one()
         correction=c.execute(select(invitation_corrections).where(invitation_corrections.c.id==draft['id'])).mappings().one()
@@ -1986,7 +2066,7 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     from openpyxl import load_workbook
     from outreach_v2.app import create_app
     candidate(db,'package-valid','yuxuan.chen.1031@outlook.com',name='Brace Company',website='https://geo-ai-resume.vercel.app')
-    candidate(db,'package-invalid','invalid@ordinary.example',name='Incomplete Company',website='https://ordinary.example',fixture=False)
+    candidate(db,'package-invalid','invalid@ordinary.org',name='Incomplete Company',website='https://ordinary.example',fixture=False)
     source_excerpt='The setup guide shows {"mode": "public"} and {field: value} as examples of a visitor-controlled resume visibility setting.'
     valid_personalization={'analysis_version':'structured-evidence-v2','data_classification':'OBSERVED',
         'business_description':'Brace Company offers an online resume service for job seekers.',
@@ -2084,7 +2164,7 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
         manifest_encoded=dump(manifest)
         manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
         c.execute(personalization_authorizations.insert().values(id='pending-five',candidate_ids=manifest_encoded,
-            candidate_ids_sha256=manifest_hash,total_budget_usd='5.00',status='PENDING',created_by='owner@example.org',created_at=now()))
+            candidate_ids_sha256=manifest_hash,total_budget_usd='5.00',status='PENDING',created_by='owner@businessmail.org',created_at=now()))
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
     client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
@@ -2200,7 +2280,7 @@ def test_one_candidate_grant_rejects_unknown_spend_and_semolina(db,monkeypatch):
         manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
         c.execute(personalization_authorizations.insert().values(id='pending-five',candidate_ids=dump(manifest),
             candidate_ids_sha256=manifest_hash,total_budget_usd='5.00',status='PENDING',
-            created_by='owner@example.org',created_at=now()))
+            created_by='owner@businessmail.org',created_at=now()))
         c.execute(personalization_runs.insert().values(id='prior-run',started_at=now(),status='ATTENTION_REQUIRED',candidate_limit=1,
             run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',actual_cost_usd='0',detail='{}'))
         c.execute(personalization_attempts.insert().values(id='unknown-attempt',candidate_id='unknown-spend-pilot',run_id='prior-run',
@@ -2235,7 +2315,7 @@ def test_gpt_personalization_batch_preview_requires_one_explicit_saved_grant_app
     with db.transaction() as c:
         c.execute(personalization_authorizations.insert().values(id='pending-batch',candidate_ids=dump(manifest),
             candidate_ids_sha256=digest,total_budget_usd='5.00',status='PENDING',
-            created_by='owner@example.org',created_at=now()))
+            created_by='owner@businessmail.org',created_at=now()))
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
     monkeypatch.setattr(batch,'launch',lambda _db,_ident:False)
@@ -2309,8 +2389,8 @@ def test_batch_runner_processes_one_bounded_chunk_and_preserves_unknown_spend(db
     digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
     with db.transaction() as c:
         c.execute(personalization_authorizations.insert().values(id='running-batch',candidate_ids=dump(manifest),
-            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@example.org',
-            approved_by='admin@example.org',approved_at=now(),created_at=now()))
+            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@businessmail.org',
+            approved_by='admin@businessmail.org',approved_at=now(),created_at=now()))
         c.execute(personalization_runs.insert().values(id='batch-history',started_at=now(),status='ATTENTION_REQUIRED',
             candidate_limit=1,run_budget_usd='0.05',cumulative_budget_usd='0.25',reserved_usd='0.05',actual_cost_usd='0',detail='{}'))
         c.execute(personalization_attempts.insert().values(id='unknown-never-attempt',candidate_id='unknown-never',
@@ -2798,7 +2878,7 @@ def test_campaign_runner_continues_after_a_failed_candidate_in_bounded_chunks(db
     with db.transaction() as c:
         c.execute(personalization_authorizations.insert().values(id='auto-continuation',
             candidate_ids=dump(ids),candidate_ids_sha256=digest,total_budget_usd='5.00',
-            status='RUNNING',created_by='admin@example.org',approved_by='admin@example.org',
+            status='RUNNING',created_by='admin@businessmail.org',approved_by='admin@businessmail.org',
             approved_at=now(),created_at=now()))
 
     monkeypatch.setattr(batch,'_manifest',lambda _grant,_connection:ids)
@@ -2843,8 +2923,8 @@ def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):
     digest=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
     with db.transaction() as c:
         c.execute(personalization_authorizations.insert().values(id='stuck-batch',candidate_ids=dump(manifest),
-            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@example.org',
-            approved_by='admin@example.org',approved_at=now(),created_at=now()))
+            candidate_ids_sha256=digest,total_budget_usd='5.00',status='RUNNING',created_by='admin@businessmail.org',
+            approved_by='admin@businessmail.org',approved_at=now(),created_at=now()))
     calls=[]
     def no_progress(*_args,**kwargs):
         calls.append(list(kwargs['authorized_candidate_ids']))

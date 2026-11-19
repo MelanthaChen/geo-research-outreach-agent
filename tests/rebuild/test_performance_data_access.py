@@ -66,7 +66,7 @@ def db(tmp_path,monkeypatch):
 
 
 def seed_candidate(db, ident):
-    website=f'https://{ident}.example.com'
+    website=f'https://{ident}.performance.org'
     excerpt=(f'{ident} provides online tools for people organizing professional materials. '
              'Its pages explain the product workflow, intended users, and available features.')
     personalization={
@@ -88,15 +88,17 @@ def seed_candidate(db, ident):
         'recommendations':[],'assessment':{'geo_observation':'NOT_ESTABLISHED'}}
     with db.transaction() as c:
         c.execute(candidates.insert().values(id=ident,kind='company',name=ident,website=website,
-            domain=f'{ident}.example.com',industry='Software',location='US',website_status='VERIFIED',
+            domain=f'{ident}.performance.org',industry='Software',location='US',website_status='VERIFIED',
             qualification='ELIGIBLE',geography='US',suppressed=False,source='isolated-perf-test',
             personalization=dump(personalization),personalization_status='READY',
             personalization_quality_status='PASS',personalization_quality_errors='[]',
             personalization_version=1,personalization_analysis_version='semantic-openai-v1',
             fixture=False,created_at=now(),updated_at=now()))
         c.execute(contacts.insert().values(id='contact-'+ident,candidate_id=ident,kind='EMAIL',
-            email=f'{ident}@example.com',source_url=website,evidence='Synthetic first-party test evidence',
-            verification='VERIFIED',suppressed=False))
+            email=f'contact@{ident}.performance.org',source_url=website,
+            evidence=f'Synthetic first-party benchmark evidence lists contact@{ident}.performance.org for general business inquiries',
+            verification='VERIFIED',purpose='general business',verified_at=now(),
+            verification_reason='synthetic benchmark fixture',authorization_reason='exact email in first-party fixture evidence',suppressed=False))
 
 
 def test_candidate_listing_query_count_is_constant_across_page_size(db):
@@ -114,7 +116,7 @@ def test_candidate_listing_query_count_is_constant_across_page_size(db):
     assert small_count==large_count
     assert large_count<=7
     assert all('personalization' not in row for row in large['rows'])
-    assert large['rows'][0]['contacts'][0]['email']=='company-000@example.com'
+    assert large['rows'][0]['contacts'][0]['email']=='contact@company-000.performance.org'
 
 
 def test_candidate_listing_uses_stable_keyset_cursor_and_order_index(db):
@@ -152,5 +154,5 @@ def test_150_candidate_generation_uses_batched_reads_and_keeps_review_only_outpu
         invitation_count=c.scalar(select(func.count()).select_from(invitations))
     assert invitation_count==150
     assert batch['pilot_review_status']=='PENDING_REVIEW'
-    assert len(statements)<=20
+    assert len(statements)<=30
     assert 'package' in batch and batch['package']

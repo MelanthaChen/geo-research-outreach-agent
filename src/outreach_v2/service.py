@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64,binascii,hashlib,json,secrets,uuid
 import re
+from datetime import datetime,timedelta,timezone
 from urllib.parse import urlparse
 from sqlalchemy import select,func,and_,or_,exists,case
 from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now
@@ -10,17 +11,96 @@ from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, 
 from outreach_agent.google_forms_integration import prefilled_form_url
 
 FILTERS={'kind','industry','location','contact','primary_status','completed_personalization','q'}
+CONTACT_VERIFICATION_MAX_AGE=timedelta(days=180)
+_UNSUPPORTED_PURPOSE=('press','media','public relations','newsletter','subscribe','career','recruit','employment','jobs',
+    'privacy','legal','reservation','booking','concierge','event','catering','wholesale','partner','sales','education',
+    'training','order','support','helpdesk')
+_GENERAL_PURPOSE_PHRASES=('general business','business inquiries','general inquiries','general contact','business contact','general office')
+_RESTRICTED_LOCALPARTS=('press','media','pr','newsletter','subscribe','career','careers','recruit','jobs','privacy','legal',
+    'reservation','reservations','booking','concierge','events','catering','wholesale','partner','sales','education','training','orders')
+_PLACEHOLDER_HOSTS=('example.com','example.org','example.net','test.com','test.org','mysite.com','email.com','invalid','localhost')
+
+def exact_email_in_evidence(email,evidence):
+    email=(email or '').strip().casefold()
+    if not EMAIL.fullmatch(email) or not isinstance(evidence,str):return False
+    pattern=r'(?<![a-z0-9_.+-])'+re.escape(email)+r'(?![a-z0-9_-])(?!\.[a-z0-9-])'
+    return re.search(pattern,evidence,re.I) is not None
+
+def supported_general_business_purpose(purpose,email=None):
+    text=(purpose or '').strip().casefold()
+    if not any(phrase in text for phrase in _GENERAL_PURPOSE_PHRASES):return False
+    if any(term in text for term in _UNSUPPORTED_PURPOSE):return False
+    local=(email or '').split('@',1)[0].casefold()
+    if any(local==term or local.startswith(term+'.') or local.startswith(term+'_') or local.startswith(term+'-') for term in _RESTRICTED_LOCALPARTS):return False
+    host=(email or '').rsplit('@',1)[-1].casefold().rstrip('.')
+    if host in _PLACEHOLDER_HOSTS or any(host.endswith('.'+suffix) for suffix in ('example','test','invalid','localhost')):return False
+    return True
+
+def contact_verification_is_fresh(contact,*,at=None):
+    if contact.get('verification')!='VERIFIED' or not contact.get('verified_at'):return False
+    try:
+        stamp=datetime.fromisoformat(str(contact['verified_at']).replace('Z','+00:00'))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=timezone.utc)
+    except (TypeError,ValueError):return False
+    current=at or datetime.now(timezone.utc)
+    if current.tzinfo is None:current=current.replace(tzinfo=timezone.utc)
+    return current-stamp<=CONTACT_VERIFICATION_MAX_AGE and stamp<=current+timedelta(minutes=5)
+
+def contact_is_authorized(row,contact,*,suppressed=False):
+    email=(contact.get('email') or '').strip().casefold()
+    if not EMAIL.fullmatch(email) or contact.get('suppressed') or suppressed:return False
+    if row.get('fixture'):
+        return (contact.get('verification') in {'OWNER_AUTHORIZED','VERIFIED'}
+            and same_site(row.get('website'),contact.get('source_url')))
+    if not same_site(row.get('website'),contact.get('source_url')):return False
+    if not contact_verification_is_fresh(contact):return False
+    if not exact_email_in_evidence(email,contact.get('evidence')):return False
+    if not supported_general_business_purpose(contact.get('purpose'),email):return False
+    return True
+
+def contact_assessment(row,contact,*,suppressed=False):
+    matched=exact_email_in_evidence(contact.get('email'),contact.get('evidence'))
+    fresh=contact_verification_is_fresh(contact)
+    if contact.get('verification')=='OWNER_AUTHORIZED' and row.get('fixture'):
+        state='VERIFIED'
+    elif fresh and matched:state='VERIFIED'
+    elif matched:state='EVIDENCE_MATCHED'
+    else:state='DISCOVERED'
+    authorized=contact_is_authorized(row,contact,suppressed=suppressed)
+    return {'contact_state':state,'evidence_matched':matched,'recipient_authorized':authorized,
+        'authorization_block_reason':None if authorized else '; '.join(contact_block_reasons_for(contact,row,suppressed=suppressed))}
+
+def contact_block_reasons_for(contact,row,*,suppressed=False):
+    reasons=[];email=(contact.get('email') or '').strip().casefold()
+    if contact.get('verification') not in {'VERIFIED','OWNER_AUTHORIZED'}:reasons.append('Contact is not verified')
+    if contact.get('verification')=='VERIFIED' and not contact_verification_is_fresh(contact):reasons.append('Verification is missing or stale')
+    if not exact_email_in_evidence(email,contact.get('evidence')):reasons.append('Exact address is absent from preserved first-party evidence')
+    if not supported_general_business_purpose(contact.get('purpose'),email):reasons.append('Purpose is not a supported general business channel')
+    if contact.get('suppressed') or suppressed:reasons.append('Contact is suppressed')
+    if not same_site(row.get('website'),contact.get('source_url')):reasons.append('Source is not the verified business website')
+    return reasons
+
+def _sql_evidence_matches_contact():
+    pattern=(r'(^|[^a-z0-9_.+-])' + func.lower(contacts.c.email) + r'($|[^a-z0-9_.-]|[.](?:$|[\s,;:!?)]))')
+    return func.lower(func.coalesce(contacts.c.evidence,'')).regexp_match(pattern)
 
 def email_contacts():
-    # This is a prefilter, not the final email/evidence validation at generation.
+    # This prefilter mirrors the material authorization gates used at preview and commit.
     first_party=or_(*[contacts.c.source_url.like(prefix+candidates.c.domain+'/%') for prefix in ('https://','http://','https://www.','http://www.')],
                     *[contacts.c.source_url==prefix+candidates.c.domain for prefix in ('https://','http://','https://www.','http://www.')])
     purpose=func.coalesce(contacts.c.purpose,'')
-    personal_or_restricted=or_(*[purpose.ilike('%'+term+'%') for term in ('privacy','career','recruit','personal','legal','abuse')])
+    restricted=or_(*[purpose.ilike('%'+term+'%') for term in _UNSUPPORTED_PURPOSE])
+    supported=or_(*[purpose.ilike('%'+term+'%') for term in _GENERAL_PURPOSE_PHRASES])
+    blocked_local=or_(*[contacts.c.email.ilike(term+'@%') for term in _RESTRICTED_LOCALPARTS])
+    placeholder=or_(*[contacts.c.email.ilike('%@'+term) for term in _PLACEHOLDER_HOSTS],
+        contacts.c.email.ilike('%@example.%'),contacts.c.email.ilike('%@test.%'))
+    fresh_after=(datetime.now(timezone.utc)-CONTACT_VERIFICATION_MAX_AGE).isoformat()
+    regular=and_(contacts.c.verification=='VERIFIED',contacts.c.verified_at.is_not(None),contacts.c.verified_at>=fresh_after,
+        supported,~restricted,~blocked_local,~placeholder,_sql_evidence_matches_contact())
+    fixture_owner=and_(candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED')
     return and_(contacts.c.candidate_id==candidates.c.id,contacts.c.email.like('%@%.%'),contacts.c.email.not_like('% %'),contacts.c.suppressed.is_(False),
-                or_(contacts.c.verification.is_(None),contacts.c.verification.not_in(['REJECTED','SUPPRESSED','INVALID'])),
-                or_(first_party, and_(candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED')),
-                ~personal_or_restricted,
+                or_(regular,fixture_owner),
+                or_(first_party,fixture_owner),
                 ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
 
 def completed_personalization():
@@ -168,8 +248,9 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
         contact_rows=[]
         invitation_by_candidate={};invitation_ids=[]
         if ids:
-            for related in c.execute(select(contacts.c.candidate_id,contacts.c.email,contacts.c.url,contacts.c.verification,
-                    contacts.c.suppressed,contacts.c.source_url,contacts.c.purpose)
+            for related in c.execute(select(contacts.c.candidate_id,contacts.c.id,contacts.c.email,contacts.c.url,contacts.c.verification,
+                    contacts.c.suppressed,contacts.c.source_url,contacts.c.purpose,contacts.c.evidence,contacts.c.source_checksum,
+                    contacts.c.verified_at,contacts.c.verification_reason,contacts.c.authorization_reason)
                     .where(contacts.c.candidate_id.in_(ids)).order_by(contacts.c.candidate_id,contacts.c.email)).mappings():
                 item=dict(related);contact_rows.append(item)
                 contacts_by_candidate[item['candidate_id']].append(item)
@@ -224,6 +305,10 @@ def detail(db,ident):
             invitations.c.exported_at).where(invitations.c.candidate_id==ident)).mappings().first()
         row['invitation']=dict(row['invitation']) if row['invitation'] else None
         row['contacts']=[dict(r) for r in c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings()]
+        for saved_contact in row['contacts']:
+            address=(saved_contact.get('email') or '').strip().casefold()
+            suppressed=bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==address))) if address else False
+            saved_contact.update(contact_assessment(row,saved_contact,suppressed=suppressed))
         from .db import source_rows
         row['evidence']=[dict(r) for r in c.execute(select(source_rows.c.source_id,source_rows.c.source_key,source_rows.c.raw).where(source_rows.c.candidate_id==ident).limit(30)).mappings()]
         for evidence in row['evidence']:evidence['raw']=unpack(evidence['raw'])
@@ -247,14 +332,24 @@ def authorized_contact_emails(c,row,*,contact_rows=None,suppressed_emails=None):
         c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings())
     for contact in source:
         email=(contact['email'] or '').strip().lower()
-        if not EMAIL.fullmatch(email) or contact['suppressed'] or contact['verification'] in {'REJECTED','SUPPRESSED','INVALID'}:continue
-        if suppressed_emails is not None:
-            if email in suppressed_emails:continue
-        elif c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email)):continue
-        if not same_site(row['website'],contact['source_url']) and not (row.get('fixture') and contact['verification']=='OWNER_AUTHORIZED'):continue
-        if any(x in (contact['purpose'] or '').lower() for x in ('privacy','career','recruit','personal','legal','abuse')):continue
-        emails.add(email)
+        suppressed=(email in suppressed_emails if suppressed_emails is not None else
+            bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email))))
+        if contact_is_authorized(row,contact,suppressed=suppressed):emails.add(email)
     return emails
+
+def authorized_contact_options(c,row,*,contact_rows=None,suppressed_emails=None):
+    saved=(contact_rows if contact_rows is not None else
+        c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings())
+    result=[]
+    for contact in saved:
+        email=(contact.get('email') or '').strip().casefold()
+        suppressed=(email in suppressed_emails if suppressed_emails is not None else
+            bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email))))
+        if contact_is_authorized(row,contact,suppressed=suppressed):
+            result.append({'email':email,'purpose':contact.get('purpose'),'source_url':contact.get('source_url'),
+                'source_checksum':contact.get('source_checksum'),'verified_at':contact.get('verified_at'),
+                'authorization_reason':contact.get('authorization_reason')})
+    return sorted(result,key=lambda item:item['email'])
 
 def contact_block_reasons(c,row,*,saved_contacts=None,suppressed_emails=None):
     saved=(saved_contacts if saved_contacts is not None else
@@ -265,6 +360,14 @@ def contact_block_reasons(c,row,*,saved_contacts=None,suppressed_emails=None):
         email=(contact['email'] or '').strip().lower()
         if not email:continue
         if not EMAIL.fullmatch(email):reasons.append('Saved email address has an invalid format')
+        if contact.get('verification') in {None,'','UNKNOWN','PENDING','DISCOVERED','EVIDENCE_MATCHED'}:
+            reasons.append('Contact has not completed explicit verification')
+        if contact.get('verification')=='VERIFIED' and not contact_verification_is_fresh(contact):
+            reasons.append('Contact verification is missing a timestamp or is older than 180 days')
+        if not exact_email_in_evidence(email,contact.get('evidence')):
+            reasons.append('Exact email address is not present in preserved first-party evidence')
+        if not supported_general_business_purpose(contact.get('purpose'),email):
+            reasons.append('Contact purpose is not a supported general business channel')
         if contact['suppressed'] or contact['verification']=='SUPPRESSED':reasons.append('Saved contact is suppressed')
         if contact['verification']=='REJECTED':reasons.append('Saved contact verification was rejected')
         if contact['verification']=='INVALID':reasons.append('Saved contact is marked invalid')
@@ -308,19 +411,22 @@ def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
     if normalized not in mailto and not re.search(r'(?<![\w.+-])'+re.escape(normalized)+r'(?![\w-])',visible,re.I):
         raise ValueError('The exact email address is not visible on the official page')
     parsed=urlparse(final_url);path=parsed.path.casefold();local=normalized.split('@',1)[0]
-    restricted_markers=('privacy','career','careers','recruit','jobs','legal','abuse','press','media')
-    if any(mark in path for mark in restricted_markers) or any(mark in local for mark in restricted_markers):
+    restricted_markers=('privacy','career','careers','recruit','jobs','legal','abuse','press','media','newsletter','subscribe',
+        'reservation','booking','concierge','events','catering','wholesale','partner','sales','education','training','orders')
+    if any(mark in path for mark in restricted_markers) or any(local==mark or local.startswith(mark+'.') or
+        local.startswith(mark+'_') or local.startswith(mark+'-') for mark in restricted_markers):
         raise ValueError('The published address is associated with a restricted contact purpose')
-    path_parts={part for part in path.strip('/').replace('_','-').split('/') if part}
-    context_ok=bool(path_parts & {'contact','contact-us','contactus','reach-us'})
-    if not context_ok:
-        match=re.search(re.escape(normalized),visible,re.I)
-        nearby=visible[max(0,match.start()-180):match.end()+180].casefold() if match else ''
-        context_ok=any(term in nearby for term in ('contact','business inquiries','general inquiries','customer support','customer service'))
-    if not context_ok:raise ValueError('The page does not establish this address as a general business contact')
     match=re.search(re.escape(normalized),visible,re.I)
+    nearby=visible[max(0,match.start()-180):match.end()+180].casefold() if match else ''
+    if not any(term in nearby for term in _GENERAL_PURPOSE_PHRASES):
+        raise ValueError('The page does not establish this address as a general business contact')
+    host_value=normalized.rsplit('@',1)[-1].rstrip('.')
+    if host_value in _PLACEHOLDER_HOSTS or host_value.endswith(('.example','.test','.invalid','.localhost')):
+        raise ValueError('Placeholder email domains cannot be authorized')
     evidence=(visible[max(0,match.start()-140):match.end()+140] if match else 'mailto:'+normalized).strip()
-    checksum=hashlib.sha256(raw_html.encode('utf-8')).hexdigest()
+    checksum=hashlib.sha256(raw_html.encode('utf-8')).hexdigest();verified_at=now()
+    verification_reason='Live bounded same-site page fetch; exact address visible; robots and redirect checks passed.'
+    authorization_reason='Exact address matched visible official-site evidence; page context identifies general business inquiries; no suppression matched.'
     contact_id='contact-'+uuid.uuid4().hex
     with db.transaction(serialized=True) as c:
         row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().first()
@@ -334,13 +440,16 @@ def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
         c.execute(contacts.insert().values(id=contact_id,candidate_id=ident,kind='EMAIL',email=normalized,
             source_url=final_url,evidence=evidence,verification='VERIFIED',purpose='general business',suppressed=False,
             source_ref='first-party-contact-page:'+parsed.netloc+parsed.path,source_checksum=checksum,
+            verified_at=verified_at,verification_reason=verification_reason,authorization_reason=authorization_reason,
             raw=dump({'discovery':'BOUNDED_FIRST_PARTY_CONTACT_PAGE','source_url':final_url,'source_checksum':checksum,
-                'email_visible_on_page':True,'robots_respected':True})))
+                'verified_at':verified_at,'verification_reason':verification_reason,
+                'authorization_reason':authorization_reason,'email_visible_on_page':True,'robots_respected':True})))
         c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='FIRST_PARTY_CONTACT_DISCOVERED',
             detail=dump({'contact_id':contact_id,'source_url':final_url,'source_checksum':checksum,
                 'email_sha256':hashlib.sha256(normalized.encode()).hexdigest(),'purpose':'general business'}),created_at=now()))
     return {'contact_id':contact_id,'candidate_id':ident,'email':normalized,'source_url':final_url,
-        'verification':'VERIFIED','purpose':'general business','source_checksum':checksum}
+        'verification':'VERIFIED','purpose':'general business','source_checksum':checksum,'verified_at':verified_at,
+        'verification_reason':verification_reason,'authorization_reason':authorization_reason}
 
 def contact_readiness(c,row,*,contact_rows=None,suppressed_emails=None):
     """An invitation-contact check independent from semantic personalization."""
@@ -410,13 +519,8 @@ def select_pilot_cohort(c, limit=100):
         row=dict(item);recipient=None;matching=[]
         for contact in c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings():
             email=(contact['email'] or '').strip().lower()
-            if (not EMAIL.fullmatch(email) or contact['suppressed'] or contact['verification']!='VERIFIED'
-                or not same_site(row['website'],contact['source_url']) or not (contact['evidence'] or '').strip()
-                or c.scalar(select(suppressions.c.email).where(suppressions.c.email==email))):
-                continue
-            if any(term in (contact['purpose'] or '').casefold() for term in ('privacy','career','recruit','personal','legal','abuse')):
-                continue
-            matching.append(dict(contact))
+            suppressed=bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email)))
+            if contact_is_authorized(row,contact,suppressed=suppressed):matching.append(dict(contact))
         if len(matching)==1:recipient=matching[0]['email'].strip().lower()
         elif len(matching)>1:continue
         domain=host(row.get('website'))
@@ -526,7 +630,11 @@ def _preview_in_transaction(c,selection,context=None):
             item={'candidate_id':row['id'],'company':row['name'],'reasons':reasons}
             options=authorized_contact_emails(c,row,contact_rows=lookup['contacts_by_candidate'].get(row['id'],[]),
                 suppressed_emails=lookup['suppressed_emails'])
-            if len(options)>1:item['recipient_options']=sorted(options)
+            details=authorized_contact_options(c,row,contact_rows=lookup['contacts_by_candidate'].get(row['id'],[]),
+                suppressed_emails=lookup['suppressed_emails'])
+            if len(options)>1:
+                item['recipient_options']=sorted(options)
+                item['recipient_option_details']=details
             excluded.append(item);continue
         p=parse(row['personalization']);reference='GEO-PREVIEW'
         url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
@@ -561,65 +669,87 @@ def generate(db,selection,key):
     selection_hash=sha(dump(selection_core));stamp=now()
     from .package import build_package
     from .template import host
+    batch_id='batch-'+uuid.uuid4().hex
     with db.transaction(serialized=True) as c:
         prior=c.execute(select(batches).where(batches.c.request_key==key)).mappings().first()
         if prior:
             if prior['selection_hash']!=selection_hash:raise ValueError('Request key belongs to a different selection')
-            return dict(prior)
-        context={}
-        review=_preview_in_transaction(c,selection,context=context)
+            result=dict(prior);result['_idempotent_replay']=True;return result
+        context={};review=_preview_in_transaction(c,selection,context=context)
         if review['preview_sha256']!=selection['preview_sha256']:
             raise ValueError('Recipient eligibility changed after review; refresh the preview before generating')
         if review['valid_recipient_count']==0:
             raise ValueError('No eligible invitations: '+dump(review['excluded'])+'; no invitations were created')
-        batch_id='batch-'+uuid.uuid4().hex;generated=[];excluded=list(review['excluded'])
         questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
         invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
             email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
-        questionnaire_fields=parse(questionnaire['field_map']) if questionnaire else {}
-        configured_form=questionnaire['form_url'] if questionnaire else None
-        reference_entry=questionnaire_fields.get('invitation_reference_entry_id') if questionnaire else None
+        questionnaire=dict(questionnaire) if questionnaire else None
+        invitation_template=dict(invitation_template) if invitation_template else None
+        config_fingerprint=sha(dump({'questionnaire':questionnaire,'invitation_template':invitation_template}))
+    # Render and package outside the database transaction. The following short
+    # commit rechecks the preview and active configuration before inserting.
+    questionnaire_fields=parse(questionnaire['field_map']) if questionnaire else {}
+    configured_form=questionnaire['form_url'] if questionnaire else None
+    reference_entry=questionnaire_fields.get('invitation_reference_entry_id') if questionnaire else None
+    generated=[];excluded=list(review['excluded'])
+    for row,recipient in context.get('eligible',[]):
+        p=parse(row['personalization']);invitation_id='inv-'+uuid.uuid4().hex
+        reference='GEO-'+secrets.token_hex(16).upper()
+        url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
+        try:subject,body=render(row['name'],row['website'],p,url,reference,record=row,template_config=invitation_template)
+        except ValueError as exc:
+            excluded.append({'candidate_id':row['id'],'company':row['name'],'reasons':['Invalid invitation personalization: '+str(exc)]});continue
+        authority={'method':'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','website':row['website']}
+        if row['fixture']:
+            binding=OWNER_BINDINGS.get(host(row['website']))
+            if not binding or binding['recipient']!=recipient:
+                excluded.append({'candidate_id':row['id'],'company':row['name'],'reasons':['Owner recipient binding mismatch']});continue
+            authority={'method':'OWNER_BINDING','website':row['website'],**binding}
+        generated.append(dict(id=invitation_id,candidate_id=row['id'],batch_id=batch_id,reference=reference,recipient=recipient,
+            website=row['website'],company_name=row['name'],subject=subject,body=body,form_url=url,
+            template_version=(f"invitation-template-v{invitation_template['version']}" if invitation_template else VERSION),
+            questionnaire_id=questionnaire['id'] if questionnaire else None,
+            researcher_name=(invitation_template['researcher_name'] if invitation_template else __import__('os').getenv('OUTREACH_RESEARCHER_NAME')),
+            university_affiliation=(invitation_template['university_affiliation'] if invitation_template else __import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION')),
+            reply_to=(invitation_template['reply_to'] if invitation_template else __import__('os').getenv('OUTREACH_REPLY_TO')),
+            sender_name=(invitation_template.get('sender_name') if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER_NAME') or __import__('os').getenv('OUTREACH_RESEARCHER_NAME'))),
+            sender_email=(invitation_template['sender'] if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER') or __import__('os').getenv('OUTREACH_REPLY_TO'))),
+            personalization=dump(p),generated_at=stamp,exported_at=stamp,send_status='UNVERIFIED',
+            consent_status='NOT_RECEIVED',authority=dump(authority)))
+    if not generated:raise ValueError('No eligible invitations: '+dump(excluded))
+    package=build_package(generated,excluded,BULK_SUBJECT)
+    with db.transaction(serialized=True) as c:
+        prior=c.execute(select(batches).where(batches.c.request_key==key)).mappings().first()
+        if prior:
+            if prior['selection_hash']!=selection_hash:raise ValueError('Request key belongs to a different selection')
+            result=dict(prior);result['_idempotent_replay']=True;return result
+        current=_preview_in_transaction(c,selection)
+        if current['preview_sha256']!=selection['preview_sha256']:
+            raise ValueError('Recipient eligibility changed while invitations were prepared; refresh the preview before generating')
+        latest_questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
+        latest_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
+            email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
+        latest_fingerprint=sha(dump({'questionnaire':dict(latest_questionnaire) if latest_questionnaire else None,
+            'invitation_template':dict(latest_template) if latest_template else None}))
+        if latest_fingerprint!=config_fingerprint:
+            raise ValueError('The active invitation template or questionnaire changed while preparing; review again')
         c.execute(batches.insert().values(id=batch_id,request_key=key,selection_hash=selection_hash,created_at=stamp,
             bulk_subject=BULK_SUBJECT,pilot_review_status='PENDING_REVIEW'))
-        for row,recipient in context.get('eligible',[]):
-            p=parse(row['personalization'])
-            invitation_id='inv-'+uuid.uuid4().hex;reference='GEO-'+secrets.token_hex(16).upper()
-            url=prefilled_form_url(reference,form_url=configured_form,entry_id=reference_entry)
-            try:
-                subject,body=render(row['name'],row['website'],p,url,reference,record=row,
-                    template_config=invitation_template)
-            except ValueError as exc:
-                excluded.append({'candidate_id':row['id'],'company':row['name'],
-                                 'reasons':['Invalid invitation personalization: '+str(exc)]})
-                continue
-            authority={'method':'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','website':row['website']}
-            if row['fixture']:
-                binding=OWNER_BINDINGS.get(host(row['website']))
-                if not binding or binding['recipient']!=recipient:
-                    excluded.append({'candidate_id':row['id'],'company':row['name'],'reasons':['Owner recipient binding mismatch']});continue
-                authority={'method':'OWNER_BINDING','website':row['website'],**binding}
-            item=dict(id=invitation_id,candidate_id=row['id'],batch_id=batch_id,reference=reference,recipient=recipient,
-                      website=row['website'],company_name=row['name'],subject=subject,body=body,form_url=url,
-                      template_version=(f"invitation-template-v{invitation_template['version']}" if invitation_template else VERSION),
-                      questionnaire_id=questionnaire['id'] if questionnaire else None,
-                      researcher_name=(invitation_template['researcher_name'] if invitation_template else __import__('os').getenv('OUTREACH_RESEARCHER_NAME')),
-                      university_affiliation=(invitation_template['university_affiliation'] if invitation_template else __import__('os').getenv('OUTREACH_UNIVERSITY_AFFILIATION')),
-                      reply_to=(invitation_template['reply_to'] if invitation_template else __import__('os').getenv('OUTREACH_REPLY_TO')),
-                      sender_name=(invitation_template.get('sender_name') if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER_NAME') or __import__('os').getenv('OUTREACH_RESEARCHER_NAME'))),
-                      sender_email=(invitation_template['sender'] if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER') or __import__('os').getenv('OUTREACH_REPLY_TO'))),
-                      personalization=dump(p),generated_at=stamp,exported_at=stamp,
-                      send_status='UNVERIFIED',consent_status='NOT_RECEIVED',authority=dump(authority))
-            generated.append(item)
-        if not generated:
-            raise ValueError('No eligible invitations: '+dump(excluded))
         c.execute(invitations.insert(),generated)
-        package=build_package(generated,excluded,BULK_SUBJECT)
         c.execute(batches.update().where(batches.c.id==batch_id).values(package=package,excluded=dump(excluded),exported_at=stamp))
         c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='INVITATION_RECIPIENT_REVIEW_CONFIRMED',
-            detail=dump({'selected_total':review['selected_total'],'valid_recipient_count':review['valid_recipient_count'],
-                'excluded_count':review['excluded_count'],'preview_sha256':review['preview_sha256']}),created_at=stamp))
+            detail=dump({'selected_total':review['selected_total'],'valid_recipient_count':len(generated),
+                'generated_count':len(generated),'skipped_count':len(excluded),'failed_count':0,
+                'preview_sha256':review['preview_sha256']}),created_at=stamp))
         c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='EXPORTED',detail=dump({'count':len(generated),'excluded':len(excluded)}),created_at=stamp))
         return dict(c.execute(select(batches).where(batches.c.id==batch_id)).mappings().one())
+
+def batch_by_request_key(db,key):
+    if not isinstance(key,str) or not 16<=len(key)<=128:raise ValueError('Invalid request key')
+    with db.transaction() as c:
+        row=c.execute(select(batches).where(batches.c.request_key==key)).mappings().first()
+        if not row:raise LookupError('No saved invitation batch exists for this request key')
+        return dict(row)
 
 def dashboard(db):
     with db.transaction() as c:

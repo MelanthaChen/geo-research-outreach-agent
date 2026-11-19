@@ -62,12 +62,12 @@ def main():
             'supported_observation':'','support':{'business_summary':['main'],'distinctive_detail':['main'],
                 'research_relevance':['main']}},
         'claim_support':{'business_description':['main'],'company_strength':['main']},
-        'evidence_profile':{'pages':[{'url':'https://bench-00000.example.com','type':'home_or_other',
+        'evidence_profile':{'pages':[{'url':'https://bench-00000.performance.org','type':'home_or_other',
             'title':'Benchmark company','headings':[],'truncated':False}],
             'facts':[{'id':'main','statement':excerpt,'evidence_excerpt':excerpt,
-                'source_urls':['https://bench-00000.example.com'],
+                'source_urls':['https://bench-00000.performance.org'],
                 'assertion_type':'FIRST_PARTY_PAGE_CLAIM','attribution':'COMPANY_STATED'}]},
-        'source_urls':['https://bench-00000.example.com'],'retrieved_at':stamp,
+        'source_urls':['https://bench-00000.performance.org'],'retrieved_at':stamp,
         'evidence':{'visible_text_excerpt':excerpt},'recommendations':[],
         'assessment':{'geo_observation':'NOT_ESTABLISHED'}}
     candidate_rows=[]
@@ -76,14 +76,14 @@ def main():
         ready=index<args.eligible
         personalization=dict(observed)
         personalization['evidence_profile']=dict(observed['evidence_profile'])
-        personalization['evidence_profile']['pages']=[{'url':f'https://{ident}.example.com',
+        personalization['evidence_profile']['pages']=[{'url':f'https://{ident}.performance.org',
             'type':'home_or_other','title':ident,'headings':[],'truncated':False}]
         personalization['evidence_profile']['facts']=[{'id':'main','statement':excerpt,
-            'evidence_excerpt':excerpt,'source_urls':[f'https://{ident}.example.com'],
+            'evidence_excerpt':excerpt,'source_urls':[f'https://{ident}.performance.org'],
             'assertion_type':'FIRST_PARTY_PAGE_CLAIM','attribution':'COMPANY_STATED'}]
-        personalization['source_urls']=[f'https://{ident}.example.com']
+        personalization['source_urls']=[f'https://{ident}.performance.org']
         candidate_rows.append({'id':ident,'kind':'company','name':f'Benchmark {index:06d}',
-            'website':f'https://{ident}.example.com','domain':f'{ident}.example.com','industry':'Software',
+            'website':f'https://{ident}.performance.org','domain':f'{ident}.performance.org','industry':'Software',
             'location':'US','website_status':'VERIFIED' if ready else 'UNKNOWN',
             'qualification':'ELIGIBLE' if ready else 'UNKNOWN','geography':'US','suppressed':False,
             'source':'synthetic-performance-fixture','personalization':dump(personalization) if ready else '{}',
@@ -96,8 +96,10 @@ def main():
         for start in range(0,len(candidate_rows),1000):
             connection.execute(candidates.insert(),candidate_rows[start:start+1000])
         contact_rows=[{'id':f'contact-{i:06d}','candidate_id':f'bench-{i:06d}','kind':'EMAIL',
-            'email':f'bench-{i:06d}@example.com','source_url':f'https://bench-{i:06d}.example.com',
-            'evidence':'Synthetic first-party benchmark evidence','verification':'VERIFIED','suppressed':False}
+            'email':f'contact@bench-{i:06d}.performance.org','source_url':f'https://bench-{i:06d}.performance.org',
+            'evidence':f'Synthetic first-party benchmark evidence lists contact@bench-{i:06d}.performance.org for general business inquiries',
+            'verification':'VERIFIED','purpose':'general business','verified_at':now(),
+            'verification_reason':'synthetic benchmark fixture','authorization_reason':'exact email in first-party fixture evidence','suppressed':False}
             for i in range(args.eligible)]
         connection.execute(contacts.insert(),contact_rows)
 

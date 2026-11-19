@@ -35,6 +35,7 @@ contacts = table('contacts', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
     col('kind', String), col('email', String, index=True), col('url'), col('source_url'), col('evidence'),
     col('verification', String), col('purpose'), col('suppressed', Boolean, default=False, nullable=False),
+    col('verified_at'), col('verification_reason'), col('authorization_reason'),
     col('source_ref', String), col('source_checksum', String), col('raw'))
 sources = table('sources', col('id', String, primary_key=True), col('path'), col('relation'), col('fingerprint'),
     col('expected', Integer), col('processed', Integer, default=0), col('status'), col('updated_at'))
@@ -208,8 +209,9 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'reports': {'renderer_version': 'TEXT', 'regenerated_from': 'TEXT'}
 }), (11, 'historical-screening-personalization-campaign', {
     'personalization_authorizations': {'campaign_id': 'TEXT'}
-}), (12, 'candidate-name-id-pagination-index', {}),
-    (13, 'durable-chunked-invitation-generation', {})]
+}), (12, 'candidate-name-id-pagination-index', {}), (13, 'dated-evidence-backed-recipient-authorization', {
+    'contacts': {'verified_at': 'TEXT', 'verification_reason': 'TEXT', 'authorization_reason': 'TEXT'}
+}), (14, 'durable-chunked-invitation-generation', {})]
 
 class Database:
     def __init__(self, url=None):

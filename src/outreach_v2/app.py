@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
     personalization_authorizations,personalization_attempts,personalization_campaigns,candidates as candidate_table,
-    invitation_generation_batches)
+    invitation_generation_batches,invitation_generation_items)
 from . import auth,service
 from .consent import record_owner_identity_binding
 from .migrate import dump
@@ -398,6 +398,32 @@ def create_app(database=None):
             raise ValueError('Explicit confirmation is required to resume the same invitation snapshot')
         from .invitation_generation import resume
         return resume(db,ident)
+    @app.get('/api/batches/by-request-key/{key}')
+    def batch_by_request_key(key:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        with db.transaction() as c:
+            batch=c.execute(select(batches).where(batches.c.request_key==key)).mappings().first()
+            if not batch:raise LookupError('No saved invitation batch exists for this request key')
+            generation=c.execute(select(invitation_generation_batches).where(
+                invitation_generation_batches.c.batch_id==batch['id'])).mappings().first()
+            if generation:
+                count=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==batch['id'])) or 0
+                failed=c.scalar(select(func.count()).select_from(invitation_generation_items).where(
+                    invitation_generation_items.c.batch_id==batch['id'],invitation_generation_items.c.status=='FAILED')) or 0
+                return {'batch_id':batch['id'],'generation_status':generation['status'],
+                    'completed_items':generation['completed_items'],'total_items':generation['total_items'],
+                    'invitation_count':count,'generated_count':count,'skipped_count':len(json.loads(batch.get('excluded') or '[]')),
+                    'failed_count':failed,'review_status':batch['pilot_review_status']}
+        result=service.batch_by_request_key(db,key)
+        excluded=json.loads(result.get('excluded') or '[]')
+        import io,zipfile
+        with zipfile.ZipFile(io.BytesIO(result['package'])) as package:
+            manifest=json.loads(package.read('manifest.json'))
+        return {'batch_id':result['id'],'review_status':result.get('pilot_review_status','PENDING_REVIEW'),
+            'invitation_count':manifest['count'],'generated_count':manifest['count'],
+            'skipped_count':len(excluded),'failed_count':0,'excluded_count':len(excluded),
+            'batch_review_url':f"/api/batches/{result['id']}/review",'reused_existing_batch':True,
+            'download_available':result.get('pilot_review_status')=='APPROVED','sent':False}
     @app.get('/api/batches/{ident}/download')
     def download(ident:str):
         with db.transaction() as c:row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()

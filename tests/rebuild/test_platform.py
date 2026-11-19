@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select,func
 from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates
-from outreach_v2.service import generate,list_candidates
+from outreach_v2.service import generate,list_candidates,preview_generation
 from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
@@ -22,7 +22,7 @@ def db(tmp_path):
     os.environ.setdefault('OUTREACH_REPLY_TO','chen.yuxuan9@northeastern.edu')
     result=Database('sqlite:///'+str(tmp_path/'test.db'));result.initialize();return result
 
-def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=True):
+def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https://geo-ai-resume.vercel.app',name='GeoAIResume',suppressed=False,personalization=True,fixture=False):
     source_excerpt='GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.'
     p={'data_classification':'OBSERVED','analysis_version':'structured-evidence-v2','pipeline_version':'semantic-openai-v1',
        'business_description':'GeoAIResume offers online tools that help job seekers build and organize professional resumes for their applications.',
@@ -46,7 +46,12 @@ def candidate(db,ident='a',email='yuxuan.chen.1031@outlook.com',website='https:/
     return ident
 
 def invite(db,ids=['a'],key='stable-request-key-123'):
-    return generate(db,{'ids':ids},key)
+    selection={'ids':ids};preview=preview_generation(db,selection)
+    return generate(db,{**selection,'preview_sha256':preview['preview_sha256']},key)
+
+def reviewed_generate(db,selection,key):
+    preview=preview_generation(db,selection)
+    return generate(db,{**selection,'preview_sha256':preview['preview_sha256']},key)
 
 def response(db,interest='YES',authorization='YES',id='a',email=None):
     with db.transaction() as c:r=c.execute(select(invitations).where(invitations.c.candidate_id==id)).mappings().one()
@@ -93,9 +98,39 @@ def test_invitation_generation_rejects_legacy_ready_quality_pass_without_writing
             personalization_analysis_version=None,personalization_version=0,personalization_fingerprint=None,
             personalization_quality_status='PASS'))
     with pytest.raises(ValueError,match='legacy, missing, or outdated'):
-        generate(db,{'ids':['legacy-ready']},'legacy-ready-request-key')
+        reviewed_generate(db,{'ids':['legacy-ready']},'legacy-ready-request-key')
     assert count(db,invitations)==0
     assert count(db,batches)==0
+
+def test_primary_business_statuses_are_derived_and_mutually_exclusive(db):
+    candidate(db,'status-ready','ready@example.test','https://ready.example.test','Ready Business',fixture=False)
+    # Legacy READY is only a cache: complete semantic PASS plus valid contact is sufficient.
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='status-ready').values(personalization_status='INCOMPLETE'))
+    candidate(db,'status-no-contact','none@example.test','https://none.example.test','No Contact Business',fixture=False)
+    candidate(db,'status-invited','invited@example.test','https://invited.example.test','Invited Business',fixture=False)
+    invite(db,['status-invited'],'status-invited-idempotency-key')
+    candidate(db,'status-pending','pending@example.test','https://pending.example.test','Pending Business',fixture=False,personalization=False)
+    candidate(db,'status-blocked','blocked@example.test','https://blocked.example.test','Blocked Business',fixture=False,suppressed=True)
+    with db.transaction() as c:
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='status-no-contact'))
+        c.execute(candidates.update().where(candidates.c.id=='status-pending').values(
+            personalization_quality_status='UNVERIFIED',personalization_quality_errors='[]'))
+        # Invitation status has precedence even if a later quality audit fails.
+        c.execute(candidates.update().where(candidates.c.id=='status-invited').values(
+            personalization_quality_status='FAIL',personalization_quality_errors='[\"INSUFFICIENT_EVIDENCE\"]'))
+    listed=list_candidates(db,{},1,100)
+    by_id={row['id']:row for row in listed['rows']}
+    assert {ident:by_id[ident]['primary_status'] for ident in (
+        'status-ready','status-no-contact','status-invited','status-pending','status-blocked')}=={
+        'status-ready':'READY_TO_INVITE','status-no-contact':'PERSONALIZED_NO_CONTACT',
+        'status-invited':'ALREADY_INVITED','status-pending':'PENDING_PERSONALIZATION','status-blocked':'BLOCKED'}
+    assert by_id['status-ready']['eligible'] is True
+    assert listed['completed_personalization_count']==3
+    assert sum(listed['status_counts'].values())==5
+    assert list_candidates(db,{'primary_status':'READY_TO_INVITE'})['total']==1
+    assert list_candidates(db,{'primary_status':'ALREADY_INVITED'})['total']==1
+    assert list_candidates(db,{'completed_personalization':'1'})['total']==3
 
 @pytest.mark.parametrize('ident,name,website,summary,detail,relevance', [
     ('geoairesume-owner-test-v1','GeoAIResume controlled test website','https://geo-ai-resume.vercel.app',
@@ -131,11 +166,12 @@ def test_owner_fixture_batch_generation_uses_exact_synthetic_policy_without_muta
             created_by='unit-test',created_at=now()))
 
     listed=list_candidates(db,{'q':name})
-    assert listed['eligible_matching']==1
-    assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is True
-    assert listed['rows'][0]['owner_test_fixture_ready'] is True
+    assert listed['eligible_matching']==0
+    assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is False
+    assert listed['rows'][0]['primary_status']=='BLOCKED'
+    assert listed['rows'][0]['status_reason'].startswith('This is an owner-controlled test fixture')
 
-    result=generate(db,{'ids':[ident]},'owner-fixture-invitation-'+ident)
+    result=reviewed_generate(db,{'ids':[ident]},'owner-fixture-invitation-'+ident)
     assert result['pilot_review_status']=='PENDING_REVIEW'
     assert result['send_status']=='UNVERIFIED'
     manifest=json.loads(zipfile.ZipFile(io.BytesIO(result['package'])).read('manifest.json'))
@@ -220,7 +256,8 @@ def test_two_recipient_package_and_exact_binding(db):
         assert r['questionnaire_url'] in preview_text and r['bulk_subject'] in preview_text
     with db.transaction() as c:
         saved=c.execute(select(invitations).order_by(invitations.c.candidate_id)).mappings().all()
-        assert [json.loads(x['authority'])['method'] for x in saved]==['OWNER_BINDING','OWNER_BINDING']
+        assert [json.loads(x['authority'])['method'] for x in saved]==[
+            'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN']
         assert [x['website'] for x in saved]==['https://geo-ai-resume.vercel.app','https://whisker-haven-demo.vercel.app/']
     assert batch['send_status']=='UNVERIFIED'
     assert invite(db,['a','b'])['package']==batch['package']
@@ -236,7 +273,7 @@ def test_select_all_filtered_not_page_limited(db):
     for i in range(3):candidate(db,str(i))
     data=list_candidates(db,{'q':'GeoAI'},1,1)
     assert len(data['rows'])==1 and data['eligible_matching']==3
-    result=generate(db,{'all_matching':True,'filters':{'q':'GeoAI'}},'select-all-request-123')
+    result=reviewed_generate(db,{'all_matching':True,'filters':{'q':'GeoAI'}},'select-all-request-123')
     # all three were considered, two duplicate email addresses were excluded.
     assert len(json.loads(result['excluded']))==2
 
@@ -452,7 +489,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==10
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==11
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -467,7 +504,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==10
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==11
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
     assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
@@ -535,6 +572,64 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     assert observed[-1][1]['job_id']=='job-exact' and observed[-1][1]['idempotency_key']=='outreach-v2:inv-exact' and observed[-1][1]['stage']=='REPORT'
     locked=False
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'}).status_code==409
+
+
+def test_neon_historical_recovery_tick_is_campaign_scoped_authenticated_and_idempotent(db,monkeypatch):
+    import hashlib,json
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+    from outreach_v2 import app as app_module
+    from outreach_v2.app import create_app
+    from outreach_v2.db import events,personalization_authorizations,personalization_campaigns
+    import outreach_v2.personalization_batch as batch
+
+    campaign_id='screened-v2-a429c6055896ef7a'
+    authorization_id='personalization-auth-3deb7a626ac14f67bd7d31a060c6e4e6'
+    ids=['scheduler-member-a','scheduler-member-b']
+    manifest_sha=hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+    monkeypatch.setattr(app_module,'HISTORICAL_CAMPAIGN_ID',campaign_id)
+    monkeypatch.setattr(app_module,'HISTORICAL_AUTHORIZATION_ID',authorization_id)
+    monkeypatch.setattr(app_module,'HISTORICAL_EXECUTION_MANIFEST_SHA256',manifest_sha)
+    monkeypatch.setenv('OUTREACH_HISTORICAL_CAMPAIGN_SCHEDULER_TOKEN','scoped-test-token-'+'x'*32)
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id=authorization_id,
+            candidate_ids=dump(ids),candidate_ids_sha256=manifest_sha,total_budget_usd='OPEN_ENDED',
+            status='RUNNING',created_by='test-admin',approved_by='test-admin',approved_at=now(),
+            created_at=now(),campaign_id=campaign_id))
+        c.execute(personalization_campaigns.insert().values(id=campaign_id,source_job_id='test-screen',
+            source_run_version='test-v1',source_manifest_sha256='source-hash',source_candidate_ids=dump(ids),
+            execution_candidate_ids=dump(ids),execution_candidate_ids_sha256=manifest_sha,
+            source_candidate_count=2,company_count=2,hotel_count=0,criteria_json='{}',status='RUNNING',
+            created_by='test-admin',created_at=now(),approved_by='test-admin',approved_at=now(),
+            authorization_id=authorization_id))
+    db.postgres=True
+    monkeypatch.setattr(batch,'_manifest',lambda _grant,_connection:ids)
+    monkeypatch.setattr(db,'personalization_batch_active',lambda:False)
+    launches=[]
+    monkeypatch.setattr(batch,'launch',lambda database,ident:launches.append((database,ident)) or True)
+
+    client=TestClient(create_app(db))
+    endpoint='/api/internal/historical-screening-recovery-tick'
+    token='Bearer '+'scoped-test-token-'+'x'*32
+    valid_body={'trigger_name':'outreach-historical-screening-recovery',
+        'invocation_id':'neon-invocation-1234567890','scheduled_at':'2026-11-13T05:00:00Z',
+        'campaign_id':campaign_id,'authorization_id':authorization_id,'manifest_sha256':manifest_sha}
+    assert client.post(endpoint,json=valid_body).status_code==401
+    headers={'Authorization':token,'X-Neon-Trigger-Invocation-Id':valid_body['invocation_id']}
+    bad_manifest={**valid_body,'manifest_sha256':'wrong'}
+    assert client.post(endpoint,headers=headers,json=bad_manifest).status_code==400
+    first=client.post(endpoint,headers=headers,json=valid_body)
+    assert first.status_code==200,first.text
+    assert first.json()['status']=='RECOVERY_LAUNCHED'
+    duplicate=client.post(endpoint,headers=headers,json=valid_body)
+    assert duplicate.status_code==200 and duplicate.json()['status']=='DUPLICATE_TICK'
+    assert launches==[(db,authorization_id)]
+    with db.transaction() as c:
+        rows=c.execute(select(events.c.detail).where(events.c.entity_id==campaign_id,
+            events.c.event=='PERSONALIZATION_BATCH_SCHEDULER_TICK')).scalars().all()
+    assert len(rows)==1
+    assert json.loads(rows[0])['invocation_id']==valid_body['invocation_id']
+    assert json.loads(rows[0])['status']=='RECOVERY_LAUNCHED'
 
 class EmptySheets:
     def read(self):return []
@@ -1592,14 +1687,14 @@ def test_mixed_invitation_batch_excludes_invalid_personalization_and_is_idempote
                 'recommendations':[{'problem':'observed','suggestion':'suggested',
                     'source_urls':['https://geo-ai-resume.vercel.app'],'observed_at':now()}]})))
     key='mixed-valid-invalid-invitation-request'
-    batch=generate(db,{'ids':['valid','invalid']},key)
+    batch=reviewed_generate(db,{'ids':['valid','invalid']},key)
     manifest=json.loads(zipfile.ZipFile(io.BytesIO(batch['package'])).read('manifest.json'))
     assert manifest['count']==1
     assert len(manifest['invitations'])==1 and manifest['invitations'][0]['company_id']=='valid'
     assert manifest['excluded']==json.loads(batch['excluded'])
     assert manifest['excluded']==[{'candidate_id':'invalid','company':'GeoAIResume',
         'reasons':['Missing V1 field: business_description']}]
-    retry=generate(db,{'ids':['valid','invalid']},key)
+    retry=reviewed_generate(db,{'ids':['valid','invalid']},key)
     assert retry['id']==batch['id'] and retry['package']==batch['package']
     assert count(db,batches)==1 and count(db,invitations)==1
     with db.transaction() as c:
@@ -1615,14 +1710,133 @@ def test_historical_ready_personalization_is_rechecked_at_export_even_with_stale
     with db.transaction() as c:c.execute(candidates.update().where(candidates.c.id=='historical-ready').values(
         personalization=dump(poor),personalization_status='READY',personalization_quality_status='PASS',personalization_quality_errors='[]'))
     with pytest.raises(ValueError,match='No eligible invitations') as error:
-        generate(db,{'ids':['historical-ready']},'historical-ready-quality-recheck-key')
+        reviewed_generate(db,{'ids':['historical-ready']},'historical-ready-quality-recheck-key')
     assert 'GENERIC_STRENGTH' in str(error.value) and 'GENERIC_RECOMMENDATION' in str(error.value)
     assert count(db,batches)==0 and count(db,invitations)==0
 
 def test_all_invalid_invitation_batch_rolls_back_without_partial_records(db):
     candidate(db,'invalid-only',personalization=False)
     with pytest.raises(ValueError,match='No eligible invitations'):
-        generate(db,{'ids':['invalid-only']},'all-invalid-invitation-request')
+        reviewed_generate(db,{'ids':['invalid-only']},'all-invalid-invitation-request')
+    assert count(db,batches)==0 and count(db,invitations)==0
+
+def test_recipient_preview_is_read_only_and_lists_contact_blockers(db):
+    from outreach_v2.service import preview_generation
+    candidate(db,'preview-valid','one@geo-ai-resume.vercel.app')
+    candidate(db,'preview-no-contact',None)
+    candidate(db,'preview-suppressed','blocked@geo-ai-resume.vercel.app')
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='preview-suppressed').values(suppressed=True))
+    selection={'ids':['preview-valid','preview-no-contact','preview-suppressed']}
+    result=preview_generation(db,selection)
+    assert (result['selected_total'],result['valid_recipient_count'],result['excluded_count'])==(3,1,2)
+    reasons={item['candidate_id']:item['reasons'] for item in result['excluded']}
+    assert any('No single valid first-party business email' in x for x in reasons['preview-no-contact'])
+    assert 'Candidate suppressed or withdrawn' in reasons['preview-suppressed']
+    assert count(db,batches)==0 and count(db,invitations)==0
+
+def test_reviewed_generation_rechecks_suppression_and_first_party_contact_provenance(db):
+    from outreach_v2.service import eligible_recipient,preview_generation
+    from outreach_v2.db import suppressions
+    candidate(db,'contact-guard','person@example.org',website='https://example.org',name='Example Company',fixture=False)
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id=='contact-guard')).mappings().one()
+        c.execute(contacts.update().where(contacts.c.candidate_id=='contact-guard').values(source_url='https://unrelated.example/contact'))
+        result,reasons=eligible_recipient(c,row)
+    assert result is None and 'No single valid first-party business email' in reasons
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id=='contact-guard').values(source_url='https://example.org/contact'))
+        c.execute(suppressions.insert().values(email='person@example.org',reason='test suppression',recorded_at=now()))
+        row=c.execute(select(candidates).where(candidates.c.id=='contact-guard')).mappings().one()
+        result,reasons=eligible_recipient(c,row)
+    assert result is None and 'No single valid first-party business email' in reasons
+    with pytest.raises(ValueError,match='No eligible invitations'):
+        reviewed_generate(db,{'ids':['contact-guard']},'suppressed-contact-review-key')
+    assert count(db,invitations)==0
+
+def test_multiple_authorized_contacts_are_ready_but_require_explicit_recipient_choice(db):
+    from outreach_v2.service import preview_generation
+    candidate(db,'multi-contact','first@example.org',website='https://example.org',name='Example Company',fixture=False)
+    with db.transaction() as c:
+        c.execute(contacts.insert().values(id='contact-second',candidate_id='multi-contact',kind='EMAIL',
+            email='second@example.org',source_url='https://example.org/contact',evidence='Listed on official contact page',
+            verification='VERIFIED',purpose='general business',suppressed=False))
+    row=list_candidates(db,{'q':'Example Company'})['rows'][0]
+    assert row['primary_status']=='READY_TO_INVITE' and row['contact_readiness']=='MANUAL_RECIPIENT_SELECTION'
+    selection={'ids':['multi-contact']};preview=preview_generation(db,selection)
+    assert preview['valid_recipient_count']==0 and preview['excluded'][0]['recipient_options']==['first@example.org','second@example.org']
+    chosen={**selection,'recipient_choices':{'multi-contact':'second@example.org'}}
+    approved=preview_generation(db,chosen)
+    assert approved['valid_recipient_count']==1 and approved['excluded_count']==0
+    generated=generate(db,{**chosen,'preview_sha256':approved['preview_sha256']},'manual-recipient-choice-key')
+    assert count(db,invitations)==1
+    with db.transaction() as c:
+        assert c.scalar(select(invitations.c.recipient).where(invitations.c.candidate_id=='multi-contact'))=='second@example.org'
+
+def test_invitation_oriented_pilot_cohort_requires_verified_first_party_contact(db):
+    from outreach_v2.service import select_pilot_cohort
+    candidate(db,'no-contact-for-pilot',None,website='https://no-contact.example',name='No Contact Business',fixture=False)
+    candidate(db,'contact-for-pilot','pilot@has-contact.example',website='https://has-contact.example',name='Contact Business',fixture=False)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id=='no-contact-for-pilot').values(verification='VERIFIED',evidence='No address evidence'))
+        rows=select_pilot_cohort(c,100)
+    assert [row['id'] for row in rows]==['contact-for-pilot']
+
+def test_first_party_contact_discovery_persists_verifiable_provenance_without_creating_invitation(db):
+    from outreach_v2.service import add_contact_from_first_party_page,detail
+    candidate(db,'contact-discovery',None,website='https://business.example',name='Business Example',fixture=False)
+    html='<html><main><p>For business inquiries, contact info@business.example.</p></main></html>'
+    record=add_contact_from_first_party_page(db,'contact-discovery','info@business.example','https://business.example/contact',
+        fetcher=lambda url:('https://business.example/contact',html,False))
+    assert record['verification']=='VERIFIED' and record['purpose']=='general business'
+    saved=detail(db,'contact-discovery')['contacts']
+    assert len(saved)==2
+    found=next(row for row in saved if row['email']=='info@business.example')
+    assert found['source_url']=='https://business.example/contact'
+    assert found['source_checksum']==hashlib.sha256(html.encode()).hexdigest()
+    assert 'info@business.example' in found['evidence']
+    assert count(db,invitations)==0
+
+def test_first_party_contact_discovery_cannot_authorize_suppressed_or_unrelated_contacts(db):
+    from outreach_v2.service import add_contact_from_first_party_page
+    from outreach_v2.db import suppressions
+    from sqlalchemy import insert
+    candidate(db,'suppressed-discovery','ignored@business.example',website='https://business.example',name='Business Example',suppressed=True,fixture=False)
+    candidate(db,'global-suppression-discovery',None,website='https://business.example',name='Business Example',fixture=False)
+    html='<html><main><p>Contact info@business.example for business inquiries.</p></main></html>'
+    fetcher=lambda url:('https://business.example/contact',html,False)
+    with pytest.raises(ValueError,match='verified website identity|suppressed'):
+        add_contact_from_first_party_page(db,'suppressed-discovery','info@business.example','https://business.example/contact',fetcher)
+    with db.transaction() as c:
+        c.execute(suppressions.insert().values(email='info@business.example',reason='test',recorded_at=now()))
+    with pytest.raises(ValueError,match='global suppression'):
+        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.example','https://business.example/contact',fetcher)
+    with pytest.raises(ValueError,match='verified business website'):
+        add_contact_from_first_party_page(db,'global-suppression-discovery','info@business.example','https://unrelated.example/contact',fetcher)
+    assert count(db,invitations)==0
+
+def test_first_party_contact_discovery_rejects_nonbusiness_purpose_and_unpublished_email(db):
+    from outreach_v2.service import add_contact_from_first_party_page
+    candidate(db,'purpose-discovery',None,website='https://business.example',name='Business Example',fixture=False)
+    def fetcher(url):return ('https://business.example/careers',
+        '<html><main><p>Send resumes to jobs@business.example.</p></main></html>',False)
+    with pytest.raises(ValueError,match='restricted contact purpose'):
+        add_contact_from_first_party_page(db,'purpose-discovery','jobs@business.example','https://business.example/careers',fetcher)
+    def no_email(url):return ('https://business.example/contact','<html><main>Call our office.</main></html>',False)
+    with pytest.raises(ValueError,match='not visible'):
+        add_contact_from_first_party_page(db,'purpose-discovery','info@business.example','https://business.example/contact',no_email)
+    assert count(db,invitations)==0
+
+def test_review_hash_invalidates_if_contact_is_suppressed_after_preview(db):
+    from outreach_v2.service import preview_generation
+    from outreach_v2.db import suppressions
+    candidate(db,'review-race','race@example.org',website='https://example.org',name='Example Company',fixture=False)
+    selection={'ids':['review-race']};preview=preview_generation(db,selection)
+    assert preview['valid_recipient_count']==1
+    with db.transaction() as c:
+        c.execute(suppressions.insert().values(email='race@example.org',reason='new suppression',recorded_at=now()))
+    with pytest.raises(ValueError,match='eligibility changed'):
+        generate(db,{**selection,'preview_sha256':preview['preview_sha256']},'stale-recipient-review-key')
     assert count(db,batches)==0 and count(db,invitations)==0
 
 def test_exported_unsent_invitation_correction_is_versioned_and_preserves_original(db):
@@ -1690,11 +1904,19 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
     before={t.name:count(db,t) for t in (invitations,batches,submissions,jobs)}
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
-    client=TestClient(create_app(db));login=client.post('/api/auth/login',json={
+    client=TestClient(create_app(db))
+    assert client.post('/api/batches/preview',json={'ids':['package-valid']}).status_code==401
+    login=client.post('/api/auth/login',json={
         'email':'chen.yuxuan9@northeastern.edu','password':'local-only-test-password'})
     assert login.status_code==200 and login.json()['role']=='ADMIN'
+    selection={'ids':['package-valid','package-invalid']}
+    assert client.post('/api/batches/preview',json=selection).status_code==403
+    preview=client.post('/api/batches/preview',headers={'X-CSRF-Token':login.json()['csrf']},json=selection)
+    assert preview.status_code==200 and preview.json()['selected_total']==2
+    assert preview.json()['valid_recipient_count']==1 and preview.json()['excluded_count']==1
+    assert count(db,invitations)==before['invitations'] and count(db,batches)==before['batches']
     response=client.post('/api/batches',headers={'X-CSRF-Token':login.json()['csrf'],'Idempotency-Key':'isolated-api-package-key-123'},
-        json={'ids':['package-valid','package-invalid']})
+        json={**selection,'preview_sha256':preview.json()['preview_sha256']})
     assert response.status_code==200, response.text
     prepared=response.json();batch_id=prepared['batch_id']
     assert prepared['review_status']=='PENDING_REVIEW' and prepared['download_available'] is False
@@ -2444,6 +2666,54 @@ def test_bounded_runner_releases_local_launch_guard_for_next_scheduler_tick(db,m
         time.sleep(.01)
     assert runs==['recoverable-runner','recoverable-runner']
     assert batch.is_active('recoverable-runner') is False
+
+
+def test_campaign_runner_continues_after_a_failed_candidate_in_bounded_chunks(db,monkeypatch):
+    import hashlib,json
+    from sqlalchemy import and_
+    from outreach_v2.db import personalization_authorizations
+    import outreach_v2.personalization as personalization
+    import outreach_v2.personalization_batch as batch
+
+    ids=[candidate(db,ident=f'auto-candidate-{i}',name=f'Auto Candidate {i}',
+        personalization=False,fixture=False) for i in range(6)]
+    digest=hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+    with db.transaction() as c:
+        c.execute(personalization_authorizations.insert().values(id='auto-continuation',
+            candidate_ids=dump(ids),candidate_ids_sha256=digest,total_budget_usd='5.00',
+            status='RUNNING',created_by='admin@example.org',approved_by='admin@example.org',
+            approved_at=now(),created_at=now()))
+
+    monkeypatch.setattr(batch,'_manifest',lambda _grant,_connection:ids)
+    monkeypatch.setattr(batch,'manifest_budget',lambda _ids:batch.MAX_TOTAL_BUDGET_USD)
+    monkeypatch.setattr(batch,'eligibility',lambda cohort_ids:
+        and_(candidates.c.id.in_(cohort_ids),candidates.c.personalization_analysis_version.is_(None)))
+    monkeypatch.setattr(batch,'_retry_wait',lambda _db,_ids:None)
+    monkeypatch.setattr(batch,'progress',lambda _db,_grant,_ids:{
+        'processed':6,'candidate_count':6,'unresolved_reserved_usd':'0'})
+
+    calls=[]
+    def process_chunk(_db,**kwargs):
+        chunk=list(kwargs['authorized_candidate_ids']);calls.append(chunk)
+        with db.transaction() as c:
+            for ident in chunk:
+                failed=ident==ids[0]
+                c.execute(candidates.update().where(candidates.c.id==ident).values(
+                    personalization_analysis_version='semantic-openai-v1',
+                    personalization_quality_status='FAIL' if failed else 'PASS',
+                    personalization_outcome='SEMANTIC_QUALITY_REJECTED' if failed else 'SEMANTIC_READY'))
+        return {'run_id':f'run-{len(calls)}','attempted':len(chunk),'completed':len(chunk),
+            'incomplete':0,'status':'COMPLETED','actual_cost_usd':'0.10',
+            'unresolved_reserved_usd':'0'}
+    monkeypatch.setattr(personalization,'backfill',process_chunk)
+
+    batch._run(db,'auto-continuation')
+    with db.transaction() as c:
+        grant=c.execute(select(personalization_authorizations).where(
+            personalization_authorizations.c.id=='auto-continuation')).mappings().one()
+    assert [len(chunk) for chunk in calls]==[5,1]
+    assert [ident for chunk in calls for ident in chunk]==ids
+    assert grant['status']=='COMPLETED'
 
 
 def test_batch_runner_schedules_after_offline_replay_chunk(db,monkeypatch):

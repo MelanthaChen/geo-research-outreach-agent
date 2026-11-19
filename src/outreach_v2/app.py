@@ -354,6 +354,18 @@ def create_app(database=None):
             headers={'Content-Disposition':'attachment; filename="lagoon-review-preview-not-sent.zip"'})
     @app.get('/api/candidates/{ident:path}')
     def candidate(ident:str):return service.detail(db,ident)
+    @app.post('/api/admin/contacts/discover')
+    async def discover_first_party_contact(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'candidate_id','email','source_url'}:
+            raise ValueError('Provide exactly candidate_id, email, and source_url')
+        return service.add_contact_from_first_party_page(db,str(body['candidate_id']),str(body['email']),str(body['source_url']))
+    @app.post('/api/batches/preview')
+    async def preview_invitation_batch(request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        body=await request.json()
+        return service.preview_generation(db,body)
     @app.post('/api/batches')
     async def generate(request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')

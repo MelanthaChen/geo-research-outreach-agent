@@ -7,7 +7,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, or_, func
+from sqlalchemy import select, or_, func, bindparam
 
 from . import service
 from .db import (batches, candidates, contacts, email_templates, events, invitation_generation_batches,
@@ -77,10 +77,8 @@ def enqueue(db, selection, request_key):
         if not eligible:
             raise ValueError('No eligible invitations: ' + dump(review['excluded']) + '; no invitations were created')
 
-        questionnaire = c.execute(select(questionnaires).where(questionnaires.c.active.is_(True))
-            .order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
-        template = c.execute(select(email_templates).where(email_templates.c.active.is_(True),
-            email_templates.c.template_kind == 'INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
+        questionnaire = context.get('questionnaire')
+        template = context.get('invitation_template')
         batch_id = 'batch-' + uuid.uuid4().hex
         stamp = now()
         snapshot = {
@@ -173,6 +171,7 @@ def process_one(db, *, chunk_size=DEFAULT_CHUNK_SIZE, batch_id=None):
             candidates.c.id.in_([i['candidate_id'] for i in pending]))).mappings()} if pending else {}
         lookup = service._generation_lookup(c, list(rows_by_id.values())) if rows_by_id else None
         generated = []
+        item_updates = []
         for item in pending:
             frozen = parse(item['candidate_snapshot'])
             row = rows_by_id.get(item['candidate_id'])
@@ -186,22 +185,33 @@ def process_one(db, *, chunk_size=DEFAULT_CHUNK_SIZE, batch_id=None):
                 elif item['recipient'].strip().casefold() in lookup['existing_invited_recipients']:
                     reason = 'Recipient already has an invitation; duplicate generation is blocked'
             if reason:
-                c.execute(invitation_generation_items.update().where(invitation_generation_items.c.id == item['id'])
-                    .values(status='SKIPPED', error=reason))
+                item_updates.append({'_item_id':item['id'],'_status':'SKIPPED',
+                    '_invitation_id':None,'_error':reason})
                 continue
             try:
                 invitation = _invitation_row(row, item['recipient'], config, questionnaire)
                 invitation['batch_id'] = gen['batch_id']
             except (ValueError, TypeError) as exc:
-                c.execute(invitation_generation_items.update().where(invitation_generation_items.c.id == item['id'])
-                    .values(status='FAILED', error=str(exc)[:500]))
+                item_updates.append({'_item_id':item['id'],'_status':'FAILED',
+                    '_invitation_id':None,'_error':str(exc)[:500]})
                 continue
-            c.execute(invitations.insert().values(**invitation))
-            c.execute(invitation_generation_items.update().where(invitation_generation_items.c.id == item['id'])
-                .values(status='GENERATED', invitation_id=invitation['id'], error=None))
+            item_updates.append({'_item_id':item['id'],'_status':'GENERATED',
+                '_invitation_id':invitation['id'],'_error':None})
             generated.append(invitation)
             lookup['candidate_ids_with_invitations'].add(row['id'])
             lookup['existing_invited_recipients'].add(item['recipient'].strip().casefold())
+        # Keep all chunk writes in the existing transaction, but send rows to
+        # the database as executemany batches instead of one round trip per
+        # invitation and per item. A database error still rolls back the whole
+        # chunk, leaving its durable snapshot safe to replay.
+        if generated:
+            c.execute(invitations.insert(), generated)
+        if item_updates:
+            item_update = invitation_generation_items.update().where(
+                invitation_generation_items.c.id == bindparam('_item_id')).values(
+                    status=bindparam('_status'), invitation_id=bindparam('_invitation_id'),
+                    error=bindparam('_error'))
+            c.execute(item_update, item_updates)
         completed = c.scalar(select(invitation_generation_items.c.id).where(
             invitation_generation_items.c.batch_id == gen['batch_id'],
             invitation_generation_items.c.status == 'PENDING').limit(1)) is None

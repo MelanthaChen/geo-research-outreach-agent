@@ -78,6 +78,48 @@ def test_durable_invitation_generation_is_chunked_idempotent_and_review_gated(db
         assert c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==queued['batch_id']))==2
 
 
+def test_durable_invitation_generation_batches_chunk_writes_and_isolates_candidate_render_failure(db,monkeypatch):
+    from sqlalchemy import event
+    from outreach_v2 import invitation_generation
+    from outreach_v2.db import invitation_generation_items
+    candidate(db,'generation-bulk-a')
+    candidate(db,'generation-bulk-b',email='contact@generation-bulk-b.org',
+        website='https://generation-bulk-b.org',name='Generation Bulk B')
+    candidate(db,'generation-bulk-c',email='contact@generation-bulk-c.org',
+        website='https://generation-bulk-c.org',name='Generation Bulk C')
+    selection={'ids':['generation-bulk-a','generation-bulk-b','generation-bulk-c']}
+    preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},
+        'generation-bulk-write-request-key')
+    original=invitation_generation._invitation_row
+    def render_one(row,*args,**kwargs):
+        if row['id']=='generation-bulk-b':raise ValueError('fixture render failure')
+        return original(row,*args,**kwargs)
+    monkeypatch.setattr(invitation_generation,'_invitation_row',render_one)
+    calls=[]
+    def capture(_conn,_cursor,statement,_params,_context,executemany):
+        normalized=statement.lower()
+        if (normalized.lstrip().startswith('insert') and 'invitations' in normalized) or (
+                normalized.lstrip().startswith('update') and 'invitation_generation_items' in normalized):
+            calls.append((normalized.split()[0:3],executemany))
+    event.listen(db.engine,'before_cursor_execute',capture)
+    try:
+        result=process_invitation_chunk(db,chunk_size=3)
+    finally:
+        event.remove(db.engine,'before_cursor_execute',capture)
+    assert result['status']=='COMPLETED_WITH_EXCLUSIONS'
+    assert len(calls)==2 and all(batch for _statement,batch in calls)
+    with db.transaction() as c:
+        rows=c.execute(select(invitation_generation_items.c.candidate_id,
+            invitation_generation_items.c.status,invitation_generation_items.c.error).where(
+                invitation_generation_items.c.batch_id==queued['batch_id'])).all()
+        assert {(row.candidate_id,row.status) for row in rows}=={
+            ('generation-bulk-a','GENERATED'),('generation-bulk-b','FAILED'),('generation-bulk-c','GENERATED')}
+        assert next(row.error for row in rows if row.candidate_id=='generation-bulk-b')=='fixture render failure'
+        assert c.scalar(select(func.count()).select_from(invitations).where(
+            invitations.c.batch_id==queued['batch_id']))==2
+
+
 def test_durable_invitation_generation_skips_changed_candidate_snapshot(db):
     candidate(db,'generation-changed')
     selection={'ids':['generation-changed']};preview=preview_generation(db,selection)

@@ -12,7 +12,8 @@ from sqlalchemy import select,func
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
-    personalization_authorizations,personalization_attempts,personalization_campaigns,candidates as candidate_table)
+    personalization_authorizations,personalization_attempts,personalization_campaigns,candidates as candidate_table,
+    invitation_generation_batches,invitation_generation_items)
 from . import auth,service
 from .consent import record_owner_identity_binding
 from .migrate import dump
@@ -286,7 +287,7 @@ def create_app(database=None):
     async def protect(request,call_next):
         path=request.url.path
         try:
-            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/personalization-batch-tick','/api/internal/historical-screening-recovery-tick','/api/admin/invites/accept'}:
+            if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/invitation-generation-tick','/api/internal/personalization-batch-tick','/api/internal/historical-screening-recovery-tick','/api/admin/invites/accept'}:
                 current=auth.session(db,request.cookies.get(COOKIE))
                 if not current:return JSONResponse({'error':'Your administrator session has expired. Please sign in.'},401)
                 request.state.session=current
@@ -369,21 +370,50 @@ def create_app(database=None):
     @app.post('/api/batches')
     async def generate(request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
-        body=await request.json();result=service.generate(db,body,request.headers.get('idempotency-key'))
-        excluded=json.loads(result.get('excluded') or '[]')
-        import io,zipfile
-        with zipfile.ZipFile(io.BytesIO(result['package'])) as package:
-            manifest=json.loads(package.read('manifest.json'))
-        status=result.get('pilot_review_status','PENDING_REVIEW')
-        return {'batch_id':result['id'],'review_status':status,
-            'invitation_count':manifest['count'],'generated_count':manifest['count'],
-            'skipped_count':len(excluded),'failed_count':0,'excluded_count':len(excluded),
-            'batch_review_url':f"/api/batches/{result['id']}/review",
-            'reused_existing_batch':bool(result.get('_idempotent_replay')),
-            'download_available':status=='APPROVED','sent':False}
+        from .invitation_generation import enqueue
+        body=await request.json()
+        result=enqueue(db,body,request.headers.get('idempotency-key'))
+        return result|{'review_status':'GENERATING' if result['generation_status'] not in {'COMPLETED','COMPLETED_WITH_EXCLUSIONS'} else 'PENDING_REVIEW',
+            'download_available':False,'sent':False}
+    @app.get('/api/batches')
+    def batch_list(page:int=1):
+        with db.transaction() as c:
+            query=select(*[x for x in batches.c if x.name!='package'],
+                invitation_generation_batches.c.status.label('generation_status'),
+                invitation_generation_batches.c.completed_items.label('generation_completed'),
+                invitation_generation_batches.c.total_items.label('generation_total')).select_from(
+                    batches.outerjoin(invitation_generation_batches,
+                        invitation_generation_batches.c.batch_id==batches.c.id))
+            return {'rows':[dict(r) for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]}
+    @app.get('/api/batches/{ident}/generation')
+    def batch_generation_status(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
+        from .invitation_generation import progress
+        return progress(db,ident)
+    @app.post('/api/batches/{ident}/resume-generation')
+    async def resume_invitation_generation(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        body=await request.json()
+        if not isinstance(body,dict) or body!={'confirm_recovery':True}:
+            raise ValueError('Explicit confirmation is required to resume the same invitation snapshot')
+        from .invitation_generation import resume
+        return resume(db,ident)
     @app.get('/api/batches/by-request-key/{key}')
     def batch_by_request_key(key:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        with db.transaction() as c:
+            batch=c.execute(select(batches).where(batches.c.request_key==key)).mappings().first()
+            if not batch:raise LookupError('No saved invitation batch exists for this request key')
+            generation=c.execute(select(invitation_generation_batches).where(
+                invitation_generation_batches.c.batch_id==batch['id'])).mappings().first()
+            if generation:
+                count=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==batch['id'])) or 0
+                failed=c.scalar(select(func.count()).select_from(invitation_generation_items).where(
+                    invitation_generation_items.c.batch_id==batch['id'],invitation_generation_items.c.status=='FAILED')) or 0
+                return {'batch_id':batch['id'],'generation_status':generation['status'],
+                    'completed_items':generation['completed_items'],'total_items':generation['total_items'],
+                    'invitation_count':count,'generated_count':count,'skipped_count':len(json.loads(batch.get('excluded') or '[]')),
+                    'failed_count':failed,'review_status':batch['pilot_review_status']}
         result=service.batch_by_request_key(db,key)
         excluded=json.loads(result.get('excluded') or '[]')
         import io,zipfile
@@ -394,15 +424,6 @@ def create_app(database=None):
             'skipped_count':len(excluded),'failed_count':0,'excluded_count':len(excluded),
             'batch_review_url':f"/api/batches/{result['id']}/review",'reused_existing_batch':True,
             'download_available':result.get('pilot_review_status')=='APPROVED','sent':False}
-    @app.get('/api/batches')
-    def batch_list(page:int=1):
-        with db.transaction() as c:
-            rows=[dict(r) for r in c.execute(select(*[x for x in batches.c if x.name!='package']).order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]
-            for row in rows:
-                row['generated_count']=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==row['id'])) or 0
-                row['skipped_count']=len(json.loads(row.get('excluded') or '[]'))
-                row['failed_count']=0
-            return {'rows':rows}
     @app.get('/api/batches/{ident}/download')
     def download(ident:str):
         with db.transaction() as c:row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
@@ -418,6 +439,7 @@ def create_app(database=None):
         with db.transaction() as c:
             batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
             if not batch:raise LookupError('Batch not found')
+            if batch['pilot_review_status']=='GENERATING':raise ValueError('Invitation package is still being generated')
             rows=c.execute(select(invitations,candidate_table.c.personalization_quality_status,
                 candidate_table.c.personalization_quality_errors).select_from(invitations.join(candidate_table,
                 candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==ident)
@@ -1754,6 +1776,34 @@ def create_app(database=None):
                 job_id=body.get('job_id'),idempotency_key=body.get('idempotency_key'),stage=body.get('stage'),
                 force_report_regeneration=force_regeneration)
         return result
+    @app.post('/api/internal/invitation-generation-tick')
+    async def invitation_generation_tick(request:Request):
+        expected=os.environ.get('OUTREACH_WORKER_TOKEN','')
+        supplied=request.headers.get('authorization','')
+        if len(expected)<32 or not hmac.compare_digest(supplied,'Bearer '+expected):
+            raise HTTPException(status_code=401,detail='Worker authentication required')
+        if os.environ.get('OUTREACH_INVITATION_GENERATION_ENABLED','false').strip().casefold() not in {'1','true','yes','on'}:
+            return {'status':'DISABLED','processed_chunks':0,'reason':'Durable invitation generation worker is disabled'}
+        if not db.postgres:
+            raise HTTPException(status_code=503,detail='Invitation generation worker requires PostgreSQL locking')
+        try:
+            if int(request.headers.get('content-length','0'))>64:
+                raise HTTPException(status_code=413,detail='Worker request is too large')
+            raw=bytearray()
+            async for chunk in request.stream():
+                if len(raw)+len(chunk)>64:
+                    raise HTTPException(status_code=413,detail='Worker request is too large')
+                raw.extend(chunk)
+            body=json.loads(raw or b'{}')
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400,detail='Invalid worker request')
+        if body not in ({},None):
+            raise HTTPException(status_code=400,detail='Invitation generation tick accepts no request fields')
+        from .invitation_generation import tick as generation_tick
+        with db.worker_lock() as acquired:
+            if not acquired:
+                raise HTTPException(status_code=409,detail='A worker invocation is already running')
+            return await run_in_threadpool(generation_tick,db)
     @app.post('/api/internal/personalization-batch-tick')
     async def scheduled_personalization_batch_tick(request:Request):
         expected=os.environ.get('OUTREACH_WORKER_TOKEN','')

@@ -35,8 +35,8 @@ contacts = table('contacts', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
     col('kind', String), col('email', String, index=True), col('url'), col('source_url'), col('evidence'),
     col('verification', String), col('purpose'), col('suppressed', Boolean, default=False, nullable=False),
-    col('source_ref', String), col('source_checksum', String), col('raw'),
-    col('verified_at'), col('verification_reason'), col('authorization_reason'))
+    col('verified_at'), col('verification_reason'), col('authorization_reason'),
+    col('source_ref', String), col('source_checksum', String), col('raw'))
 sources = table('sources', col('id', String, primary_key=True), col('path'), col('relation'), col('fingerprint'),
     col('expected', Integer), col('processed', Integer, default=0), col('status'), col('updated_at'))
 source_rows = table('source_rows', col('id', String, primary_key=True),
@@ -153,6 +153,21 @@ invitation_corrections = table('invitation_corrections', col('id', String, prima
     col('version', Integer, nullable=False), col('source_sha256', String, nullable=False), col('proposed_sha256', String, nullable=False),
     col('subject'), col('body'), col('recipient'), col('evidence'), col('package', LargeBinary), col('status', String, nullable=False),
     col('created_by', String, nullable=False), col('created_at', nullable=False), col('approved_by'), col('approved_at'))
+invitation_generation_batches = table('invitation_generation_batches',
+    Column('batch_id', String, ForeignKey(f'{SCHEMA}.batches.id'), primary_key=True),
+    col('status', String, nullable=False), col('selection_snapshot', Text, nullable=False),
+    col('excluded_snapshot', Text, nullable=False, default='[]'), col('total_items', Integer, nullable=False),
+    col('completed_items', Integer, nullable=False, default=0), col('attempts', Integer, nullable=False, default=0),
+    col('recovery_attempts', Integer, nullable=False, default=0),
+    col('next_attempt_at'), col('lease_token'), col('lease_until'), col('error'),
+    col('created_at', nullable=False), col('updated_at', nullable=False))
+invitation_generation_items = table('invitation_generation_items', col('id', String, primary_key=True),
+    Column('batch_id', String, ForeignKey(f'{SCHEMA}.invitation_generation_batches.batch_id'), nullable=False, index=True),
+    col('ordinal', Integer, nullable=False), col('candidate_id', String, nullable=False),
+    col('candidate_snapshot', Text, nullable=False), col('recipient', String, nullable=False),
+    col('status', String, nullable=False), col('invitation_id'), col('error'), col('created_at', nullable=False),
+    UniqueConstraint('batch_id', 'ordinal', name='uq_invitation_generation_ordinal'),
+    UniqueConstraint('batch_id', 'candidate_id', name='uq_invitation_generation_candidate'))
 Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candidates.c.qualification)
 
 MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
@@ -196,7 +211,7 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'personalization_authorizations': {'campaign_id': 'TEXT'}
 }), (12, 'candidate-name-id-pagination-index', {}), (13, 'dated-evidence-backed-recipient-authorization', {
     'contacts': {'verified_at': 'TEXT', 'verification_reason': 'TEXT', 'authorization_reason': 'TEXT'}
-})]
+}), (14, 'durable-chunked-invitation-generation', {})]
 
 class Database:
     def __init__(self, url=None):

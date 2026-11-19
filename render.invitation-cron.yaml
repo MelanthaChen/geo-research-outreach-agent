@@ -1,0 +1,23 @@
+# Standalone, invitation-generation-only Render Cron Job.
+# Create this as a separate Blueprint; do not sync the legacy free-only
+# staging Blueprint, whose service definition predates the deployed app.
+services:
+  - type: cron
+    name: outreach-invitation-generation-cron
+    runtime: python
+    plan: 0.5c-512mb
+    schedule: "*/5 * * * *"
+    buildCommand: "true"
+    startCommand: bash scripts/outreach_invitation_generation_tick.sh
+    autoDeploy: false
+    envVars:
+      - key: OUTREACH_WORKER_URL
+        fromService:
+          name: geo-research-outreach-staging
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: OUTREACH_WORKER_TOKEN
+        fromService:
+          name: geo-research-outreach-staging
+          type: web
+          envVarKey: OUTREACH_WORKER_TOKEN

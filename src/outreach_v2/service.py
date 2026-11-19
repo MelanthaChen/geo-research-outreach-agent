@@ -616,6 +616,11 @@ def _preview_in_transaction(c,selection,context=None):
     questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
     invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
         email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
+    if context is not None:
+        # Reuse the exact config rows read for this reviewed preview rather
+        # than issuing duplicate active-template/questionnaire lookups.
+        context.update(questionnaire=dict(questionnaire) if questionnaire else None,
+            invitation_template=dict(invitation_template) if invitation_template else None)
     questionnaire_fields=parse(questionnaire['field_map']) if questionnaire else {}
     configured_form=questionnaire['form_url'] if questionnaire else None
     reference_entry=questionnaire_fields.get('invitation_reference_entry_id') if questionnaire else None
@@ -680,11 +685,8 @@ def generate(db,selection,key):
             raise ValueError('Recipient eligibility changed after review; refresh the preview before generating')
         if review['valid_recipient_count']==0:
             raise ValueError('No eligible invitations: '+dump(review['excluded'])+'; no invitations were created')
-        questionnaire=c.execute(select(questionnaires).where(questionnaires.c.active.is_(True)).order_by(questionnaires.c.version.desc()).limit(1)).mappings().first()
-        invitation_template=c.execute(select(email_templates).where(email_templates.c.active.is_(True),
-            email_templates.c.template_kind=='INVITATION').order_by(email_templates.c.version.desc()).limit(1)).mappings().first()
-        questionnaire=dict(questionnaire) if questionnaire else None
-        invitation_template=dict(invitation_template) if invitation_template else None
+        questionnaire=context.get('questionnaire')
+        invitation_template=context.get('invitation_template')
         config_fingerprint=sha(dump({'questionnaire':questionnaire,'invitation_template':invitation_template}))
     # Render and package outside the database transaction. The following short
     # commit rechecks the preview and active configuration before inserting.

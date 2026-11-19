@@ -376,12 +376,33 @@ def create_app(database=None):
             manifest=json.loads(package.read('manifest.json'))
         status=result.get('pilot_review_status','PENDING_REVIEW')
         return {'batch_id':result['id'],'review_status':status,
-            'invitation_count':manifest['count'],'excluded_count':len(excluded),
+            'invitation_count':manifest['count'],'generated_count':manifest['count'],
+            'skipped_count':len(excluded),'failed_count':0,'excluded_count':len(excluded),
+            'batch_review_url':f"/api/batches/{result['id']}/review",
+            'reused_existing_batch':bool(result.get('_idempotent_replay')),
             'download_available':status=='APPROVED','sent':False}
+    @app.get('/api/batches/by-request-key/{key}')
+    def batch_by_request_key(key:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        result=service.batch_by_request_key(db,key)
+        excluded=json.loads(result.get('excluded') or '[]')
+        import io,zipfile
+        with zipfile.ZipFile(io.BytesIO(result['package'])) as package:
+            manifest=json.loads(package.read('manifest.json'))
+        return {'batch_id':result['id'],'review_status':result.get('pilot_review_status','PENDING_REVIEW'),
+            'invitation_count':manifest['count'],'generated_count':manifest['count'],
+            'skipped_count':len(excluded),'failed_count':0,'excluded_count':len(excluded),
+            'batch_review_url':f"/api/batches/{result['id']}/review",'reused_existing_batch':True,
+            'download_available':result.get('pilot_review_status')=='APPROVED','sent':False}
     @app.get('/api/batches')
     def batch_list(page:int=1):
         with db.transaction() as c:
-            return {'rows':[dict(r) for r in c.execute(select(*[x for x in batches.c if x.name!='package']).order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]}
+            rows=[dict(r) for r in c.execute(select(*[x for x in batches.c if x.name!='package']).order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]
+            for row in rows:
+                row['generated_count']=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==row['id'])) or 0
+                row['skipped_count']=len(json.loads(row.get('excluded') or '[]'))
+                row['failed_count']=0
+            return {'rows':rows}
     @app.get('/api/batches/{ident}/download')
     def download(ident:str):
         with db.transaction() as c:row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()

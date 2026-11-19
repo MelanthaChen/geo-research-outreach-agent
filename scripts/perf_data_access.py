@@ -26,6 +26,10 @@ def main():
     parser.add_argument('--candidates', type=int, default=86000)
     parser.add_argument('--eligible', type=int, default=150)
     parser.add_argument('--samples', type=int, default=30)
+    parser.add_argument('--async-chunks', action='store_true',
+        help='Benchmark durable enqueue and chunked processing')
+    parser.add_argument('--reopen-between-ticks',action='store_true',
+        help='Reopen the database connection between worker ticks to include restart recovery overhead')
     args=parser.parse_args()
     db_path=Path(args.db).resolve()
     if db_path.exists():
@@ -38,9 +42,11 @@ def main():
     os.environ.setdefault('OUTREACH_REPLY_TO','researcher@example.edu')
 
     from sqlalchemy import event
-    from outreach_v2.db import Database, candidates, contacts, now
+    from outreach_v2.db import Database, candidates, contacts, invitations, batches, now
     from outreach_v2.migrate import dump
     from outreach_v2.service import generate, list_candidates, preview_generation
+    if args.async_chunks:
+        from outreach_v2.invitation_generation import enqueue, process_one
 
     db=Database('sqlite:///'+str(db_path))
     db.initialize()
@@ -114,18 +120,70 @@ def main():
     statements=[]
     event.listen(db.engine,'before_cursor_execute',capture)
     start=time.perf_counter()
-    try:
-        batch=generate(db,selection,f'perf-{args.candidates}-{args.eligible}-{int(time.time())}')
-    finally:
-        elapsed_ms=(time.perf_counter()-start)*1000
+    if args.async_chunks:
+        generation=enqueue(db,selection,f'perf-async-{args.candidates}-{args.eligible}-{int(time.time())}')
+        enqueue_ms=(time.perf_counter()-start)*1000
+        enqueue_statements=len(statements)
         event.remove(db.engine,'before_cursor_execute',capture)
-    print(json.dumps({'database':str(db_path),'candidates':args.candidates,'eligible':args.eligible,
+        if args.reopen_between_ticks:
+            db.engine.dispose()
+            db=Database('sqlite:///'+str(db_path));db.initialize()
+        chunk_latencies=[];chunk_statements=[];tick_latencies=[];chunk_count=0
+        while True:
+            tick_start=time.perf_counter();finished=False
+            for _ in range(4):
+                event.listen(db.engine,'before_cursor_execute',capture)
+                chunk_start=time.perf_counter()
+                result=process_one(db,chunk_size=25)
+                chunk_latencies.append((time.perf_counter()-chunk_start)*1000)
+                chunk_statements.append(len(statements)-sum(chunk_statements)-enqueue_statements)
+                event.remove(db.engine,'before_cursor_execute',capture)
+                if result is None:
+                    finished=True;break
+                chunk_count+=1
+                if result['status']!='PROCESSING':
+                    finished=True;break
+            tick_latencies.append((time.perf_counter()-tick_start)*1000)
+            if finished:break
+            if args.reopen_between_ticks:
+                db.engine.dispose()
+                db=Database('sqlite:///'+str(db_path));db.initialize()
+        with db.transaction() as c:
+            from sqlalchemy import select,func
+            from outreach_v2.db import invitation_generation_batches
+            invitation_count=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==generation['batch_id']))
+            batch_state=c.execute(select(invitation_generation_batches.c.status).where(
+                invitation_generation_batches.c.batch_id==generation['batch_id'])).scalar_one()
+            package=c.execute(select(batches.c.package).where(batches.c.id==generation['batch_id'])).scalar_one()
+        batch={'package':package,'pilot_review_status':'PENDING_REVIEW'}
+        elapsed_ms=enqueue_ms+sum(tick_latencies)
+        generation_sql_statements=enqueue_statements+sum(chunk_statements)
+    else:
+        try:
+            batch=generate(db,selection,f'perf-{args.candidates}-{args.eligible}-{int(time.time())}')
+            elapsed_ms=(time.perf_counter()-start)*1000
+            generation_sql_statements=len(statements)
+        finally:
+            event.remove(db.engine,'before_cursor_execute',capture)
+    output={'database':str(db_path),'candidates':args.candidates,'eligible':args.eligible,
         'list_page_size':50,'list_samples':args.samples,'list_sql_per_request':list_sql_per_request,
         'list_median_ms':round(statistics.median(latencies),2),'list_p95_ms':round(percentile(latencies,.95),2),
         'list_min_ms':round(min(latencies),2),'list_max_ms':round(max(latencies),2),
-        'generation_sql_statements':len(statements),'generation_elapsed_ms':round(elapsed_ms,2),
+        'generation_mode':'durable_chunked' if args.async_chunks else 'synchronous_reference',
+        'generation_sql_statements':generation_sql_statements,'generation_elapsed_ms':round(elapsed_ms,2),
         'generation_package_bytes':len(batch['package']),'review_status':batch['pilot_review_status'],
-        'external_provider_calls':0,'emails_sent':0},indent=2))
+        'external_provider_calls':0,'emails_sent':0}
+    if args.async_chunks:
+        output.update({'enqueue_response_ms':round(enqueue_ms,2),'enqueue_sql_statements':enqueue_statements,
+            'worker_chunks':chunk_count,'worker_chunk_size':25,
+            'chunks_per_worker_tick':4,'worker_ticks':len(tick_latencies),
+            'worker_tick_median_ms':round(statistics.median(tick_latencies),2),
+            'worker_tick_p95_ms':round(percentile(tick_latencies,.95),2),
+            'worker_chunk_median_ms':round(statistics.median(chunk_latencies),2),
+            'worker_chunk_p95_ms':round(percentile(chunk_latencies,.95),2),
+            'database_reopened_between_worker_ticks':args.reopen_between_ticks,'persisted_generation_status':batch_state,
+            'persisted_invitation_count':invitation_count})
+    print(json.dumps(output,indent=2))
 
 
 if __name__=='__main__':

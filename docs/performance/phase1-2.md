@@ -78,8 +78,40 @@ Outreach migration v12 is additive and reversible. On PostgreSQL, the app builds
 
 Rollback order: deploy the previous Outreach code; then, if removing the index is required, run `DROP INDEX CONCURRENTLY IF EXISTS outreach_v2.ix_candidates_name_id` and delete only schema migration row 12 from `outreach_v2.schema_migrations`. No candidate or workflow rows are updated by this migration. Engine has no schema migration in Phase 2.
 
-## Current gate and remaining work
+## Phase 2 live migration verification — 2026-11-19
 
-The Phase 2 focused regression gates pass. The changes remain uncommitted and undeployed in isolated worktrees; live staging code and data remain unchanged. The migration has not been applied. The 150-row Generate path still holds a serialized transaction and builds the package before returning; durable chunked asynchronous processing is Phase 3 and remains the main unresolved cause of long request tails. GEO research also remains synchronous at the Engine HTTP boundary; bounded concurrency, full stage-level timing, and restart/recovery benchmarks are Phase 4/5 work.
+After recovery commit `1bac9a1b7c60f24872fbdc78dfabbe6f7b8708d5` became live, a read-only Neon catalog query returned one row:
 
-Production P95, Neon `EXPLAIN (ANALYZE, BUFFERS)`, connection-pool utilization, transaction duration, Render CPU/memory time-series, and restart recovery are not yet measured. Do not treat the synthetic results as production SLO evidence.
+| version | migration | schema | index | valid | ready | definition |
+|---:|---|---|---|---|---|---|
+| 12 | `candidate-name-id-pagination-index` | `outreach_v2` | `ix_candidates_name_id` | true | true | `CREATE INDEX ix_candidates_name_id ON outreach_v2.candidates USING btree (name, id)` |
+
+This verifies both the migration ledger and physical index state. The recovery code checks the index catalog instead of trusting only the migration row, and creates the index without schema-qualifying the index identifier in PostgreSQL's `CREATE INDEX CONCURRENTLY` grammar.
+
+## Phase 3 initial implementation — durable invitation generation
+
+The authenticated bulk Generate API now performs recipient-preview hash validation, stores an immutable candidate/recipient/template/questionnaire snapshot, and returns a durable batch ID. A dedicated manually dispatched GitHub Actions workflow calls a token-protected invitation-generation endpoint; each invocation claims at most four chunks and commits at most 25 invitations per chunk. It has no recurring schedule, so deployment alone cannot invoke it. Both chunk size and chunks per tick have hard upper bounds. The new worker is fail-closed behind `OUTREACH_INVITATION_GENERATION_ENABLED`, which defaults to off; the live environment was not changed during this work. Each chunk rechecks current candidate fingerprint, contact authorization, suppression, and duplicate invitation/recipient state before writing. Rendering or database failure rolls back the chunk; the immutable selection remains `RETRY_PENDING` and resumable, with recovery attempts capped separately from successful chunk count. The final ZIP is assembled after all invitation transactions complete, outside the database transaction, and human package review remains required. Generation never sends email. The new worker cannot ingest Forms, claim research jobs, call providers, or deliver reports.
+
+Schema migration v13 adds `invitation_generation_batches` and `invitation_generation_items`. Existing invitations, candidates, consent, and delivery records are not changed by the migration. Rollback is expand/contract: deploy the prior app only after queued generation batches are drained; retain the additive tables until any queued data is intentionally resolved. Do not drop the new tables as part of application rollback.
+
+### Reproducible local synthetic measurements
+
+`scripts/perf_data_access.py` now has `--async-chunks`. Runs used isolated SQLite databases, 86,000 synthetic candidates, zero providers, zero emails, and a process-style database dispose/reopen between every worker chunk. On this host:
+
+| Selected eligible recipients | Synchronous request time | Durable enqueue response | Worker chunks | Worker total | Final package |
+|---:|---:|---:|---:|---:|---:|
+| 150 | 338.58 ms | 33.52 ms | 6 × 25 over 2 ticks | 282.62 ms | 122,041 bytes |
+| 1,000 | 2,387.98 ms | 212.01 ms | 40 × 25 over 10 ticks | 2,735.11 ms | 340,728 bytes |
+
+The 150-recipient async path completed in 316.14 ms end to end; the 1,000 path completed in 2,947.12 ms. The API response portion is 90.1% and 91.1% lower, respectively. The 1,000-row total is 23.4% slower in this local synthetic run because of chunk transaction and revalidation overhead, even though the request no longer waits for it; this is a throughput tradeoff to monitor. Local list timings remained 6 SQL statements/request, with median/P95 56.08/61.89 ms at the 150 run and 60.98/64.91 ms at the 1,000 run. Package states remained `PENDING_REVIEW`; persisted invitation counts were exactly 150 and 1,000. The benchmark records worker chunk/tick timings and persisted status and refuses to overwrite an existing database path. A separate regression test disposes and reopens the database between committed chunks to verify restart recovery.
+
+These are synthetic SQLite measurements, not Neon/Render production latency. The prior same-host Phase 2 reference for 150 rows was 311.40 ms and 17 SQL statements; async end-to-end was comparable while moving most work off the request. For 1,000 rows the new path uses 40 small durable transactions rather than one long synchronous generation transaction.
+
+### Correctness gate and remaining limits
+
+- `tests/rebuild` excluding pre-existing `test_personalization_quality.py`: 188 passed. The excluded file fails at collection on the exact live base `1bac9a1b7c60f24872fbdc78dfabbe6f7b8708d5` because it imports missing `outreach_v2.service.readiness`; this change does not touch that API.
+- Focused `test_platform.py` plus `test_performance_data_access.py`: 123 passed after adding chunking, idempotency, restart, stale-snapshot, and bounded failure-recovery coverage.
+- JavaScript syntax check and `git diff --check`: passed.
+- No live candidate count, personalization, contact, invitation, provider spend, consent, report, or delivery data was changed during verification.
+
+Production request P95, `EXPLAIN (ANALYZE, BUFFERS)` on the full candidate table, connection-pool utilization, transaction duration, and Render CPU/memory time series remain unmeasured. Do not interpret the synthetic numbers as production SLO evidence. GEO Engine Phase 4 work—stage-level measurement, bounded page acquisition, and research checkpoint/restart profiling—remains separate and is not included in this Outreach change.

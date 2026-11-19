@@ -10,6 +10,7 @@ from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
 from outreach_v2.migrate import Migrator,dump,pack,sha,postgres_text
 from outreach_v2.worker import tick,claim,research_step,report_step,delivery_step
+from outreach_v2.invitation_generation import enqueue as enqueue_invitation_generation, process_one as process_invitation_chunk, progress as invitation_generation_progress, resume as resume_invitation_generation
 from outreach_v2.integrations import ConfigurationBlocked,OutcomeUncertain,Engine,verified_form_rows,VerifiedFormResponse,_sheet_row
 from outreach_agent.google_forms_integration import parse_sheet_row
 from outreach_v2.owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION
@@ -52,6 +53,119 @@ def invite(db,ids=['a'],key='stable-request-key-123'):
 def reviewed_generate(db,selection,key):
     preview=preview_generation(db,selection)
     return generate(db,{**selection,'preview_sha256':preview['preview_sha256']},key)
+
+def test_durable_invitation_generation_is_chunked_idempotent_and_review_gated(db):
+    candidate(db,'generation-a');candidate(db,'generation-b',email='other@example.com',website='https://generation-b.example.com',name='Generation B')
+    selection={'ids':['generation-a','generation-b']}
+    preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'durable-generation-request-key')
+    assert queued['generation_status']=='QUEUED' and queued['total_items']==2
+    assert count(db,invitations)==0
+    replay=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'durable-generation-request-key')
+    assert replay['batch_id']==queued['batch_id'] and replay['idempotent_replay'] is True
+    first=process_invitation_chunk(db,chunk_size=1)
+    assert first['status']=='PROCESSING' and first['completed_items']==1
+    assert count(db,invitations)==1
+    database_url=str(db.engine.url);db.engine.dispose()
+    recovered_db=Database(database_url);recovered_db.initialize()
+    second=process_invitation_chunk(recovered_db,chunk_size=1)
+    assert second['status']=='COMPLETED' and second['invitation_count']==2
+    state=invitation_generation_progress(recovered_db,queued['batch_id'])
+    assert state['status']=='COMPLETED' and state['review_status']=='PENDING_REVIEW'
+    with recovered_db.transaction() as c:
+        batch=c.execute(select(batches).where(batches.c.id==queued['batch_id'])).mappings().one()
+        assert batch['package'] and batch['pilot_review_status']=='PENDING_REVIEW'
+        assert c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==queued['batch_id']))==2
+
+
+def test_durable_invitation_generation_skips_changed_candidate_snapshot(db):
+    candidate(db,'generation-changed')
+    selection={'ids':['generation-changed']};preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'generation-stale-snapshot-key')
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id=='generation-changed').values(name='Changed after review'))
+    result=process_invitation_chunk(db,chunk_size=1)
+    assert result['status']=='BLOCKED' and count(db,invitations)==0
+    assert invitation_generation_progress(db,queued['batch_id'])['status']=='BLOCKED'
+
+
+def test_dedicated_invitation_worker_is_disabled_by_default_and_processes_one_chunk_when_enabled(db,monkeypatch):
+    from contextlib import contextmanager
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    from outreach_v2 import invitation_generation
+    token='test-invitation-worker-token-'+('x'*32)
+    monkeypatch.setenv('OUTREACH_WORKER_TOKEN',token)
+    monkeypatch.delenv('OUTREACH_INVITATION_GENERATION_ENABLED',raising=False)
+    client=TestClient(create_app(db))
+    headers={'Authorization':'Bearer '+token}
+    disabled=client.post('/api/internal/invitation-generation-tick',headers=headers,json={})
+    assert disabled.status_code==200 and disabled.json()['status']=='DISABLED'
+    observed=[]
+    monkeypatch.setattr(invitation_generation,'process_pending',lambda database,**kwargs:
+        observed.append((database,kwargs)) or [{'batch_id':'batch-exact','status':'PROCESSING'}])
+    monkeypatch.setenv('OUTREACH_INVITATION_GENERATION_ENABLED','true')
+    db.postgres=True
+    @contextmanager
+    def lock():yield True
+    monkeypatch.setattr(db,'worker_lock',lock)
+    result=client.post('/api/internal/invitation-generation-tick',headers=headers,json={})
+    assert result.status_code==200 and result.json()['status']=='COMPLETED'
+    assert observed==[(db,{'max_batches':4,'chunk_size':25})]
+    assert client.post('/api/internal/invitation-generation-tick',headers=headers,json={'batch_id':'unrelated'}).status_code==400
+
+
+def test_durable_invitation_generation_rolls_back_and_recovers_same_chunk(db,monkeypatch):
+    from outreach_v2 import invitation_generation
+    from outreach_v2.db import invitation_generation_batches
+    candidate(db,'generation-retry')
+    selection={'ids':['generation-retry']};preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'generation-retry-key-123')
+    original=invitation_generation._invitation_row
+    monkeypatch.setattr(invitation_generation,'_invitation_row',lambda *args,**kwargs:(_ for _ in ()).throw(RuntimeError('local renderer crash')))
+    result=invitation_generation.process_pending(db,max_batches=1,chunk_size=1)
+    assert result[0]['status']=='RETRY_PENDING' and count(db,invitations)==0
+    with db.transaction() as c:
+        c.execute(invitation_generation_batches.update().where(
+            invitation_generation_batches.c.batch_id==queued['batch_id']).values(next_attempt_at=now()))
+    monkeypatch.setattr(invitation_generation,'_invitation_row',original)
+    recovered=process_invitation_chunk(db,chunk_size=1)
+    assert recovered['status']=='COMPLETED' and recovered['invitation_count']==1
+    assert count(db,invitations)==1
+
+
+def test_durable_invitation_generation_bounds_ambiguous_chunk_retries(db,monkeypatch):
+    from outreach_v2 import invitation_generation
+    from outreach_v2.db import invitation_generation_batches
+    candidate(db,'generation-blocked')
+    selection={'ids':['generation-blocked']};preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'generation-bounded-retry-key')
+    monkeypatch.setattr(invitation_generation,'_invitation_row',lambda *args,**kwargs:(_ for _ in ()).throw(RuntimeError('render interrupted')))
+    result=None
+    for _ in range(8):
+        result=invitation_generation.process_pending(db,max_batches=1,chunk_size=1)
+        with db.transaction() as c:
+            c.execute(invitation_generation_batches.update().where(
+                invitation_generation_batches.c.batch_id==queued['batch_id']).values(next_attempt_at=now()))
+    assert result[0]['status']=='BLOCKED' and count(db,invitations)==0
+    state=invitation_generation_progress(db,queued['batch_id'])
+    assert state['status']=='BLOCKED' and state['completed_items']==0
+
+
+def test_manual_batch_recovery_reuses_checkpoint_without_duplicate_invitations(db):
+    from outreach_v2.db import invitation_generation_batches
+    candidate(db,'generation-resume-a');candidate(db,'generation-resume-b',email='resume-b@example.com',website='https://generation-resume-b.example.com',name='Generation Resume B')
+    selection={'ids':['generation-resume-a','generation-resume-b']};preview=preview_generation(db,selection)
+    queued=enqueue_invitation_generation(db,{**selection,'preview_sha256':preview['preview_sha256']},'generation-manual-recovery-key')
+    first=process_invitation_chunk(db,chunk_size=1)
+    assert first['status']=='PROCESSING' and count(db,invitations)==1
+    with db.transaction() as c:
+        c.execute(invitation_generation_batches.update().where(
+            invitation_generation_batches.c.batch_id==queued['batch_id']).values(status='BLOCKED'))
+    resumed=resume_invitation_generation(db,queued['batch_id'])
+    assert resumed['status']=='RETRY_PENDING' and resumed['completed_items']==1
+    result=process_invitation_chunk(db,chunk_size=1)
+    assert result['status']=='COMPLETED' and count(db,invitations)==2
 
 def response(db,interest='YES',authorization='YES',id='a',email=None):
     with db.transaction() as c:r=c.execute(select(invitations).where(invitations.c.candidate_id==id)).mappings().one()
@@ -489,7 +603,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==12
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==13
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -504,7 +618,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==12
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==13
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
     assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@example.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
@@ -566,7 +680,7 @@ def test_scheduled_worker_endpoint_auth_limits_and_postgres_lock(db,monkeypatch)
     assert client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1}).status_code==400
     response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':0,'response_reference':'GEO-exact-reference'})
     assert response.status_code==200 and response.json()['worker_run_id']=='run-test'
-    assert observed==[(db,{'max_jobs':0,'response_id':None,'response_reference':'GEO-exact-reference','job_id':None,'idempotency_key':None,'stage':None,'force_report_regeneration':False})]
+    assert observed[-1]==(db,{'max_jobs':0,'response_id':None,'response_reference':'GEO-exact-reference','job_id':None,'idempotency_key':None,'stage':None,'force_report_regeneration':False})
     response=client.post('/api/internal/worker-tick',headers=headers,json={'max_jobs':1,'job_id':'job-exact','idempotency_key':'outreach-v2:inv-exact','stage':'REPORT'})
     assert response.status_code==200
     assert observed[-1][1]['job_id']=='job-exact' and observed[-1][1]['idempotency_key']=='outreach-v2:inv-exact' and observed[-1][1]['stage']=='REPORT'
@@ -1919,8 +2033,11 @@ def test_authenticated_admin_generates_consistent_isolated_mixed_candidate_packa
         json={**selection,'preview_sha256':preview.json()['preview_sha256']})
     assert response.status_code==200, response.text
     prepared=response.json();batch_id=prepared['batch_id']
-    assert prepared['review_status']=='PENDING_REVIEW' and prepared['download_available'] is False
+    assert prepared['review_status']=='GENERATING' and prepared['download_available'] is False
     assert client.get(f'/api/batches/{batch_id}/download').status_code==403
+    assert client.get(f'/api/batches/{batch_id}/review').status_code==422
+    generated=process_invitation_chunk(db,chunk_size=25)
+    assert generated['status']=='COMPLETED_WITH_EXCLUSIONS' and generated['invitation_count']==1
     review=client.get(f'/api/batches/{batch_id}/review').json()
     assert review['status']=='PENDING_REVIEW' and len(review['invitations'])==1
     assert review['excluded'][0]['candidate_id']=='package-invalid'

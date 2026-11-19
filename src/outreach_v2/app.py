@@ -341,8 +341,8 @@ def create_app(database=None):
     def dashboard():return service.dashboard(db)
     @app.get('/api/candidates')
     def candidates(request:Request):
-        params=dict(request.query_params);page=int(params.pop('page',1));size=int(params.pop('page_size',50))
-        return service.list_candidates(db,params,page,size)
+        params=dict(request.query_params);page=int(params.pop('page',1));size=int(params.pop('page_size',50));cursor=params.pop('cursor',None)
+        return service.list_candidates(db,params,page,size,cursor=cursor)
     @app.get('/api/demo/lagoon')
     def lagoon_demo():
         from .demo import lagoon_case

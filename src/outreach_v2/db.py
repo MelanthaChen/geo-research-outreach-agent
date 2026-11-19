@@ -193,7 +193,7 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'reports': {'renderer_version': 'TEXT', 'regenerated_from': 'TEXT'}
 }), (11, 'historical-screening-personalization-campaign', {
     'personalization_authorizations': {'campaign_id': 'TEXT'}
-})]
+}), (12, 'candidate-name-id-pagination-index', {})]
 
 class Database:
     def __init__(self, url=None):
@@ -304,7 +304,38 @@ class Database:
                             c.execute(text('ALTER TABLE reports_v10_new RENAME TO reports'))
                         c.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_active_job '
                                        'ON reports (job_id) WHERE is_active = 1'))
+                if version == 12 and not self.postgres:
+                    c.execute(text('CREATE INDEX IF NOT EXISTS ix_candidates_name_id '
+                                   'ON candidates (name, id)'))
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
+        if self.postgres:
+            self._apply_online_candidate_index_migration()
+
+    def _apply_online_candidate_index_migration(self):
+        """Create the candidate ordering index without blocking campaign writes."""
+        lock_id=824761935
+        with self.engine.connect() as connection:
+            connection=connection.execution_options(isolation_level='AUTOCOMMIT')
+            connection.execute(text('SELECT pg_advisory_lock(:lock_id)'),{'lock_id':lock_id})
+            try:
+                if connection.execute(select(schema_migrations.c.version).where(
+                        schema_migrations.c.version==12)).first():
+                    return
+                index_state=connection.execute(text("""SELECT i.indisvalid, i.indisready
+                    FROM pg_class index_name
+                    JOIN pg_namespace n ON n.oid=index_name.relnamespace
+                    JOIN pg_index i ON i.indexrelid=index_name.oid
+                    WHERE n.nspname=:schema AND index_name.relname='ix_candidates_name_id'"""),
+                    {'schema':SCHEMA}).first()
+                if index_state and not (index_state.indisvalid and index_state.indisready):
+                    connection.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS {SCHEMA}.ix_candidates_name_id'))
+                if not index_state or not (index_state.indisvalid and index_state.indisready):
+                    connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_candidates_name_id '
+                                            f'ON {SCHEMA}.candidates (name, id)'))
+                connection.execute(schema_migrations.insert().values(version=12,
+                    name='candidate-name-id-pagination-index',applied_at=now()))
+            finally:
+                connection.execute(text('SELECT pg_advisory_unlock(:lock_id)'),{'lock_id':lock_id})
 
     @contextmanager
     def _initialization_connection(self):

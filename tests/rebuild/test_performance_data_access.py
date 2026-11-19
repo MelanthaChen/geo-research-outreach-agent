@@ -38,7 +38,9 @@ def test_postgres_v12_repairs_missing_index_even_when_version_row_exists():
     database.engine=_IndexMigrationEngine(connection)
     database._apply_online_candidate_index_migration()
     create=next(sql for sql in connection.sql if 'CREATE INDEX CONCURRENTLY' in sql)
-    assert f'{SCHEMA}.ix_candidates_name_id' in create
+    assert 'IF NOT EXISTS ix_candidates_name_id' in create
+    assert f'ON {SCHEMA}.candidates (name, id)' in create
+    assert not f'{SCHEMA}.ix_candidates_name_id' in create.split(' ON ')[0]
     assert f'ON {SCHEMA}.candidates (name, id)' in create
     assert not any('INSERT INTO' in sql and 'schema_migrations' in sql for sql in connection.sql)
 

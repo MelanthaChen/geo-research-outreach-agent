@@ -14,7 +14,7 @@ from .db import (candidates, contacts, events, invitations, now, personalization
     personalization_authorizations, personalization_campaigns)
 from .replay_policy import replay_allowed_for_contract
 from .screening_campaign import OPEN_ENDED_BUDGET, ids_sha256, EXPECTED_SOURCE_SHA256, EXPECTED_SOURCE_COUNT
-from .service import email_contact_evidence, email_contacts
+from .service import email_contacts, invitation_contacts, verified_email_contacts
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
@@ -220,9 +220,9 @@ def eligibility(ids, stamp=None):
         # persisted semantic version is complete for this GPT cohort.
         not_semantically_complete,
         retry_state,
-        # Invitation-oriented personalization must not spend before a currently
-        # authorized first-party business email is available. This is a selector
-        # gate; manifest membership and prior personalization remain unchanged.
+        # Share the public-evidence contact predicate with invitation
+        # preparation. Verification status is informational; exact address,
+        # first-party provenance, purpose, validity, and suppression still gate.
         exists(select(contacts.c.id).where(email_contacts())),
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until <= stamp),
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id)),
@@ -252,12 +252,14 @@ def progress(db, grant, ids):
             if item.status in {'RESERVED', 'UNKNOWN_SPEND'}:
                 unresolved += max(cost, Decimal(str(item.reserved_usd or 0)))
         eligible = c.scalar(select(func.count()).select_from(candidates).where(eligibility(ids))) or 0
-        ready_contact = exists(select(contacts.c.id).where(email_contacts()))
-        saved_evidence = exists(select(contacts.c.id).where(email_contact_evidence()))
+        eligible_contact = exists(select(contacts.c.id).where(invitation_contacts()))
+        verified_contact = exists(select(contacts.c.id).where(invitation_contacts(),verified_email_contacts()))
         contact_ready_count = c.scalar(select(func.count()).select_from(candidates).where(
-            candidates.c.id.in_(ids), ready_contact)) or 0
+            candidates.c.id.in_(ids), verified_contact)) or 0
+        contact_eligible_count = c.scalar(select(func.count()).select_from(candidates).where(
+            candidates.c.id.in_(ids), eligible_contact)) or 0
         contact_pending_count = c.scalar(select(func.count()).select_from(candidates).where(
-            candidates.c.id.in_(ids), ~ready_contact, saved_evidence)) or 0
+            candidates.c.id.in_(ids), eligible_contact, ~verified_contact)) or 0
         manifest_count = c.scalar(select(func.count()).select_from(candidates).where(
             candidates.c.id.in_(ids))) or 0
         recovered_count = c.scalar(select(func.count(func.distinct(events.c.entity_id))).where(
@@ -297,7 +299,8 @@ def progress(db, grant, ids):
     return {'authorization_id': grant['id'], 'status': status, 'candidate_count': len(ids),
         'processed': int(passed + failed), 'eligible_remaining': int(eligible),
         'contact_verified': int(contact_ready_count),
-        'contact_missing': max(0, int(manifest_count-contact_ready_count-contact_pending_count)),
+        'contact_eligible': int(contact_eligible_count),
+        'contact_missing': max(0, int(manifest_count-contact_eligible_count)),
         'contact_pending_verification': int(contact_pending_count),
         'contact_recovered': int(recovered_count),
         'quality_pass': int(passed), 'quality_fail': int(failed), 'provider_attempts': int(attempts),
@@ -321,7 +324,7 @@ def progress(db, grant, ids):
 def _record_contact_deferrals(db, authorization_id, ids):
     """Record contact blockers without altering immutable campaign membership."""
     ready_contact = exists(select(contacts.c.id).where(email_contacts()))
-    saved_evidence = exists(select(contacts.c.id).where(email_contact_evidence()))
+    saved_evidence = exists(select(contacts.c.id).where(invitation_contacts()))
     with db.transaction(serialized=True) as c:
         rows = c.execute(select(candidates.c.id, saved_evidence.label('has_evidence')).where(
             candidates.c.id.in_(ids), ~ready_contact)).all()

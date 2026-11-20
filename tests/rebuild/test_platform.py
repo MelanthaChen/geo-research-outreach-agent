@@ -467,7 +467,7 @@ def test_two_recipient_package_and_exact_binding(db):
     with db.transaction() as c:
         saved=c.execute(select(invitations).order_by(invitations.c.candidate_id)).mappings().all()
         assert [json.loads(x['authority'])['method'] for x in saved]==[
-            'INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN','INVITATION_EMAIL_AND_FIRST_PARTY_DOMAIN']
+            'PUBLIC_FIRST_PARTY_EVIDENCE','PUBLIC_FIRST_PARTY_EVIDENCE']
         assert [x['website'] for x in saved]==['https://geo-ai-resume.vercel.app','https://whisker-haven-demo.vercel.app/']
     assert batch['send_status']=='UNVERIFIED'
     assert invite(db,['a','b'])['package']==batch['package']
@@ -1984,21 +1984,34 @@ def test_multiple_authorized_contacts_are_ready_but_require_explicit_recipient_c
         assert c.scalar(select(invitations.c.recipient).where(invitations.c.candidate_id=='multi-contact'))=='second@businessmail.org'
 
 @pytest.mark.parametrize('state',['PENDING','UNKNOWN'])
-def test_pending_and_unknown_contacts_never_count_as_verified_recipients(db,state):
+def test_pending_and_unknown_public_contacts_are_draft_eligible_but_remain_unverified(db,state):
     from outreach_v2.service import preview_generation
     candidate(db,'unverified-contact','contact@businessmail.org',website='https://company.example',name='Company',fixture=False)
     with db.transaction() as c:
         c.execute(contacts.update().where(contacts.c.candidate_id=='unverified-contact').values(
             verification=state,verified_at=None,evidence='For general business inquiries contact contact@businessmail.org.'))
     row=list_candidates(db,{'q':'Company'})['rows'][0]
-    assert row['primary_status']=='PERSONALIZED_NO_CONTACT'
+    assert row['primary_status']=='READY_TO_INVITE'
+    assert row['contact_readiness']=='READY'
     preview=preview_generation(db,{'ids':['unverified-contact']})
-    assert preview['valid_recipient_count']==0
-    assert 'Contact has not completed explicit verification' in preview['excluded'][0]['reasons']
+    assert preview['valid_recipient_count']==1
+    generated=generate(db,{'ids':['unverified-contact'],'preview_sha256':preview['preview_sha256']},
+        'unverified-contact-draft-'+state.lower())
+    with db.transaction() as c:
+        saved=c.execute(select(contacts.c.verification,contacts.c.verified_at).where(
+            contacts.c.candidate_id=='unverified-contact')).one()
+        invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='unverified-contact')).mappings().one()
+        batch=c.execute(select(batches).where(batches.c.id==generated['id'])).mappings().one()
+    assert saved.verification==state and saved.verified_at is None
+    assert invitation['send_status']=='UNVERIFIED'
+    assert json.loads(invitation['authority'])['contact_verification']==state
+    assert json.loads(invitation['authority'])['contact_verification_current'] is False
+    assert batch['pilot_review_status']=='PENDING_REVIEW' and batch['send_status']=='UNVERIFIED'
 
 @pytest.mark.parametrize('evidence,expected',[
     ('General business contact: info@businessmail.org.',1),
     ('General business contact: prefixinfo@businessmail.org.evil',0),
+    ('General business inquiries: info@businessXorg',0),
 ])
 def test_recipient_requires_complete_exact_address_in_preserved_evidence(db,evidence,expected):
     from outreach_v2.service import preview_generation
@@ -2007,26 +2020,78 @@ def test_recipient_requires_complete_exact_address_in_preserved_evidence(db,evid
     preview=preview_generation(db,{'ids':['exact-evidence']})
     assert preview['valid_recipient_count']==expected
 
-@pytest.mark.parametrize('email,purpose',[
-    ('press@businessmail.org','general business'),('newsletter@businessmail.org','general business'),
-    ('info@businessmail.org','hotel reservations'),('reservations@businessmail.org','general business'),
-    ('info@mysite.com','general business'),('info@businessmail.org','PR')])
-def test_recipient_purpose_and_placeholder_domains_are_rejected(db,email,purpose):
+@pytest.mark.parametrize('email,purpose,evidence,expected',[
+    ('press@businessmail.org','Press inquiries','For press inquiries, contact press@businessmail.org.',0),
+    ('newsletter@businessmail.org','GENERAL_BUSINESS','Subscribe to our newsletter at newsletter@businessmail.org.',0),
+    ('info@businessmail.org','hotel reservations','Reservations: info@businessmail.org.',0),
+    ('reservations@businessmail.org','PURPOSE_SPECIFIC','Reservations: reservations@businessmail.org.',0),
+    ('info@mysite.com','GENERAL_BUSINESS','Contact us at info@mysite.com.',0),
+    ('info@businessmail.org','PR','Press questions: info@businessmail.org.',0),
+    ('support@businessmail.org','PURPOSE_SPECIFIC','For general inquiries, contact support@businessmail.org.',0),
+])
+def test_recipient_purpose_and_placeholder_domains_are_rejected(db,email,purpose,evidence,expected):
     from outreach_v2.service import preview_generation
     candidate(db,'restricted-contact',email,website='https://business.example',name='Purpose Business',fixture=False)
-    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='restricted-contact').values(purpose=purpose))
+    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='restricted-contact').values(purpose=purpose,evidence=evidence))
     preview=preview_generation(db,{'ids':['restricted-contact']})
-    assert preview['valid_recipient_count']==0
+    assert preview['valid_recipient_count']==expected
 
-def test_stale_or_undated_verified_contact_is_not_invitation_ready(db):
+@pytest.mark.parametrize('email,purpose,evidence,source_url,expected',[
+    ('info@businessmail.org','Contact page | Email: info@businessmail.org','Contact Us · Email: info@businessmail.org.','https://business.example/contact-us',1),
+    ('hello@businessmail.org','For all other questions/comments contact hello@businessmail.org','For all other questions/comments, contact hello@businessmail.org.','https://business.example/contact',1),
+    ('enquiries@businessmail.org','General enquiries: enquiries@businessmail.org','General enquiries: enquiries@businessmail.org.','https://business.example/contact',1),
+    ('team@businessmail.org','Questions? Reach us at team@businessmail.org','Questions? Reach us at team@businessmail.org.','https://business.example/about',1),
+    ('admin@businessmail.org','Admin email: admin@businessmail.org','admin@businessmail.org','https://business.example/',0),
+    ('info@businessmail.org','info@businessmail.org','info@businessmail.org','https://business.example/',0),
+    ('reservations@businessmail.org','For reservations email reservations@businessmail.org','For reservations email reservations@businessmail.org.','https://business.example/contact',0),
+    ('support@businessmail.org','For general inquiries contact support@businessmail.org','For general inquiries contact support@businessmail.org.','https://business.example/contact',1),
+])
+def test_freeform_contact_purpose_uses_exact_first_party_context(db,email,purpose,evidence,source_url,expected):
+    from outreach_v2.service import preview_generation
+    candidate(db,'purpose-context',email,website='https://business.example',name='Purpose Context',fixture=False)
+    with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='purpose-context').values(
+        purpose=purpose,evidence=evidence,source_url=source_url,verification='UNKNOWN',verified_at=None))
+    preview=preview_generation(db,{'ids':['purpose-context']})
+    assert preview['valid_recipient_count']==expected
+
+def test_normalized_purpose_ingestion_preserves_original_context_and_source(db):
+    from outreach_v2.service import add_contact_from_first_party_page,detail
+    candidate(db,'normalized-purpose',None,website='https://business.example',name='Normalized Purpose',fixture=False)
+    html='<html><main><h1>Contact Us</h1><p>For all other questions/comments, contact hello@business.org.</p></main></html>'
+    record=add_contact_from_first_party_page(db,'normalized-purpose','hello@business.org','https://business.example/contact',
+        fetcher=lambda url:('https://business.example/contact',html,False))
+    assert record['purpose']=='GENERAL_BUSINESS'
+    saved=next(row for row in detail(db,'normalized-purpose')['contacts'] if row['email']=='hello@business.org')
+    raw=json.loads(saved['raw'])
+    assert saved['purpose']=='GENERAL_BUSINESS'
+    assert raw['classification_version']=='first-party-contact-purpose-v1'
+    assert raw['original_purpose_text'] and 'hello@business.org' in saved['evidence']
+    assert saved['source_url']=='https://business.example/contact'
+
+def test_stale_or_undated_verified_contact_is_draft_eligible_but_not_claimed_current(db):
     from datetime import datetime,timedelta,timezone
     from outreach_v2.service import preview_generation
     candidate(db,'stale-contact','contact@businessmail.org',website='https://business.example',name='Stale Company',fixture=False)
     stale=(datetime.now(timezone.utc)-timedelta(days=181)).isoformat()
     with db.transaction() as c:c.execute(contacts.update().where(contacts.c.candidate_id=='stale-contact').values(verified_at=stale))
     preview=preview_generation(db,{'ids':['stale-contact']})
+    assert preview['valid_recipient_count']==1
+    generated=generate(db,{'ids':['stale-contact'],'preview_sha256':preview['preview_sha256']},'stale-contact-draft-key')
+    with db.transaction() as c:
+        invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='stale-contact')).mappings().one()
+    assert json.loads(invitation['authority'])['contact_verification_current'] is False
+    assert generated['pilot_review_status']=='PENDING_REVIEW'
+
+
+@pytest.mark.parametrize('state',['INVALID','REJECTED','SUPPRESSED'])
+def test_explicitly_rejected_invalid_or_suppressed_contact_is_never_draft_eligible(db,state):
+    from outreach_v2.service import preview_generation
+    candidate(db,'blocked-contact-state','contact@businessmail.org',website='https://company.example',name='Company',fixture=False)
+    with db.transaction() as c:c.execute(contacts.update().where(
+        contacts.c.candidate_id=='blocked-contact-state').values(verification=state,verified_at=None))
+    preview=preview_generation(db,{'ids':['blocked-contact-state']})
     assert preview['valid_recipient_count']==0
-    assert 'Contact verification is missing a timestamp or is older than 180 days' in preview['excluded'][0]['reasons']
+    assert count(db,invitations)==0
 
 def test_generation_timeout_after_commit_reconciles_original_request_key(db,monkeypatch):
     from argon2 import PasswordHasher
@@ -2077,7 +2142,7 @@ def test_first_party_contact_discovery_persists_verifiable_provenance_without_cr
     html='<html><main><p>For business inquiries, contact info@business.org.</p></main></html>'
     record=add_contact_from_first_party_page(db,'contact-discovery','info@business.org','https://business.example/contact',
         fetcher=lambda url:('https://business.example/contact',html,False))
-    assert record['verification']=='VERIFIED' and record['purpose']=='general business'
+    assert record['verification']=='VERIFIED' and record['purpose']=='GENERAL_BUSINESS'
     saved=detail(db,'contact-discovery')['contacts']
     assert len(saved)==2
     found=next(row for row in saved if row['email']=='info@business.org')
@@ -2279,7 +2344,7 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     assert pending.status_code==200 and pending.json()['candidate_count']==1 and pending.json()['status']=='PENDING'
     contactless_grant=client.post('/api/admin/personalization/authorizations',headers=headers,json={
         'candidate_ids':['manifest-no-contact'],'total_budget_usd':'0.05'})
-    assert contactless_grant.status_code==422 and 'verified' in contactless_grant.json()['error'].lower()
+    assert contactless_grant.status_code==422 and 'eligible' in contactless_grant.json()['error'].lower()
     grant_id=pending.json()['id']
     with db.transaction() as c:
         row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==grant_id)).mappings().one()
@@ -3212,16 +3277,20 @@ def test_inner_claim_selector_accepts_legacy_ready_only_when_in_authorized_batch
     assert selected==[ident]
 
 
-def test_contact_readiness_is_required_before_any_new_personalization_selector(db):
+def test_shared_public_evidence_contact_gate_applies_to_paid_personalization_selectors(db):
     from outreach_v2.db import contacts as contact_table
     from outreach_v2.personalization_batch import eligibility
     from outreach_v2.personalization import _eligible_query
     valid='contact-gate-valid'
     multiple='contact-gate-multiple'
     pending='contact-gate-pending'
+    unknown='contact-gate-unknown'
     future='contact-gate-future-verified'
     missing='contact-gate-missing'
-    for ident in (valid,multiple,pending,future,missing):
+    invalid='contact-gate-invalid'
+    rejected='contact-gate-rejected'
+    contact_suppressed='contact-gate-suppressed'
+    for ident in (valid,multiple,pending,unknown,future,missing,invalid,rejected,contact_suppressed):
         candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
     with db.transaction() as c:
         c.execute(contact_table.insert().values(id='second-contact-multiple',candidate_id=multiple,
@@ -3229,16 +3298,48 @@ def test_contact_readiness_is_required_before_any_new_personalization_selector(d
             evidence='For general business inquiries, contact second@geo-ai-resume.vercel.app',
             verification='VERIFIED',purpose='general business',suppressed=False,verified_at=now()))
         c.execute(contact_table.update().where(contact_table.c.candidate_id==pending).values(
+            verification='PENDING',verified_at=None))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==unknown).values(
             verification='UNKNOWN',verified_at=None))
         c.execute(contact_table.update().where(contact_table.c.candidate_id==future).values(
-            verified_at='2099-01-01T00:00:00+00:00'))
+            verified_at='2025-01-01T00:00:00+00:00'))
         c.execute(contact_table.delete().where(contact_table.c.candidate_id==missing))
-        ids=[valid,multiple,pending,future,missing]
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==invalid).values(
+            verification='INVALID'))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==rejected).values(
+            verification='REJECTED'))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==contact_suppressed).values(
+            verification='UNKNOWN',suppressed=True))
+        ids=[valid,multiple,pending,unknown,future,missing,invalid,rejected,contact_suppressed]
         batch_selected=set(c.execute(select(candidates.c.id).where(eligibility(ids))).scalars())
         direct_selected=set(c.execute(select(candidates.c.id).where(_eligible_query(
             now(),retry_candidate_ids=ids))).scalars())
-    assert batch_selected=={valid,multiple}
+        from sqlalchemy import exists
+        from outreach_v2.service import invitation_contacts, email_contacts
+        invitation_selected=set(c.execute(select(candidates.c.id).where(
+            exists(select(contact_table.c.id).where(invitation_contacts())))).scalars())
+        shared_selected=set(c.execute(select(candidates.c.id).where(
+            exists(select(contact_table.c.id).where(email_contacts())))).scalars())
+    assert batch_selected=={valid,multiple,pending,unknown,future}
     assert direct_selected==batch_selected
+    assert invitation_selected==batch_selected
+    assert shared_selected==batch_selected
+
+
+def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
+    from outreach_v2.service import contact_readiness_counts
+    ident='dashboard-unknown-public-email'
+    candidate(db,ident=ident,name='Dashboard Unknown Public Email',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(
+            verification='UNKNOWN',verified_at=None))
+    listed=list_candidates(db,{'primary_status':'READY_TO_INVITE'})
+    row=next(item for item in listed['rows'] if item['id']==ident)
+    counts=contact_readiness_counts(db)
+    assert row['primary_status']=='READY_TO_INVITE' and row['eligible'] is True
+    assert row['contact_readiness']=='READY'
+    assert counts['contact_eligible']==1 and counts['contact_missing']==0
+    assert counts['contact_pending_verification']==1 and counts['contact_verified']==0
 
 
 def test_backfill_skips_contact_ineligible_candidate_without_provider_call(db,monkeypatch):
@@ -3286,7 +3387,8 @@ def test_bounded_contact_recovery_rechecks_saved_evidence_and_preserves_history(
     assert raw['legacy']=='preserved' and raw['contact_reverification_history'][0]['prior_source_checksum']=='b'*64
     assert event['detail'] and 'email_sha256' in event['detail']
     counts=contact_readiness_counts(db)
-    assert counts['scope_count']==1 and counts['contact_verified']==1 and counts['contact_recovered']==1
+    assert counts['scope_count']==1 and counts['contact_eligible']==1 and counts['contact_verified']==1
+    assert counts['contact_pending_verification']==0 and counts['contact_missing']==0 and counts['contact_recovered']==1
 
 
 def test_contact_recovery_never_marks_unavailable_page_verified(db):

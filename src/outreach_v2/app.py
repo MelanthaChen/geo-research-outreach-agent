@@ -1046,7 +1046,7 @@ def create_app(database=None):
                 from .service import email_contacts
                 if not c.scalar(select(func.count()).select_from(candidate_table).where(
                     candidate_table.c.id==ids[0],exists(select(contact_table.c.id).where(email_contacts())))):
-                    raise ValueError('A new single-candidate paid personalization grant requires a currently verified, evidence-matched, purpose-appropriate first-party business email')
+                    raise ValueError('A new single-candidate paid personalization grant requires an eligible, exact-address-matched general-purpose first-party business email')
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0])).mappings().one()
                 if candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0':
                     raise ValueError('Semolina Kitchen + Bar is excluded from new provider attempts')

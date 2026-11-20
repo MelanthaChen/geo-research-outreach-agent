@@ -12,6 +12,7 @@ from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, 
 from .contact_purpose import (GENERAL_LABEL, SPECIFIC_LABEL, UNCLASSIFIED_LABEL,
     RESTRICTED_LOCALPARTS,
     PLACEHOLDER_HOSTS, CONTACT_PATH_RE, GENERAL_CONTEXT_PATTERN, RESTRICTED_CONTEXT_PATTERN,
+    SCHEMA_ORG_EMAIL_PREFIX, SCHEMA_ORG_EMAIL_REVERSE_PREFIX, SCHEMA_ORG_EMAIL_REVERSE_SUFFIX,
     classify_public_contact_purpose)
 from outreach_agent.google_forms_integration import prefilled_form_url
 
@@ -126,7 +127,17 @@ def email_contact_evidence():
     contact_route=and_(contacts.c.source_url.regexp_match(r'(?i)/(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)'),
         func.lower(contacts.c.email).regexp_match(r'^(?:info|contact|hello|enquiries|enquiry|office)(?:[._+-][^@]+)?@'),
         _sql_email_near_context(contacts.c.evidence,r'(^|[^a-z0-9])(?:contact|email|questions?|inquiries|enquiries|office)([^a-z0-9]|$)'))
-    supported=or_(normalized,explicit_general,contact_route)
+    # Mirrors contact_purpose._schema_org_contact_email(): the address must be
+    # the exact Organization.email property in one bounded JSON object, and
+    # source_url must itself be a contact/about route.
+    structured_contact_route=and_(contacts.c.source_url.regexp_match(
+        r'(?i)/(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)'),
+        or_(func.lower(func.coalesce(contacts.c.evidence,'' )).regexp_match(
+                r'(?i)'+SCHEMA_ORG_EMAIL_PREFIX + _sql_email_pattern() + r'"'),
+            func.lower(func.coalesce(contacts.c.evidence,'' )).regexp_match(
+                r'(?i)'+SCHEMA_ORG_EMAIL_REVERSE_PREFIX + _sql_email_pattern() +
+                SCHEMA_ORG_EMAIL_REVERSE_SUFFIX)))
+    supported=or_(normalized,explicit_general,contact_route,structured_contact_route)
     # Restricted mailbox names are excluded unless first-party text explicitly
     # identifies that exact saved context as a general inquiry route.
     restricted_local=contacts.c.email.regexp_match(

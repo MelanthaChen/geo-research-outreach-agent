@@ -3438,6 +3438,122 @@ def test_shared_public_evidence_contact_gate_applies_to_paid_personalization_sel
     assert len(recipient_options[multiple])==2
 
 
+def test_schema_org_contact_email_is_shared_eligibility_for_bank_and_blank_purpose(db):
+    from sqlalchemy import exists
+    from outreach_v2.db import contacts as contact_table
+    from outreach_v2.personalization_batch import eligibility
+    from outreach_v2.personalization import _eligible_query
+    from outreach_v2.service import (invitation_contacts,email_contacts,authorized_contact_emails,
+        contact_readiness_counts)
+    bank='bank-schema-org-marketing-purpose'
+    blank='bank-schema-org-blank-purpose'
+    restricted='bank-schema-org-restricted-address'
+    url_value='bank-schema-org-url-not-email'
+    for ident,email,name in (
+        (bank,'informationemail@1stsummit.bank','1ST SUMMIT BANK'),
+        (blank,'office@structured-example.org','Structured Example'),
+        (restricted,'support@structured-example.org','Restricted Example'),
+        (url_value,'unused@url-example.org','URL Value Example'),
+    ):
+        candidate(db,ident=ident,email=email,website='https://'+email.split('@')[1],name=name,
+            fixture=False,personalization=False)
+    evidence_by_id={
+        bank:('{"@type": "Organization", "name": "1st Summit Bank", '
+              '"description": "Experience the Difference", "url": '
+              '"https://www.1stsummit.bank/", "email": "informationemail@1stsummit.bank"}'),
+        blank:('{"url":"https://structured-example.org/",'
+               '"email":"office@structured-example.org","telephone":"000-000-0000",'
+               '"sameAs":[],"@context":"http://schema.org","@type":"Organization"}'),
+        restricted:('{"@type":"Organization","email":"support@structured-example.org"}'),
+        url_value:('{"@type":"Organization","email":"https://url-example.org/contact"}'),
+    }
+    with db.transaction() as c:
+        for ident in (bank,blank,restricted):
+            c.execute(contact_table.update().where(contact_table.c.candidate_id==ident).values(
+                source_url='https://www.'+('1stsummit.bank' if ident==bank else 'structured-example.org')+'/contact-us/',
+                evidence=evidence_by_id[ident],verification='UNKNOWN',verified_at=None,
+                purpose='Experience the Difference' if ident==bank else None))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==url_value).values(
+            email='https://url-example.org/contact',source_url='https://www.url-example.org/contact',
+            evidence=evidence_by_id[url_value],verification='UNKNOWN',verified_at=None,purpose=None))
+        ids=[bank,blank,restricted,url_value]
+        batch_selected=set(c.execute(select(candidates.c.id).where(eligibility(ids))).scalars())
+        direct_selected=set(c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=ids))).scalars())
+        invitation_selected=set(c.execute(select(candidates.c.id).where(
+            exists(select(contact_table.c.id).where(invitation_contacts())))).scalars())
+        email_selected=set(c.execute(select(candidates.c.id).where(
+            exists(select(contact_table.c.id).where(email_contacts())))).scalars())
+        options={}
+        for row in c.execute(select(candidates).where(candidates.c.id.in_(ids))).mappings():
+            rows=c.execute(select(contact_table).where(contact_table.c.candidate_id==row['id'])).mappings().all()
+            options[row['id']]=authorized_contact_emails(c,dict(row),contact_rows=rows,suppressed_emails=set())
+    assert (batch_selected,direct_selected,invitation_selected,email_selected)==(
+        {bank,blank},{bank,blank},{bank,blank},{bank,blank})
+    assert {ident for ident,value in options.items() if value}=={bank,blank}
+    assert options[bank]=={'informationemail@1stsummit.bank'}
+    assert options[blank]=={'office@structured-example.org'}
+    with db.transaction() as c:
+        c.execute(candidates.update().where(candidates.c.id.in_(ids)).values(
+            personalization_quality_status='PASS',personalization_analysis_version='semantic-openai-v1',
+            personalization_version=1))
+    listed=list_candidates(db,{'primary_status':'PENDING'})
+    listed_by_id={row['id']:row for row in listed['rows'] if row['id'] in ids}
+    readiness={ident:row['contact_readiness'] for ident,row in listed_by_id.items()}
+    assert listed_by_id[bank]['primary_status']=='PENDING' and listed_by_id[bank]['eligible'] is True
+    assert listed_by_id[blank]['primary_status']=='PENDING' and listed_by_id[blank]['eligible'] is True
+    assert readiness[bank]=='READY' and readiness[blank]=='READY'
+    assert readiness.get(restricted)!='READY' and readiness.get(url_value)!='READY'
+    counts=contact_readiness_counts(db)
+    assert counts['eligible_for_invitation_drafting']==2
+    assert counts['no_eligible_contact']==2
+
+
+def test_schema_org_python_and_sql_predicates_agree_on_route_restriction_and_suppression(db):
+    from sqlalchemy import exists
+    from outreach_v2.db import contacts as contact_table, suppressions as suppression_table
+    from outreach_v2.service import contact_is_authorized, invitation_contacts
+    cases={
+        'schema-marketing':('informationemail@structured-example.org','https://structured-example.org','https://www.structured-example.org/contact-us/',
+            '{"@type":"Organization","description":"Experience the Difference","email":"informationemail@structured-example.org"}',
+            'Experience the Difference',False),
+        'schema-blank':('office@blank-example.org','https://blank-example.org','https://www.blank-example.org/contact/',
+            '{"email":"office@blank-example.org","sameAs":[],"@context":"http://schema.org","@type":"Organization"}',None,False),
+        'schema-homepage-only':('info@homepage-example.org','https://homepage-example.org','https://www.homepage-example.org/',
+            '{"@type":"Organization","email":"info@homepage-example.org"}',None,False),
+        'schema-offsite':('office@offsite-example.org','https://offsite-example.org','https://unrelated.example/contact-us/',
+            '{"@type":"Organization","email":"office@offsite-example.org"}',None,False),
+        'schema-restricted-local':('support@restricted-example.org','https://restricted-example.org','https://www.restricted-example.org/contact-us/',
+            '{"@type":"Organization","email":"support@restricted-example.org"}',None,False),
+        'schema-restricted-context':('office@restricted-context.example.org','https://restricted-context.example.org','https://www.restricted-context.example.org/contact-us/',
+            '{"@type":"Organization","description":"For customer support, email office@restricted-context.example.org",'
+            '"email":"office@restricted-context.example.org"}',None,False),
+        'schema-suppressed':('office@suppressed-example.org','https://suppressed-example.org','https://www.suppressed-example.org/contact-us/',
+            '{"@type":"Organization","email":"office@suppressed-example.org"}',None,True),
+        'schema-invalid-url':('https://www.invalid-email.example/contact/','https://invalid-email.example','https://www.invalid-email.example/contact/',
+            '{"@type":"Organization","email":"https://www.invalid-email.example/contact/"}',None,False),
+    }
+    for ident,(email,website,_source,_evidence,_purpose,_suppressed) in cases.items():
+        candidate(db,ident=ident,email=email,website=website,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        for ident,(email,_website,source,evidence,purpose,suppressed) in cases.items():
+            c.execute(contact_table.update().where(contact_table.c.candidate_id==ident).values(
+                source_url=source,evidence=evidence,purpose=purpose,verification='UNKNOWN',
+                verified_at=None,suppressed=False))
+            if suppressed:
+                c.execute(suppression_table.insert().values(email=email,reason='test suppression',recorded_at=now()))
+        rows={row['id']:dict(row) for row in c.execute(select(candidates).where(
+            candidates.c.id.in_(cases))).mappings()}
+        contacts_by_id={ident:dict(c.execute(select(contact_table).where(
+            contact_table.c.candidate_id==ident)).mappings().one()) for ident in cases}
+        suppressed_emails={email for email,_website,_source,_evidence,_purpose,suppressed in cases.values() if suppressed}
+        python_selected={ident for ident in cases if contact_is_authorized(rows[ident],contacts_by_id[ident],
+            suppressed=contacts_by_id[ident]['email'] in suppressed_emails)}
+        sql_selected=set(c.execute(select(candidates.c.id).where(
+            candidates.c.id.in_(cases),exists(select(contact_table.c.id).where(invitation_contacts())))).scalars())
+    assert python_selected==sql_selected=={'schema-marketing','schema-blank'}
+
+
 def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
     from outreach_v2.service import contact_readiness_counts
     ident='dashboard-unknown-public-email'

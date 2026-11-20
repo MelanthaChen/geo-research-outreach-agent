@@ -1227,7 +1227,7 @@ def test_admin_can_version_existing_questionnaire_and_email_preset_and_create_ex
     assert 'pilot-duplicate-recipient' not in {m['id'] for m in selected_members}
     assert 'pilot-fixture' not in {m['id'] for m in selected_members}
     snapshot=selected_members[0]['eligibility_snapshot']
-    assert snapshot['criteria_version']=='verified-company-cohort-v2'
+    assert snapshot['criteria_version']=='official-site-contact-evidence-v3'
     assert snapshot['contact_verification']=='VERIFIED' and snapshot['contact_source_url'].startswith(snapshot['website'])
     assert snapshot['personalization_status']=='PENDING' and snapshot['source_personalization_status']=='INCOMPLETE' and snapshot['review_status']=='PENDING'
     exported=client.get(f'/api/admin/pilot-cohorts/{cohort_id}/export.csv')
@@ -2231,12 +2231,14 @@ def test_generation_timeout_after_commit_reconciles_original_request_key(db,monk
     final=client.get('/api/batches/by-request-key/'+key)
     assert final.json()['generation_status']=='COMPLETED' and final.json()['invitation_count']==1
 
-def test_invitation_oriented_pilot_cohort_requires_verified_first_party_contact(db):
+def test_invitation_oriented_pilot_cohort_uses_first_party_evidence_without_fresh_email_verification(db):
     from outreach_v2.service import select_pilot_cohort
     candidate(db,'no-contact-for-pilot',None,website='https://no-contact.example',name='No Contact Business',fixture=False)
     candidate(db,'contact-for-pilot','pilot@has-contact.org',website='https://has-contact.example',name='Contact Business',fixture=False)
     with db.transaction() as c:
         c.execute(contacts.update().where(contacts.c.candidate_id=='no-contact-for-pilot').values(verification='VERIFIED',evidence='No address evidence'))
+        c.execute(contacts.update().where(contacts.c.candidate_id=='contact-for-pilot').values(
+            verification='PENDING',verified_at=None))
         rows=select_pilot_cohort(c,100)
     assert [row['id'] for row in rows]==['contact-for-pilot']
 
@@ -3419,15 +3421,21 @@ def test_shared_public_evidence_contact_gate_applies_to_paid_personalization_sel
         direct_selected=set(c.execute(select(candidates.c.id).where(_eligible_query(
             now(),retry_candidate_ids=ids))).scalars())
         from sqlalchemy import exists
-        from outreach_v2.service import invitation_contacts, email_contacts
+        from outreach_v2.service import invitation_contacts, email_contacts, authorized_contact_emails
         invitation_selected=set(c.execute(select(candidates.c.id).where(
             exists(select(contact_table.c.id).where(invitation_contacts())))).scalars())
         shared_selected=set(c.execute(select(candidates.c.id).where(
             exists(select(contact_table.c.id).where(email_contacts())))).scalars())
+        recipient_options={}
+        for row in c.execute(select(candidates).where(candidates.c.id.in_(ids))).mappings():
+            contact_rows=c.execute(select(contact_table).where(contact_table.c.candidate_id==row['id'])).mappings().all()
+            recipient_options[row['id']]=authorized_contact_emails(c,dict(row),contact_rows=contact_rows,suppressed_emails=set())
     assert batch_selected=={valid,multiple,pending,unknown,future}
     assert direct_selected==batch_selected
     assert invitation_selected==batch_selected
     assert shared_selected==batch_selected
+    assert {ident for ident,options in recipient_options.items() if options}==batch_selected
+    assert len(recipient_options[multiple])==2
 
 
 def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
@@ -3442,8 +3450,8 @@ def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
     counts=contact_readiness_counts(db)
     assert row['primary_status']=='PENDING' and row['eligible'] is True
     assert row['contact_readiness']=='READY'
-    assert counts['contact_eligible']==1 and counts['contact_missing']==0
-    assert counts['contact_pending_verification']==1 and counts['contact_verified']==0
+    assert counts['eligible_for_invitation_drafting']==1 and counts['no_eligible_contact']==0
+    assert 'contact_verified' not in counts and 'contact_pending_verification' not in counts
 
 
 def test_backfill_skips_contact_ineligible_candidate_without_provider_call(db,monkeypatch):
@@ -3491,8 +3499,8 @@ def test_bounded_contact_recovery_rechecks_saved_evidence_and_preserves_history(
     assert raw['legacy']=='preserved' and raw['contact_reverification_history'][0]['prior_source_checksum']=='b'*64
     assert event['detail'] and 'email_sha256' in event['detail']
     counts=contact_readiness_counts(db)
-    assert counts['scope_count']==1 and counts['contact_eligible']==1 and counts['contact_verified']==1
-    assert counts['contact_pending_verification']==0 and counts['contact_missing']==0 and counts['contact_recovered']==1
+    assert counts['scope_count']==1 and counts['eligible_for_invitation_drafting']==1
+    assert counts['no_eligible_contact']==0
 
 
 def test_contact_recovery_never_marks_unavailable_page_verified(db):

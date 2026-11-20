@@ -1026,14 +1026,14 @@ def create_app(database=None):
         from .service import select_pilot_cohort,cohort_member_snapshot
         with db.transaction(serialized=True) as c:
             rows=select_pilot_cohort(c,100)
-            if len(rows)!=100:raise ValueError(f'100-company cohort requires 100 verified, eligible companies with at least one verified first-party business email; currently {len(rows)} qualify')
+            if len(rows)!=100:raise ValueError(f'100-company cohort requires 100 eligible companies with at least one valid, purpose-appropriate business email supported by official-site evidence; currently {len(rows)} qualify')
             cohort_id='pilot-'+uuid.uuid4().hex
             c.execute(pilot_cohorts.insert().values(id=cohort_id,name=name,target_size=100,
                 created_by=request.state.session['email'],created_at=now()))
             c.execute(pilot_members.insert(),[{'cohort_id':cohort_id,'candidate_id':r['id'],'position':i+1,
                 'eligibility_snapshot':json.dumps(cohort_member_snapshot(r),sort_keys=True)} for i,r in enumerate(rows)])
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=cohort_id,event='VERIFIED_COMPANY_COHORT_CREATED',
-                detail=json.dumps({'criteria_version':'verified-company-cohort-v2','member_count':100,
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=cohort_id,event='EVIDENCE_BACKED_COMPANY_COHORT_CREATED',
+                detail=json.dumps({'criteria_version':'official-site-contact-evidence-v3','member_count':100,
                     'created_by':request.state.session['email'],'personalization_run':False,'invitations_created':False},sort_keys=True),created_at=now()))
         return {'id':cohort_id,'name':name,'target_size':100,'member_count':100,'invitations_created':0,'send_status':'NOT_SENT'}
 

@@ -12,16 +12,16 @@ def _profile():
         "schema_version": "geo-company-profile/v1",
         "profile_id": "company-combined-1",
         "profile_type": "startup_company",
-        "identity": {"name": "Cedar Studio", "website": "https://cedar.example", "verification_status": "VERIFIED", "verification_evidence": [{"url": "https://cedar.example"}]},
+        "identity": {"name": "Cedar Studio", "website": "https://cedar.org", "verification_status": "VERIFIED", "verification_evidence": [{"url": "https://cedar.org"}]},
         "startup": {"industry": "design services", "location": "Austin, TX"},
         "qualification": {"eligibility": "ELIGIBLE"},
         "provenance": {"source_name": "Geofabrik US extract", "source_batch": "us"},
-        "contact_channels": [{"channel_type": "GENERAL_BUSINESS_EMAIL", "email": "hello@cedar.example", "source_url": "https://cedar.example/contact"}],
+        "contact_channels": [{"channel_type": "GENERAL_BUSINESS_EMAIL", "email": "hello@cedar.org", "source_url": "https://cedar.org/contact"}],
     }
 
 
-def _verify_contact(path, profile_id="company-combined-1", email="hello@cedar.example"):
-    channels = [{"channel_type":"GENERAL_BUSINESS_EMAIL","email":email,"source_url":"https://cedar.example/contact","evidence":f"For business inquiries contact {email}","review_status":"VERIFIED","verification_status":"VERIFIED"}]
+def _verify_contact(path, profile_id="company-combined-1", email="hello@cedar.org"):
+    channels = [{"channel_type":"GENERAL_BUSINESS_EMAIL","email":email,"source_url":"https://cedar.org/contact","evidence":f"For business inquiries contact {email}","review_status":"VERIFIED","verification_status":"VERIFIED"}]
     with sqlite3.connect(path) as db:
         db.execute("update research_records set contact_verification_status='CONTACT_VERIFIED',contact_channels_json=? where profile_id=?", (json.dumps(channels),profile_id))
 
@@ -34,11 +34,11 @@ def test_one_analysis_pass_persists_findings_and_draft_without_second_provider_c
 
     def fetch(*args, **kwargs):
         calls["fetch"] += 1
-        return ([{"url": "https://cedar.example/services", "title": "Services", "text": "Cedar Studio in Austin, TX offers design services. Contact us for hours, services, and project information."}], {"robots": "ALLOWED", "http_status": "200"})
+        return ([{"url": "https://cedar.org/services", "title": "Services", "text": "Cedar Studio in Austin, TX offers design services. Contact us for hours, services, and project information."}], {"robots": "ALLOWED", "http_status": "200"})
 
     monkeypatch.setattr("outreach_agent.combined_screening._fetch", fetch)
     monkeypatch.setattr("outreach_agent.combined_screening.call_ai", lambda *a, **k: calls.__setitem__("ai", calls["ai"] + 1))
-    first = run_combined_analysis("company-combined-1", mode="RULE_BASED", recipient="hello@cedar.example", secret="test-secret", path=path, base_url="https://research.example")
+    first = run_combined_analysis("company-combined-1", mode="RULE_BASED", recipient="hello@cedar.org", secret="test-secret", path=path, base_url="https://research.example")
     assert first["status"] == "DRAFTED"
     assert calls == {"fetch": 1, "ai": 0}
     record = get_record("company-combined-1", path)
@@ -50,7 +50,7 @@ def test_one_analysis_pass_persists_findings_and_draft_without_second_provider_c
     assert first["invitation_reference"].startswith("GEO-")
 
     monkeypatch.setattr("outreach_agent.combined_screening._fetch", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cached evidence must be reused")))
-    second = run_combined_analysis("company-combined-1", mode="RULE_BASED", recipient="hello@cedar.example", secret="test-secret", path=path, base_url="https://research.example")
+    second = run_combined_analysis("company-combined-1", mode="RULE_BASED", recipient="hello@cedar.org", secret="test-secret", path=path, base_url="https://research.example")
     assert second["status"] == "IDEMPOTENT_EXISTING"
     assert calls == {"fetch": 1, "ai": 0}
     with sqlite3.connect(path) as db:
@@ -71,7 +71,7 @@ def test_combined_invitation_uses_mail_merge_safe_subject_and_personalized_url(t
     monkeypatch.setattr(
         "outreach_agent.combined_screening._fetch",
         lambda *args, **kwargs: ([{
-            "url": "https://cedar.example/services",
+            "url": "https://cedar.org/services",
             "title": "Services",
             "text": "Cedar Studio Boston offers design services and contact information.",
         }], {"robots": "ALLOWED", "http_status": "200"}),
@@ -79,7 +79,7 @@ def test_combined_invitation_uses_mail_merge_safe_subject_and_personalized_url(t
     result = run_combined_analysis(
         "company-punctuation-1",
         mode="RULE_BASED",
-        recipient="hello@cedar.example",
+        recipient="hello@cedar.org",
         secret="test-secret",
         path=path,
         base_url="https://research.example",
@@ -92,16 +92,33 @@ def test_combined_invitation_uses_mail_merge_safe_subject_and_personalized_url(t
     assert "no email has been sent" not in draft["body"].casefold()
 
 
-def test_unverified_contact_blocks_paid_personalization_before_fetch_or_provider(tmp_path, monkeypatch):
+def test_pending_evidence_backed_contact_allows_paid_personalization_without_contact_verification(tmp_path, monkeypatch):
     path=tmp_path/"registry.db"
     register_profile(_profile(),path)
     calls={"fetch":0,"ai":0}
-    monkeypatch.setattr("outreach_agent.combined_screening._fetch",lambda *a,**k:calls.__setitem__("fetch",calls["fetch"]+1))
-    monkeypatch.setattr("outreach_agent.combined_screening.configured_provider",lambda:object())
-    monkeypatch.setattr("outreach_agent.combined_screening.call_ai",lambda *a,**k:calls.__setitem__("ai",calls["ai"]+1))
-    with pytest.raises(PermissionError,match="verified, evidence-matched first-party business email"):
-        run_combined_analysis("company-combined-1",mode="PAID_API",recipient="hello@cedar.example",secret="test-secret",path=path)
-    assert calls=={"fetch":0,"ai":0}
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE research_records SET contact_verification_status='NOT_VERIFIED',contact_channels_json=? WHERE profile_id=?", (
+            json.dumps([{"channel_type":"GENERAL_BUSINESS_EMAIL","email":"hello@cedar.org",
+                "source_url":"https://cedar.org/contact","evidence":"For business inquiries contact hello@cedar.org",
+                "review_status":"PENDING","verification_status":"UNKNOWN"}]), "company-combined-1"))
+    def fetch(*a,**k):
+        calls["fetch"]+=1
+        return ([{"url":"https://cedar.org/contact","title":"Contact","text":"Cedar Studio provides design services in Austin, TX."}],
+            {"robots":"ALLOWED","http_status":"200"})
+    def analyze(*a,**k):
+        calls["ai"]+=1
+        return ({"rating":"HIGH","talking_points":["The site describes design services."],"opportunities":[]},
+            {"input_tokens":5,"output_tokens":3})
+    monkeypatch.setattr("outreach_agent.combined_screening._fetch",fetch)
+    monkeypatch.setattr("outreach_agent.combined_screening.configured_provider",lambda:type("Provider",(),{"model":"mock-model"})())
+    monkeypatch.setattr("outreach_agent.combined_screening.call_ai",analyze)
+    result=run_combined_analysis("company-combined-1",mode="PAID_API",recipient="hello@cedar.org",secret="test-secret",path=path)
+    assert result["status"]=="DRAFTED"
+    assert result["provider"]=="OPENAI_COMPATIBLE_PAID_API"
+    assert calls=={"fetch":1,"ai":1}
+    with sqlite3.connect(path) as db:
+        saved=json.loads(db.execute("SELECT contact_channels_json FROM research_records WHERE profile_id=?",("company-combined-1",)).fetchone()[0])[0]
+    assert saved["verification_status"]=="UNKNOWN" and saved["review_status"]=="PENDING"
 
 
 @pytest.mark.parametrize("field,value",[("qualification_status","NEEDS_REVIEW"),("suppression_status","SUPPRESSED"),("withdrawal_status","WITHDRAWN"),("recruitment_status","UNSUBSCRIBED")])
@@ -116,18 +133,18 @@ def test_qualification_and_suppression_checks_precede_paid_personalization(tmp_p
     monkeypatch.setattr("outreach_agent.combined_screening.configured_provider",lambda:object())
     monkeypatch.setattr("outreach_agent.combined_screening.call_ai",lambda *a,**k:calls.__setitem__("ai",calls["ai"]+1))
     with pytest.raises(PermissionError):
-        run_combined_analysis("company-combined-1",mode="PAID_API",recipient="hello@cedar.example",secret="test-secret",path=path)
+        run_combined_analysis("company-combined-1",mode="PAID_API",recipient="hello@cedar.org",secret="test-secret",path=path)
     assert calls=={"fetch":0,"ai":0}
 
 
-def test_multiple_verified_recipients_require_explicit_choice_for_batch(tmp_path, monkeypatch):
+def test_multiple_eligible_public_recipients_require_explicit_choice_for_batch(tmp_path, monkeypatch):
     from outreach_agent.research_lifecycle import generate_invitation_batch
     path=tmp_path/"registry.db"
     register_profile(_profile(),path)
     _verify_contact(path)
     channels=[
-        {"channel_type":"GENERAL_BUSINESS_EMAIL","email":"hello@cedar.example","source_url":"https://cedar.example/contact","evidence":"hello@cedar.example business inquiries","review_status":"VERIFIED"},
-        {"channel_type":"PARTNERSHIP_EMAIL","email":"partners@cedar.example","source_url":"https://cedar.example/contact","evidence":"partners@cedar.example partnership inquiries","review_status":"APPROVED"},
+        {"channel_type":"GENERAL_BUSINESS_EMAIL","email":"hello@cedar.org","source_url":"https://cedar.org/contact","evidence":"hello@cedar.org business inquiries","review_status":"VERIFIED"},
+            {"channel_type":"GENERAL_BUSINESS_EMAIL","email":"info@cedar.org","source_url":"https://cedar.org/contact","evidence":"For general business inquiries, contact info@cedar.org","review_status":"PENDING"},
     ]
     with sqlite3.connect(path) as db:
         db.execute("update research_records set contact_channels_json=? where profile_id='company-combined-1'",(json.dumps(channels),))
@@ -139,6 +156,6 @@ def test_multiple_verified_recipients_require_explicit_choice_for_batch(tmp_path
     pending=generate_invitation_batch(["company-combined-1"],secret="test-secret",path=path)
     assert pending["summary"]["recipient_selection_required"]==1
     assert created==[]
-    chosen=generate_invitation_batch(["company-combined-1"],secret="test-secret",path=path,recipient_selections={"company-combined-1":"partners@cedar.example"})
+    chosen=generate_invitation_batch(["company-combined-1"],secret="test-secret",path=path,recipient_selections={"company-combined-1":"info@cedar.org"})
     assert chosen["summary"]["successfully_generated"]==1
-    assert created==["partners@cedar.example"]
+    assert created==["info@cedar.org"]

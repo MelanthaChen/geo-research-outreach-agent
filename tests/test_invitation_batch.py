@@ -17,22 +17,24 @@ def register_profile(profile, path):
     return result
 
 
-def profile(profile_id: str, *, email: str | None = "hello@example.test", owner_test: bool = False) -> dict:
+def profile(profile_id: str, *, email: str | None = "hello@cedar.org", owner_test: bool = False) -> dict:
     return {
         "schema_version": "geo-company-profile/v1",
         "profile_id": profile_id,
         "profile_type": "owner_controlled_test" if owner_test else "startup_company",
         "identity": {
             "name": "Owner Test" if owner_test else "Cedar Studio",
-            "website": "https://cedar.example",
+            "website": "https://cedar.org",
             "verification_status": "VERIFIED",
-            "verification_evidence": [{"url": "https://cedar.example/about", "text": "Cedar Studio"}],
+            "verification_evidence": [{"url": "https://cedar.org/about", "text": "Cedar Studio"}],
         },
         "startup": {"industry": "design services", "location": "Austin, TX"},
         "qualification": {"eligibility": "ELIGIBLE"},
         "provenance": {"source_name": "Geofabrik US extract", "source_batch": "us"},
         "contact_channels": ([{"channel_type": "GENERAL_BUSINESS_EMAIL", "email": email,
-                               "source_url": "https://cedar.example/contact", "review_status": "VERIFIED"}]
+                               "source_url": "https://cedar.org/contact",
+                               "evidence": f"For general business inquiries, contact {email}",
+                               "review_status": "VERIFIED"}]
                              if email else []),
     }
 
@@ -52,9 +54,9 @@ def test_batch_generation_is_bounded_idempotent_and_never_sends(tmp_path):
         "total_selected": 3,
         "successfully_generated": 1,
         "ready_for_approval": 1,
-        "discovered_unverified_recipient": 0,
-        "missing_verified_recipient": 1,
-        "insufficient_verified_evidence": 0,
+        "no_eligible_contact": 1,
+        "recipient_selection_required": 0,
+        "recipient_not_eligible": 0,
         "duplicate_already_invited": 0,
         "owner_controlled_test_excluded": 1,
         "generation_failed": 0,
@@ -76,13 +78,14 @@ def test_pending_first_party_business_email_can_prepare_draft_without_verificati
     path = tmp_path / "registry.db"
     pending = profile("company-pending")
     pending["contact_channels"][0]["review_status"] = "PENDING"
+    pending["contact_channels"][0]["evidence"] = "For general business inquiries, contact hello@cedar.org"
     register_profile(pending, path)
 
     result = generate_invitation_batch(["company-pending"], secret="test-secret", path=path)
 
     assert result["summary"]["successfully_generated"] == 1
     assert result["summary"]["ready_for_approval"] == 1
-    assert result["summary"]["discovered_unverified_recipient"] == 1
+    assert result["summary"]["ready_for_approval"] == 1
     record = get_record("company-pending", path)
     assert record["contact_channels"][0]["review_status"] == "PENDING"
     assert record["email_drafts"][0]["approval_status"] == "PENDING"
@@ -90,14 +93,15 @@ def test_pending_first_party_business_email_can_prepare_draft_without_verificati
 
 def test_purpose_specific_email_is_excluded_from_draft_preparation(tmp_path):
     path = tmp_path / "registry.db"
-    blocked = profile("company-blocked", email="careers@cedar.example")
+    blocked = profile("company-blocked", email="careers@cedar.org")
     blocked["contact_channels"][0]["review_status"] = "PENDING"
+    blocked["contact_channels"][0]["evidence"] = "For job applications and careers, contact careers@cedar.org"
     register_profile(blocked, path)
 
     result = generate_invitation_batch(["company-blocked"], secret="test-secret", path=path)
 
     assert result["summary"]["successfully_generated"] == 0
-    assert result["summary"]["missing_verified_recipient"] == 1
+    assert result["summary"]["no_eligible_contact"] == 1
     assert get_record("company-blocked", path)["email_drafts"] == []
 
 

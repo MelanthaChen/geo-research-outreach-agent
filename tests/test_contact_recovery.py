@@ -20,10 +20,12 @@ def _profile(profile_id, website, email):
 
 def test_bounded_recovery_reuses_saved_evidence_and_preserves_personalization(tmp_path):
     path=tmp_path/"registry.db"
-    register_profile(_profile("stored-contact","https://stored.example","hello@stored.example"),path)
-    payload={"data_classification":"OBSERVED","business_description":"Existing paid personalization","company_strength":"Existing work preserved","source_urls":["https://stored.example/about"],"recommendations":[]}
+    register_profile(_profile("stored-contact","https://stored.org","hello@stored.org"),path)
+    payload={"data_classification":"OBSERVED","business_description":"Existing paid personalization","company_strength":"Existing work preserved","source_urls":["https://stored.org/about"],"recommendations":[]}
     with sqlite3.connect(path) as db:
         db.execute("update research_records set personalization_status='COMPLETE',personalization_json=?,contact_verification_status='NOT_VERIFIED' where profile_id='stored-contact'",(json.dumps(payload),))
+    before=contact_readiness_summary(path)
+    assert before=={"eligible_for_invitation_drafting":1,"no_eligible_contact":0}
     result=recover_personalized_contacts(path,limit=1,profile_ids=["stored-contact"])
     assert result["selected"]==1 and result["recovered"]==1 and result["pending"]==0
     assert result["paid_calls"]==0 and result["network_requests"]==0
@@ -38,7 +40,7 @@ def test_bounded_recovery_reuses_saved_evidence_and_preserves_personalization(tm
     repeated=recover_personalized_contacts(path,limit=1,profile_ids=["stored-contact"])
     assert repeated["selected"]==0 and repeated["recovered"]==0
     counts=contact_readiness_summary(path)
-    assert counts["contact_verified"]==1 and counts["recovered"]==1
+    assert counts=={"eligible_for_invitation_drafting":1,"no_eligible_contact":0}
 
 
 def test_recovery_never_verifies_nonfirstparty_restricted_or_missing_evidence(tmp_path):

@@ -730,7 +730,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     if not profile_ids or len(profile_ids) > 500:
                         self._json({"error": "select between 1 and 500 companies"}, 400)
                         return
-                    from outreach_agent.contact_eligibility import verified_business_email_channels
+                    from outreach_agent.contact_eligibility import eligible_business_email_channels
                     recipients, names = {}, {}
                     for profile_id in profile_ids:
                         try:
@@ -739,7 +739,7 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                             recipients[profile_id] = []
                             continue
                         names[profile_id] = record.get("name") or profile_id
-                        recipients[profile_id] = sorted({str(item["email"]).strip().casefold() for item in verified_business_email_channels(record)})
+                        recipients[profile_id] = sorted({str(item["email"]).strip().casefold() for item in eligible_business_email_channels(record)})
                     self._json({"recipients": recipients, "names": names})
                     return
                 if parsed.path == "/api/recruitment/batch-generate":
@@ -780,13 +780,13 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         return
                     from outreach_agent.research_lifecycle import stored_invitation_personalization
                     from outreach_agent.geo_engine_handoff import OWNER_FIXTURES
-                    from outreach_agent.contact_eligibility import verified_business_email_channels
+                    from outreach_agent.contact_eligibility import eligible_business_email_channels
                     eligible, excluded = [], []
                     for row in result["records"]:
                         try:
                             stored_invitation_personalization(row)
-                            if not verified_business_email_channels(row):
-                                raise PermissionError("no verified, evidence-matched first-party business email")
+                            if not eligible_business_email_channels(row):
+                                raise PermissionError("no eligible first-party business email supported by official-site evidence")
                             if row["profile_type"] == "owner_controlled_test" and row["profile_id"] not in OWNER_FIXTURES:
                                 raise PermissionError("owner fixture is not authorized for this run")
                             eligible.append(row["profile_id"])
@@ -881,17 +881,17 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     if not secret:
                         self._json({"error": "Questionnaire invitations are disabled until RESEARCH_QUESTIONNAIRE_SECRET is configured"}, 503)
                         return
-                    from outreach_agent.contact_eligibility import verified_business_email_channels
+                    from outreach_agent.contact_eligibility import eligible_business_email_channels
                     profile_id = str(body["profile_id"])
                     record = get_record(profile_id, REGISTRY_DB)
-                    eligible = {str(item["email"]).strip().casefold() for item in verified_business_email_channels(record)}
+                    eligible = {str(item["email"]).strip().casefold() for item in eligible_business_email_channels(record)}
                     recipient = str(body.get("delivery_recipient") or "").strip().casefold()
                     if len(eligible) > 1 and not recipient:
-                        self._json({"error": "choose an explicit verified invitation recipient", "recipients": sorted(eligible)}, 409)
+                        self._json({"error": "choose an explicit eligible invitation recipient", "recipients": sorted(eligible)}, 409)
                         return
                     recipient = recipient or (next(iter(eligible)) if eligible else "")
                     if not recipient or recipient not in eligible:
-                        self._json({"error": "a verified, evidence-matched first-party business email is required"}, 409)
+                        self._json({"error": "an eligible first-party business email supported by official-site evidence is required"}, 409)
                         return
                     result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=REGISTRY_DB, expires_at=body.get("expires_at"))
                     self._json(result, 200 if result.get("status") == "EXISTING" else 201)

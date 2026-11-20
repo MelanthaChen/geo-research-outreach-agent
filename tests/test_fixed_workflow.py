@@ -90,7 +90,7 @@ def test_missing_research_is_rejected_without_orphan_invitation(tmp_path):
     path=tmp_path/'registry.db';pid,email=seed(path)
     with _connect(path) as db: db.execute("UPDATE research_records SET personalization_json='{}' WHERE profile_id=?",(pid,))
     result=generate_invitation_batch([pid],secret='test',path=path)
-    assert result['categories']['insufficient_verified_evidence'][0]['error'].startswith('observed personalization')
+    assert result['categories']['recipient_not_eligible'][0]['error'].startswith('observed personalization')
     with _connect(path) as db: assert db.execute('SELECT count(*) FROM questionnaire_invitations').fetchone()[0]==0
 
 

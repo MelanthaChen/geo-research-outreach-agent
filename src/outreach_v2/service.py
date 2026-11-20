@@ -106,8 +106,7 @@ def _sql_email_near_context(source_text,context_pattern):
 def email_contact_evidence():
     """Saved contact evidence that is first-party, exact-match, and general-purpose.
 
-    Verification freshness is deliberately separate so the ADMIN readiness view
-    can distinguish evidence awaiting verification from a genuinely missing email.
+    Verification state and timestamp are deliberately not part of eligibility.
     """
     first_party=or_(*[contacts.c.source_url.like(prefix+candidates.c.domain+'/%') for prefix in ('https://','http://','https://www.','http://www.')],
                     *[contacts.c.source_url==prefix+candidates.c.domain for prefix in ('https://','http://','https://www.','http://www.')])
@@ -186,26 +185,19 @@ def completed_personalization():
         candidates.c.personalization_version>0,candidates.c.fixture.is_(False))
 
 def contact_readiness_counts(db):
-    """Database-backed counts for the already-personalized real-business scope."""
+    """Compact evidence-based readiness counts for completed real businesses."""
     scope=and_(candidates.c.kind.in_(['company','hotel']),candidates.c.fixture.is_(False),
         candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.personalization_quality_status=='PASS',
         candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0)
     eligible_contact=exists(select(contacts.c.id).where(invitation_contacts()))
-    verified_contact=exists(select(contacts.c.id).where(invitation_contacts(),verified_email_contacts()))
     with db.transaction() as c:
         total=c.scalar(select(func.count()).select_from(candidates).where(scope)) or 0
         eligible=c.scalar(select(func.count()).select_from(candidates).where(scope,eligible_contact)) or 0
-        verified=c.scalar(select(func.count()).select_from(candidates).where(scope,verified_contact)) or 0
-        pending=c.scalar(select(func.count()).select_from(candidates).where(scope,eligible_contact,~verified_contact)) or 0
-        recovered=c.scalar(select(func.count(func.distinct(events.c.entity_id))).select_from(
-            events.join(candidates,events.c.entity_id==candidates.c.id)).where(
-                scope,events.c.event=='FIRST_PARTY_CONTACT_RECOVERED')) or 0
     return {'scope':'COMPLETED_SEMANTIC_PASS_REAL_QUALIFIED_COMPANIES_AND_HOTELS',
-        'scope_count':int(total),'contact_verified':int(verified),
-        'contact_pending_verification':int(pending),
-        'contact_eligible':int(eligible),'contact_missing':max(0,int(total-eligible)),
-        'contact_recovered':int(recovered)}
+        'scope_count':int(total),
+        'eligible_for_invitation_drafting':int(eligible),
+        'no_eligible_contact':max(0,int(total-eligible))}
 
 def authorized_email_count():
     return select(func.count(func.distinct(func.lower(contacts.c.email)))).where(invitation_contacts()).correlate(candidates).scalar_subquery()
@@ -579,9 +571,7 @@ def authorized_contact_options(c,row,*,contact_rows=None,suppressed_emails=None)
             bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email))))
         if contact_is_authorized(row,contact,suppressed=suppressed):
             result.append({'email':email,'purpose':contact.get('purpose'),'source_url':contact.get('source_url'),
-                'source_checksum':contact.get('source_checksum'),'verified_at':contact.get('verified_at'),
-                'verification':contact.get('verification') or 'UNKNOWN',
-                'verification_current':contact_verification_is_fresh(contact),
+                'source_checksum':contact.get('source_checksum'),
                 'authorization_reason':contact.get('authorization_reason')})
     return sorted(result,key=lambda item:item['email'])
 
@@ -804,7 +794,7 @@ def contact_readiness(c,row,*,contact_rows=None,suppressed_emails=None):
     emails=authorized_contact_emails(c,row,contact_rows=contact_rows,suppressed_emails=suppressed_emails)
     if not emails:return {'contact_readiness':'MISSING_OR_UNAUTHORIZED','contact_readiness_reason':'No usable first-party business email; review contact evidence, purpose, and suppression.'}
     if len(emails)>1:return {'contact_readiness':'MANUAL_RECIPIENT_SELECTION','contact_readiness_reason':'Multiple authorized first-party contacts; choose a recipient for this invitation.'}
-    return {'contact_readiness':'READY','contact_readiness_reason':'One exact, purpose-appropriate address is supported by the official website; verification status is shown separately.'}
+    return {'contact_readiness':'READY','contact_readiness_reason':'An exact, valid, purpose-appropriate address is supported by the official website.'}
 
 def eligible_recipient(c,row,recipient_choice=None,*,lookup=None):
     reasons=[]
@@ -848,14 +838,15 @@ def eligible_recipient(c,row,recipient_choice=None,*,lookup=None):
 def select_pilot_cohort(c, limit=100):
     """Select an invitation-oriented cohort before paid personalization.
 
-    Require at least one independently first-party, verified business email and
-    saved source provenance at selection time. Multiple valid contacts are
+    Require at least one exact, valid, purpose-appropriate business email
+    supported by official-site evidence. Multiple valid contacts are
     allowed; no invitation recipient is selected until explicit batch review.
     """
     if limit != 100: raise ValueError('The professor pilot cohort is fixed at 100 companies')
     rows=c.execute(select(candidates).where(candidates.c.kind=='company',candidates.c.fixture.is_(False),
         candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.name.is_not(None),candidates.c.website.is_not(None),
+        exists(select(contacts.c.id).where(invitation_contacts())),
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
         .order_by(candidates.c.industry,candidates.c.id)).mappings().all()
     by_industry={}
@@ -868,11 +859,7 @@ def select_pilot_cohort(c, limit=100):
         for contact in c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings():
             email=(contact['email'] or '').strip().lower()
             suppressed=bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email)))
-            # The fixed professor pilot cohort keeps its pre-existing fresh-
-            # verification requirement; shared public-evidence eligibility is
-            # for personalization and invitation preparation only.
-            if (contact_is_authorized(row,contact,suppressed=suppressed)
-                and (row.get('fixture') or contact_verification_is_fresh(contact))):
+            if contact_is_authorized(row,contact,suppressed=suppressed):
                 matching.append(dict(contact))
         options=sorted({contact['email'].strip().lower() for contact in matching})
         available=[email for email in options if email not in seen_recipients]
@@ -906,7 +893,7 @@ def cohort_member_snapshot(row):
     options=sorted({(contact.get('email') or '').strip().casefold() for contact in contacts_for_candidate})
     contact=contacts_for_candidate[0] if len(contacts_for_candidate)==1 else None
     return {
-        'criteria_version':'verified-company-cohort-v2',
+        'criteria_version':'official-site-contact-evidence-v3',
         'candidate_id':row['id'],'company_name':row['name'],'business_description':row.get('description'),'industry':row.get('industry'),
         'location':row.get('location'),'website':row['website'],'website_status':row['website_status'],
         'qualification_status':row['qualification'],'suppressed':bool(row['suppressed']),

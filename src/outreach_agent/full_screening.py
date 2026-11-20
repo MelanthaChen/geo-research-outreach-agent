@@ -26,7 +26,7 @@ from outreach_agent.screening_provider import PROMPT_VERSION, call as call_ai, c
 from outreach_agent.contact_eligibility import (
     contact_readiness_counts,
     first_party_business_email_evidence,
-    verified_business_email_channels,
+    eligible_business_email_channels,
 )
 
 RUN_VERSION = "full-us-outreach-screening/v2-soft-size"
@@ -52,7 +52,7 @@ def _channels(row: sqlite3.Row) -> list[dict[str, Any]]:
 
 
 def _email_channels(row: sqlite3.Row) -> list[dict[str, Any]]:
-    return verified_business_email_channels(row)
+    return eligible_business_email_channels(row)
 
 
 def deterministic_gate(row: sqlite3.Row) -> tuple[str, list[str], list[dict[str, Any]]]:
@@ -75,9 +75,9 @@ def deterministic_gate(row: sqlite3.Row) -> tuple[str, list[str], list[dict[str,
     emails = _email_channels(row)
     if not emails:
         if first_party_business_email_evidence(row):
-            reasons.append("BUSINESS_EMAIL_PENDING_VERIFICATION")
+            reasons.append("NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL")
         else:
-            reasons.append("NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")
+            reasons.append("NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL")
     if row["consent_status"] in {"DECLINED", "WITHDRAWN"}:
         reasons.append("CONSENT_SUPPRESSED")
     if row["recruitment_status"] in {"EXCLUDED", "UNSUBSCRIBED"}:
@@ -177,13 +177,13 @@ def run_full_job(job_id: str, path: Path = REGISTRY_DB) -> dict[str, Any]:
             for item in queue:
                 # Campaign membership is immutable. Recheck current contact
                 # readiness immediately before work and defer this member if
-                # its verified first-party recipient is missing or revoked.
+                # its eligible first-party recipient is missing, unsupported, or revoked.
                 eligibility, blockers, _ = deterministic_gate(item)
                 if eligibility != "ELIGIBLE_FOR_AI_SCREENING":
                     if "PERSONALIZATION_ALREADY_COMPLETE" in blockers:
                         queue_status, eligibility_status = "SKIPPED_ALREADY_PERSONALIZED", "BLOCKED_ALREADY_PERSONALIZED"
                         already_personalized += 1
-                    elif any(reason in blockers for reason in ("BUSINESS_EMAIL_PENDING_VERIFICATION", "NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")):
+                    elif any(reason in blockers for reason in ("NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL", "NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL")):
                         queue_status, eligibility_status = "DEFERRED_CONTACT_INELIGIBLE", "BLOCKED_CONTACT_INELIGIBLE"
                         contact_skipped += 1
                     else:

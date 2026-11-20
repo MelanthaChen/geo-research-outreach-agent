@@ -293,8 +293,8 @@ def invitation_state_counts(connection,batch_id=None):
     return Counter(state for state in connection.execute(
         invitation_state_rows_query(batch_id)).scalars().all() if state is not None)
 
-def batch_invitation_state_summary(connection,batch_id):
-    counts=invitation_state_counts(connection,batch_id)
+def batch_state_from_counts(counts):
+    """Derive a batch status from an already-loaded invitation state counter."""
     total=sum(counts.values())
     if not total:return 'INVITATION_DRAFT'
     sent=counts.get('INVITATION_MANUALLY_SENT',0)+counts.get('INVITATION_PROVIDER_SENT',0)
@@ -305,6 +305,9 @@ def batch_invitation_state_summary(connection,batch_id):
     if counts.get('INVITATION_EXPORTED',0):return 'INVITATION_EXPORTED'
     if counts.get('INVITATION_PENDING_REVIEW',0):return 'INVITATION_PENDING_REVIEW'
     return 'INVITATION_DRAFT'
+
+def batch_invitation_state_summary(connection,batch_id):
+    return batch_state_from_counts(invitation_state_counts(connection,batch_id))
 
 def primary_status_expression():
     """Mutually exclusive business status derived from persisted facts, never stored."""

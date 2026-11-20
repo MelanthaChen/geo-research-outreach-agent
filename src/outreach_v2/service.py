@@ -11,13 +11,17 @@ from .migrate import dump,parse,sha,unpack
 from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, synthetic_fixture_copy
 from .contact_purpose import (GENERAL_LABEL, SPECIFIC_LABEL, UNCLASSIFIED_LABEL,
     RESTRICTED_LOCALPARTS,
-    PLACEHOLDER_HOSTS, CONTACT_PATH_RE, GENERAL_CONTEXT_PATTERN, RESTRICTED_CONTEXT_PATTERN,
+    PLACEHOLDER_HOSTS, CONTACT_PATH_PATTERN, CONTACT_PATH_RE, GENERAL_CONTEXT_PATTERN, RESTRICTED_CONTEXT_PATTERN,
     SCHEMA_ORG_EMAIL_PREFIX, SCHEMA_ORG_EMAIL_REVERSE_PREFIX, SCHEMA_ORG_EMAIL_REVERSE_SUFFIX,
     classify_public_contact_purpose)
 from outreach_agent.google_forms_integration import prefilled_form_url
 
 FILTERS={'kind','industry','location','contact','primary_status','completed_personalization','q'}
 CONTACT_VERIFICATION_MAX_AGE=timedelta(days=180)
+# Imported historical records preserve their channel type in ``contacts.kind``.
+# Accept the canonical legacy general-business type alongside normalized EMAIL;
+# other role-specific types remain subject to their own explicit restrictions.
+EMAIL_CONTACT_KINDS=frozenset({'EMAIL','GENERAL_BUSINESS_EMAIL'})
 def exact_email_in_evidence(email,evidence):
     email=(email or '').strip().casefold()
     if not EMAIL.fullmatch(email) or not isinstance(evidence,str):return False
@@ -54,7 +58,8 @@ def contact_is_authorized(row,contact,*,suppressed=False):
     eligibility gate; verification state remains a separate informational field.
     """
     email=(contact.get('email') or '').strip().casefold()
-    if not EMAIL.fullmatch(email) or contact.get('suppressed') or suppressed:return False
+    if ((contact.get('kind') or '').strip().upper() not in EMAIL_CONTACT_KINDS
+        or not EMAIL.fullmatch(email) or contact.get('suppressed') or suppressed):return False
     verification=(contact.get('verification') or 'UNKNOWN').strip().upper()
     if verification in {'INVALID','REJECTED','SUPPRESSED'}:return False
     if row.get('fixture'):
@@ -82,6 +87,7 @@ def contact_block_reasons_for(contact,row,*,suppressed=False):
     reasons=[];email=(contact.get('email') or '').strip().casefold()
     verification=(contact.get('verification') or 'UNKNOWN').strip().upper()
     if verification in {'INVALID','REJECTED','SUPPRESSED'}:reasons.append('Contact has an explicitly blocked verification status')
+    if (contact.get('kind') or '').strip().upper() not in EMAIL_CONTACT_KINDS:reasons.append('Saved contact kind is not a supported business email channel')
     if not EMAIL.fullmatch(email):reasons.append('Email address is syntactically invalid')
     if not exact_email_in_evidence(email,contact.get('evidence')):reasons.append('Exact address is absent from preserved first-party evidence')
     if not supported_general_business_purpose(contact.get('purpose'),email,
@@ -124,14 +130,14 @@ def email_contact_evidence():
     # Legacy rows hold free-form source text in ``purpose``. New ingestion writes
     # GENERAL_BUSINESS while preserving that original text in raw/evidence.
     normalized=purpose==GENERAL_LABEL.casefold()
-    contact_route=and_(contacts.c.source_url.regexp_match(r'(?i)/(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)'),
+    contact_route=and_(contacts.c.source_url.regexp_match(r'(?i)'+CONTACT_PATH_PATTERN),
         func.lower(contacts.c.email).regexp_match(r'^(?:info|contact|hello|enquiries|enquiry|office)(?:[._+-][^@]+)?@'),
-        _sql_email_near_context(contacts.c.evidence,r'(^|[^a-z0-9])(?:contact|email|questions?|inquiries|enquiries|office)([^a-z0-9]|$)'))
+        ~restricted_context)
     # Mirrors contact_purpose._schema_org_contact_email(): the address must be
     # the exact Organization.email property in one bounded JSON object, and
     # source_url must itself be a contact/about route.
     structured_contact_route=and_(contacts.c.source_url.regexp_match(
-        r'(?i)/(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)'),
+        r'(?i)'+CONTACT_PATH_PATTERN),
         or_(func.lower(func.coalesce(contacts.c.evidence,'' )).regexp_match(
                 r'(?i)'+SCHEMA_ORG_EMAIL_PREFIX + _sql_email_pattern() + r'"'),
             func.lower(func.coalesce(contacts.c.evidence,'' )).regexp_match(
@@ -175,12 +181,12 @@ def invitation_contacts():
     states are never eligible. This is the shared eligibility predicate for
     invitation preparation and paid-personalization screening.
     """
-    regular=and_(email_contact_evidence(),contacts.c.kind=='EMAIL',
+    regular=and_(email_contact_evidence(),contacts.c.kind.in_(sorted(EMAIL_CONTACT_KINDS)),
         contacts.c.email.regexp_match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$'),
         ~func.upper(func.coalesce(contacts.c.verification,'UNKNOWN')).in_(['INVALID','REJECTED','SUPPRESSED']))
     fixture_owner=and_(contacts.c.candidate_id==candidates.c.id,
         candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED',
-        contacts.c.kind=='EMAIL',contacts.c.email.regexp_match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+        contacts.c.kind.in_(sorted(EMAIL_CONTACT_KINDS)),contacts.c.email.regexp_match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$'),
         contacts.c.suppressed.is_(False),
         ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
     return or_(regular,fixture_owner)
@@ -469,7 +475,7 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
         contact_rows=[]
         invitation_by_candidate={};invitation_ids=[]
         if ids:
-            for related in c.execute(select(contacts.c.candidate_id,contacts.c.id,contacts.c.email,contacts.c.url,contacts.c.verification,
+            for related in c.execute(select(contacts.c.candidate_id,contacts.c.id,contacts.c.kind,contacts.c.email,contacts.c.url,contacts.c.verification,
                     contacts.c.suppressed,contacts.c.source_url,contacts.c.purpose,contacts.c.evidence,contacts.c.source_checksum,
                     contacts.c.verified_at,contacts.c.verification_reason,contacts.c.authorization_reason)
                     .where(contacts.c.candidate_id.in_(ids)).order_by(contacts.c.candidate_id,contacts.c.email)).mappings():
@@ -594,6 +600,8 @@ def contact_block_reasons(c,row,*,saved_contacts=None,suppressed_emails=None):
     for contact in saved:
         email=(contact['email'] or '').strip().lower()
         if not email:continue
+        if (contact.get('kind') or '').strip().upper() not in EMAIL_CONTACT_KINDS:
+            reasons.append('Saved contact kind is not a supported business email channel')
         if not EMAIL.fullmatch(email):reasons.append('Saved email address has an invalid format')
         if contact.get('verification') in {'INVALID','REJECTED','SUPPRESSED'}:
             reasons.append('Contact is marked '+contact['verification'].lower())

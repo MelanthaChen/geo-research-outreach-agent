@@ -3517,6 +3517,9 @@ def test_schema_org_python_and_sql_predicates_agree_on_route_restriction_and_sup
         'schema-marketing':('informationemail@structured-example.org','https://structured-example.org','https://www.structured-example.org/contact-us/',
             '{"@type":"Organization","description":"Experience the Difference","email":"informationemail@structured-example.org"}',
             'Experience the Difference',False),
+        'legacy-kind-contact-and-directions':('info@1620winery.com','https://1620winery.com','https://1620winery.com/contact-and-directions/',
+            '55 Cordage Park Circle, Plymouth MA info@1620winery.com',
+            '55 Cordage Park Circle, Plymouth MA info@1620winery.com',False),
         'schema-blank':('office@blank-example.org','https://blank-example.org','https://www.blank-example.org/contact/',
             '{"email":"office@blank-example.org","sameAs":[],"@context":"http://schema.org","@type":"Organization"}',None,False),
         'schema-homepage-only':('info@homepage-example.org','https://homepage-example.org','https://www.homepage-example.org/',
@@ -3539,7 +3542,8 @@ def test_schema_org_python_and_sql_predicates_agree_on_route_restriction_and_sup
         for ident,(email,_website,source,evidence,purpose,suppressed) in cases.items():
             c.execute(contact_table.update().where(contact_table.c.candidate_id==ident).values(
                 source_url=source,evidence=evidence,purpose=purpose,verification='UNKNOWN',
-                verified_at=None,suppressed=False))
+                verified_at=None,suppressed=False,
+                kind='GENERAL_BUSINESS_EMAIL' if ident=='legacy-kind-contact-and-directions' else 'EMAIL'))
             if suppressed:
                 c.execute(suppression_table.insert().values(email=email,reason='test suppression',recorded_at=now()))
         rows={row['id']:dict(row) for row in c.execute(select(candidates).where(
@@ -3551,7 +3555,47 @@ def test_schema_org_python_and_sql_predicates_agree_on_route_restriction_and_sup
             suppressed=contacts_by_id[ident]['email'] in suppressed_emails)}
         sql_selected=set(c.execute(select(candidates.c.id).where(
             candidates.c.id.in_(cases),exists(select(contact_table.c.id).where(invitation_contacts())))).scalars())
-    assert python_selected==sql_selected=={'schema-marketing','schema-blank'}
+    assert python_selected==sql_selected=={'schema-marketing','legacy-kind-contact-and-directions','schema-blank'}
+
+
+def test_contact_and_directions_generic_address_requires_exact_publication_and_no_restriction(db):
+    from outreach_v2.service import contact_is_authorized
+    from outreach_v2.contact_purpose import classify_public_contact_purpose,GENERAL_LABEL,UNCLASSIFIED_LABEL,SPECIFIC_LABEL
+    email='info@1620winery.com';source='https://1620winery.com/contact-and-directions/'
+    assert classify_public_contact_purpose(email,'55 Cordage Park Circle, Plymouth MA '+email,
+        '55 Cordage Park Circle, Plymouth MA '+email,source)==GENERAL_LABEL
+    assert classify_public_contact_purpose(email,'55 Cordage Park Circle','55 Cordage Park Circle',source)==UNCLASSIFIED_LABEL
+    restricted='55 Cordage Park Circle '+email+' For event reservations only.'
+    assert classify_public_contact_purpose(email,restricted,restricted,source)==SPECIFIC_LABEL
+    ident='1620-win-bar-regression'
+    candidate(db,ident,email,'https://1620winery.com','1620 Winery Wine Bar',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(
+            kind='GENERAL_BUSINESS_EMAIL',verification='PENDING',verified_at=None,
+            purpose='55 Cordage Park Circle, Plymouth MA '+email,source_url=source,
+            evidence='55 Cordage Park Circle, Plymouth MA '+email,suppressed=False))
+        row=dict(c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one())
+        contact=dict(c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings().one())
+        assert contact_is_authorized(row,contact)
+        from sqlalchemy import exists
+        from outreach_v2.service import invitation_contacts
+        assert c.scalar(select(func.count()).select_from(candidates).where(
+            candidates.c.id==ident,exists(select(contacts.c.id).where(invitation_contacts()))))==1
+
+
+def test_contact_readiness_is_independent_of_existing_exported_or_discarded_invitation(db):
+    ident='contact-readiness-invitation-independent'
+    candidate(db,ident,email='info@lifecycle-contact.org',website='https://lifecycle-contact.org',
+        name='Lifecycle Contact',fixture=False,personalization=True)
+    generated=invite(db,[ident],'contact-readiness-lifecycle-invitation')
+    with db.transaction() as c:
+        c.execute(batches.update().where(batches.c.id==generated['id']).values(
+            exported_at=now(),discarded_at=now(),discarded_by='unit-test-admin'))
+        row=next(item for item in list_candidates(db,{'q':'Lifecycle Contact'})['rows'] if item['id']==ident)
+    assert row['primary_status']=='PENDING'
+    assert row['contact_readiness']=='READY'
+    assert row['invitation_record_exists'] is True
+    assert row['eligible'] is False  # anti-duplicate generation gate remains separate
 
 
 def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
@@ -3922,6 +3966,50 @@ def test_postgres_company_participation_status_is_independent_of_invitation_batc
     assert list_candidates(db,{'q':'pg-status','primary_status':'ACCEPTED'},page_size=100)['total']==1
     assert list_candidates(db,{'q':'pg-status','primary_status':'NO_CONTACT'},page_size=100)['total']==1
     assert detail(db,'pg-status-discarded-000')['primary_status']=='PENDING'
+
+
+def test_postgres_historical_1620_contact_route_and_legacy_kind_are_eligible(isolated_postgres_db,monkeypatch):
+    monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Postgres Test Researcher')
+    monkeypatch.setenv('OUTREACH_UNIVERSITY_AFFILIATION','Test University')
+    monkeypatch.setenv('OUTREACH_REPLY_TO','researcher@example.org')
+    from uuid import uuid4
+    from sqlalchemy import exists
+    from outreach_v2.service import (contact_is_authorized,contact_readiness_counts,
+        authorized_contact_emails,invitation_contacts)
+    db=isolated_postgres_db
+    token=uuid4().hex[:10]
+    ident='pg-1620-'+token
+    email=f'info-{token}@1620winery.com'
+    counts_before=contact_readiness_counts(db)
+    candidate(db,ident,email,'https://1620winery.com','1620 Winery Wine Bar',fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(
+            kind='GENERAL_BUSINESS_EMAIL',verification='PENDING',verified_at=None,
+            purpose=f'55 Cordage Park Circle, Plymouth MA {email}',
+            source_url='https://1620winery.com/contact-and-directions/',
+            evidence=f'55 Cordage Park Circle, Plymouth MA {email}',suppressed=False))
+        row=dict(c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one())
+        contact=dict(c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings().one())
+        assert contact_is_authorized(row,contact) is True
+        selected=c.scalar(select(exists(select(contacts.c.id).where(
+            contacts.c.candidate_id==ident,invitation_contacts()))))
+        assert selected is True
+        assert authorized_contact_emails(c,row,contact_rows=[contact],suppressed_emails=set())=={email}
+    counts=contact_readiness_counts(db)
+    assert counts['eligible_for_invitation_drafting']==counts_before['eligible_for_invitation_drafting']+1
+    assert counts['scope_count']==counts_before['scope_count']+1
+    assert counts['no_eligible_contact']==counts_before['no_eligible_contact']
+    # A pre-existing unsent/exported/discarded draft is a separate lifecycle
+    # state; it must not remove the business email or change participation.
+    generated=invite(db,[ident],'pg-1620-'+uuid4().hex)
+    with db.transaction() as c:
+        c.execute(batches.update().where(batches.c.id==generated['id']).values(
+            exported_at=now(),discarded_at=now(),discarded_by='postgres-regression-admin'))
+    projected=next(item for item in list_candidates(db,{'q':'1620 Winery Wine Bar'})['rows'] if item['id']==ident)
+    assert projected['primary_status']=='PENDING'
+    assert projected['contact_readiness']=='READY'
+    assert projected['invitation_record_exists'] is True
+    assert projected['eligible'] is False
 
 
 def test_postgres_compact_batch_summary_uses_bounded_queries(isolated_postgres_db,monkeypatch):

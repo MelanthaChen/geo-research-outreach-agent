@@ -28,7 +28,12 @@ RESTRICTED_LOCALPARTS = (
     'education','training','orders','support','helpdesk'
 )
 GENERAL_LOCALPARTS = ('info','contact','hello','enquiries','enquiry','office')
-CONTACT_PATH_RE = re.compile(r'(?:^|/)(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)', re.I)
+# Historical source URLs include descriptive contact routes such as
+# ``/contact-and-directions/`` and ``/contact-information/``. Treat a
+# contact-prefixed path as a contact route while leaving purpose restrictions
+# to the existing bounded-context checks below.
+CONTACT_PATH_PATTERN = r'(?:^|/)(?:contact(?:us|[-_][a-z0-9-]+)?|about|locations?)(?:/|$)'
+CONTACT_PATH_RE = re.compile(CONTACT_PATH_PATTERN, re.I)
 # Structured first-party Organization.email values are explicit public email
 # declarations. Some sites publish these only as JSON-LD, without surrounding
 # prose such as “general inquiries”; keep this bounded to the same object and
@@ -67,10 +72,10 @@ def classify_public_contact_purpose(email: str, evidence: str = '', purpose: str
 
     The email itself must be checked against first-party evidence by the caller.
     A generic address prefix never qualifies by itself. A contact/about route plus
-    either exact Schema.org Organization.email data or recognized nearby general
-    contact wording can qualify. Explicit role/context restrictions take
-    precedence unless the same local text clearly identifies that exact address
-    for general inquiries.
+    exact publication of a common business mailbox, exact Schema.org
+    Organization.email data, or recognized nearby general-contact wording can
+    qualify. Explicit role/context restrictions take precedence unless the same
+    local text clearly identifies that exact address for general inquiries.
     """
     email = (email or '').strip().casefold()
     if not email or '@' not in email:
@@ -111,16 +116,16 @@ def classify_public_contact_purpose(email: str, evidence: str = '', purpose: str
     if CONTACT_PATH_RE.search(path) and _schema_org_contact_email(email, evidence):
         return GENERAL_LABEL
 
-    # Contact-page context may make common published mailboxes suitable, but the
-    # address prefix alone is insufficient. The saved excerpt must also describe
-    # contacting/emailing the business (e.g., “Contact us” or “Email: ...”).
+    # A common mailbox published on an official contact route is general
+    # contact evidence even when a legacy excerpt contains only the address and
+    # adjacent location details. Callers still require exact address matching
+    # against the preserved first-party evidence; the local part alone never
+    # qualifies. A route or nearby text that identifies a restricted purpose
+    # was rejected above.
     parsed = urlparse(source_url or '')
     path = parsed.path or '/'
-    contact_words = _context_near_email(
-        email, evidence,
-        r'(^|[^a-z0-9])(?:contact|email|questions?|inquiries|enquiries|office)([^a-z0-9]|$)',
-    )
     generic_local = any(local == item or local.startswith(item+'.') or local.startswith(item+'_') or local.startswith(item+'-') for item in GENERAL_LOCALPARTS)
-    if CONTACT_PATH_RE.search(path) and generic_local and contact_words and not restricted_context and not restricted_local:
+    exact_publication = email in (evidence or '').casefold() or email in (purpose or '').casefold()
+    if CONTACT_PATH_RE.search(path) and generic_local and exact_publication and not restricted_context and not restricted_local:
         return GENERAL_LABEL
     return UNCLASSIFIED_LABEL

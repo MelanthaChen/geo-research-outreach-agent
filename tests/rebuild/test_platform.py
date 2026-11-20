@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates,personalization_attempts
 from outreach_v2.service import generate,list_candidates,preview_generation
 from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
@@ -1408,11 +1408,9 @@ def test_semantic_backfill_fails_closed_without_exact_authorized_cohort(db, monk
 
 
 @pytest.mark.parametrize('kind',['company','hotel'])
-def test_semantic_business_analysis_does_not_require_a_verified_email_and_includes_hotels(db,monkeypatch,kind):
+def test_semantic_business_analysis_requires_verified_email_before_paid_call_for_company_and_hotel(db,monkeypatch,kind):
     from outreach_v2.personalization import backfill
-    from outreach_v2.semantic_openai import PreflightError
-    from test_semantic_openai_adapter import profile
-    import outreach_v2.personalization as module
+    from outreach_v2.db import personalization_attempts
     candidate(db,ident='contactless-'+kind,email=None,website='https://www.lagoonny.com/',name='Lagoon New York',
         personalization=False,fixture=False)
     with db.transaction() as c:
@@ -1423,20 +1421,21 @@ def test_semantic_business_analysis_does_not_require_a_verified_email_and_includ
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','0.25')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
     monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_CANDIDATES_PER_RUN','1')
-    monkeypatch.setattr(module,'_sample',lambda *args,**kwargs:profile())
     class Backend:
         calls=0
         def analyze_once(self,*args,**kwargs):
             self.calls+=1
-            raise PreflightError('test-only stop after proving eligible analysis path')
+            raise AssertionError('contact-ineligible candidate reached provider')
     backend=Backend()
     result=backfill(db,limit=1,fetcher=lambda url:None,authorized_candidate_ids=['contactless-'+kind],
         backend_factory=lambda:backend,token_count=lambda _:1000,time_budget_seconds=30)
-    assert result['attempted']==0 and backend.calls==1, result
+    assert result['attempted']==0 and backend.calls==0, result
     with db.transaction() as c:
         row=c.execute(select(candidates).where(candidates.c.id=='contactless-'+kind)).mappings().one()
-    assert row['personalization_attempts']==0
-    # Invitation readiness retains the exactly-one verified first-party contact gate.
+        attempts=c.scalar(select(func.count()).select_from(personalization_attempts).where(
+            personalization_attempts.c.candidate_id=='contactless-'+kind))
+    assert row['personalization_attempts']==0 and attempts==0
+    # Invitation readiness remains independently gated on a usable contact.
     assert list_candidates(db,{'q':'Lagoon New York'})['eligible_matching']==0
 
 
@@ -2253,10 +2252,12 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     from outreach_v2.app import create_app
     from outreach_v2.db import personalization_authorizations,personalization_attempts
     candidate(db,ident='manifest-pilot',name='Eligible Pilot',fixture=False,personalization=False)
+    candidate(db,ident='manifest-no-contact',name='Contactless Pilot',fixture=False,personalization=False)
     with db.transaction() as c:
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='manifest-no-contact'))
         # The persisted 100-ID authorization is the exact saved manifest; it
         # need not also have pilot_cohorts/pilot_members rows.
-        manifest=['manifest-pilot']+[f'manifest-member-{i:03}' for i in range(99)]
+        manifest=['manifest-pilot','manifest-no-contact']+[f'manifest-member-{i:03}' for i in range(98)]
         manifest_encoded=dump(manifest)
         manifest_hash=hashlib.sha256(json.dumps(manifest,separators=(',',':')).encode()).hexdigest()
         c.execute(personalization_authorizations.insert().values(id='pending-five',candidate_ids=manifest_encoded,
@@ -2276,6 +2277,9 @@ def test_scoped_one_candidate_authorization_create_approve_and_run_requires_pers
     pending=client.post('/api/admin/personalization/authorizations',headers=headers,json={
         'candidate_ids':['manifest-pilot'],'total_budget_usd':'0.05'})
     assert pending.status_code==200 and pending.json()['candidate_count']==1 and pending.json()['status']=='PENDING'
+    contactless_grant=client.post('/api/admin/personalization/authorizations',headers=headers,json={
+        'candidate_ids':['manifest-no-contact'],'total_budget_usd':'0.05'})
+    assert contactless_grant.status_code==422 and 'verified' in contactless_grant.json()['error'].lower()
     grant_id=pending.json()['id']
     with db.transaction() as c:
         row=c.execute(select(personalization_authorizations).where(personalization_authorizations.c.id==grant_id)).mappings().one()
@@ -3206,3 +3210,136 @@ def test_inner_claim_selector_accepts_legacy_ready_only_when_in_authorized_batch
         selected=c.execute(select(candidates.c.id).where(_eligible_query(
             now(),retry_candidate_ids=[ident]))).scalars().all()
     assert selected==[ident]
+
+
+def test_contact_readiness_is_required_before_any_new_personalization_selector(db):
+    from outreach_v2.db import contacts as contact_table
+    from outreach_v2.personalization_batch import eligibility
+    from outreach_v2.personalization import _eligible_query
+    valid='contact-gate-valid'
+    multiple='contact-gate-multiple'
+    pending='contact-gate-pending'
+    future='contact-gate-future-verified'
+    missing='contact-gate-missing'
+    for ident in (valid,multiple,pending,future,missing):
+        candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:
+        c.execute(contact_table.insert().values(id='second-contact-multiple',candidate_id=multiple,
+            kind='EMAIL',email='second@geo-ai-resume.vercel.app',source_url='https://geo-ai-resume.vercel.app/contact',
+            evidence='For general business inquiries, contact second@geo-ai-resume.vercel.app',
+            verification='VERIFIED',purpose='general business',suppressed=False,verified_at=now()))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==pending).values(
+            verification='UNKNOWN',verified_at=None))
+        c.execute(contact_table.update().where(contact_table.c.candidate_id==future).values(
+            verified_at='2099-01-01T00:00:00+00:00'))
+        c.execute(contact_table.delete().where(contact_table.c.candidate_id==missing))
+        ids=[valid,multiple,pending,future,missing]
+        batch_selected=set(c.execute(select(candidates.c.id).where(eligibility(ids))).scalars())
+        direct_selected=set(c.execute(select(candidates.c.id).where(_eligible_query(
+            now(),retry_candidate_ids=ids))).scalars())
+    assert batch_selected=={valid,multiple}
+    assert direct_selected==batch_selected
+
+
+def test_backfill_skips_contact_ineligible_candidate_without_provider_call(db,monkeypatch):
+    from outreach_v2.db import contacts as contact_table
+    from outreach_v2.personalization import backfill
+    ident='contact-gate-no-paid-call'
+    candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:c.execute(contact_table.delete().where(contact_table.c.candidate_id==ident))
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_ENABLED','true')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_RUN_BUDGET_USD','0.05')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_CUMULATIVE_BUDGET_USD','5.00')
+    monkeypatch.setenv('OUTREACH_AI_PERSONALIZATION_MAX_COST_PER_CANDIDATE_USD','0.05')
+    class Backend:
+        def analyze_once(self,*args,**kwargs):raise AssertionError('contact-ineligible candidate reached provider')
+    result=backfill(db,limit=1,authorized_candidate_ids=[ident],backend_factory=Backend)
+    assert result['attempted']==0 and result.get('completed',0)==0
+    with db.transaction() as c:
+        assert c.scalar(select(func.count()).select_from(personalization_attempts).where(
+            personalization_attempts.c.candidate_id==ident))==0
+
+
+def test_bounded_contact_recovery_rechecks_saved_evidence_and_preserves_history(db):
+    from outreach_v2.db import events as event_table
+    from outreach_v2.service import contact_readiness_counts,recover_saved_first_party_contacts
+    ident='stored-contact-recovery'
+    candidate(db,ident=ident,name=ident,fixture=False,personalization=True)
+    with db.transaction() as c:
+        contact=c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings().one()
+        c.execute(contacts.update().where(contacts.c.id==contact['id']).values(
+            verification='UNKNOWN',verified_at=None,source_ref='source_row:'+('a'*64),source_checksum='b'*64,
+            raw=dump({'legacy':'preserved'})))
+    page='https://geo-ai-resume.vercel.app/contact'
+    html='<main>For general business inquiries, contact yuxuan.chen.1031@outlook.com</main>'
+    calls=[]
+    def fetch(url):calls.append(url);return page,html,False
+    result=recover_saved_first_party_contacts(db,limit=1,fetcher=fetch)
+    assert result['recovered']==1 and result['pending']==0
+    assert calls==['https://geo-ai-resume.vercel.app']
+    with db.transaction() as c:
+        updated=c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings().one()
+        event=c.execute(select(event_table).where(event_table.c.entity_id==ident,
+            event_table.c.event=='FIRST_PARTY_CONTACT_RECOVERED')).mappings().one()
+    raw=json.loads(updated['raw'])
+    assert updated['verification']=='VERIFIED' and updated['source_checksum']==hashlib.sha256(html.encode()).hexdigest()
+    assert raw['legacy']=='preserved' and raw['contact_reverification_history'][0]['prior_source_checksum']=='b'*64
+    assert event['detail'] and 'email_sha256' in event['detail']
+    counts=contact_readiness_counts(db)
+    assert counts['scope_count']==1 and counts['contact_verified']==1 and counts['contact_recovered']==1
+
+
+def test_contact_recovery_never_marks_unavailable_page_verified(db):
+    from outreach_v2.service import recover_saved_first_party_contacts
+    ident='stored-contact-page-unavailable'
+    candidate(db,ident=ident,name=ident,fixture=False,personalization=True)
+    with db.transaction() as c:
+        c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(
+            verification='UNKNOWN',verified_at=None,source_ref='source_row:'+('c'*64),source_checksum='d'*64))
+    def unavailable(_url):raise ValueError('Website robots policy could not be checked')
+    result=recover_saved_first_party_contacts(db,limit=1,fetcher=unavailable)
+    assert result['recovered']==0 and result['pending']==1
+    with db.transaction() as c:
+        saved=c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings().one()
+    assert saved['verification']=='UNKNOWN' and saved['verified_at'] is None
+
+
+def test_contact_deferral_is_audited_once_without_changing_manifest_membership(db):
+    from outreach_v2.db import events as event_table
+    from outreach_v2.personalization_batch import _record_contact_deferrals
+    ident='contact-deferred-member'
+    candidate(db,ident=ident,name=ident,fixture=False,personalization=False)
+    with db.transaction() as c:c.execute(contacts.delete().where(contacts.c.candidate_id==ident))
+    before_count=count(db,candidates)
+    _record_contact_deferrals(db,'contact-deferred-auth',[ident])
+    _record_contact_deferrals(db,'contact-deferred-auth',[ident])
+    with db.transaction() as c:
+        saved=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().one()
+        events_for_candidate=c.execute(select(event_table).where(event_table.c.id==
+            f'contact-deferred:contact-deferred-auth:{ident}')).mappings().all()
+    assert count(db,candidates)==before_count and saved['personalization_analysis_version'] is None
+    assert len(events_for_candidate)==1
+    assert json.loads(events_for_candidate[0]['detail'])=={
+        'authorization_id':'contact-deferred-auth','paid_personalization_started':False,
+        'reason':'CONTACT_MISSING','manifest_membership_preserved':True}
+
+
+def test_cohort_selection_accepts_multiple_verified_contacts_without_choosing_invitation_recipient(db):
+    from outreach_v2.service import select_pilot_cohort,cohort_member_snapshot
+    for n in range(100):
+        ident=f'multi-contact-cohort-{n:03d}'
+        domain=f'company{n}.com'
+        candidate(db,ident=ident,email=f'info@{domain}',website=f'https://{domain}',
+            name=f'Company {n:03d}',fixture=False,personalization=False)
+    with db.transaction() as c:
+        first='multi-contact-cohort-000'; domain='company0.com'
+        c.execute(contacts.insert().values(id='second-verified-contact',candidate_id=first,kind='EMAIL',
+            email=f'office@{domain}',source_url=f'https://{domain}/contact',
+            evidence=f'For general business inquiries contact office@{domain}',verification='VERIFIED',
+            purpose='general business',verified_at=now(),suppressed=False))
+        selected=select_pilot_cohort(c,100)
+    assert len(selected)==100
+    first_row=next(row for row in selected if row['id']=='multi-contact-cohort-000')
+    snapshot=cohort_member_snapshot(first_row)
+    assert snapshot['business_email'] is None and snapshot['recipient_selection_required'] is True
+    assert snapshot['business_email_options']==['info@company0.com','office@company0.com']

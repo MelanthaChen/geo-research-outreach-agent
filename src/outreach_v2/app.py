@@ -8,11 +8,12 @@ from pathlib import Path
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select,func
+from sqlalchemy import select,func,exists
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
     personalization_authorizations,personalization_attempts,personalization_campaigns,candidates as candidate_table,
+    contacts as contact_table,
     invitation_generation_batches,invitation_generation_items)
 from . import auth,service
 from .consent import record_owner_identity_binding
@@ -362,6 +363,18 @@ def create_app(database=None):
         if not isinstance(body,dict) or set(body)!={'candidate_id','email','source_url'}:
             raise ValueError('Provide exactly candidate_id, email, and source_url')
         return service.add_contact_from_first_party_page(db,str(body['candidate_id']),str(body['email']),str(body['source_url']))
+    @app.get('/api/admin/contact-readiness')
+    def admin_contact_readiness(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        return service.contact_readiness_counts(db)
+    @app.post('/api/admin/contacts/recover')
+    async def recover_saved_contacts(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)-{'limit'}:
+            raise ValueError('Only a bounded recovery limit may be provided')
+        from .service import recover_saved_first_party_contacts
+        return recover_saved_first_party_contacts(db,int(body.get('limit',25)))
     @app.post('/api/batches/preview')
     async def preview_invitation_batch(request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
@@ -790,7 +803,7 @@ def create_app(database=None):
         from .service import select_pilot_cohort,cohort_member_snapshot
         with db.transaction(serialized=True) as c:
             rows=select_pilot_cohort(c,100)
-            if len(rows)!=100:raise ValueError(f'100-company cohort requires 100 verified, eligible companies with one verified first-party business email; currently {len(rows)} qualify')
+            if len(rows)!=100:raise ValueError(f'100-company cohort requires 100 verified, eligible companies with at least one verified first-party business email; currently {len(rows)} qualify')
             cohort_id='pilot-'+uuid.uuid4().hex
             c.execute(pilot_cohorts.insert().values(id=cohort_id,name=name,target_size=100,
                 created_by=request.state.session['email'],created_at=now()))
@@ -1030,6 +1043,10 @@ def create_app(database=None):
                 if total+amount>Decimal('5.00'):
                     raise ValueError('The final-fill authorization would exceed the existing $5.00 global cumulative provider-spend ceiling')
             if one_candidate:
+                from .service import email_contacts
+                if not c.scalar(select(func.count()).select_from(candidate_table).where(
+                    candidate_table.c.id==ids[0],exists(select(contact_table.c.id).where(email_contacts())))):
+                    raise ValueError('A new single-candidate paid personalization grant requires a currently verified, evidence-matched, purpose-appropriate first-party business email')
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0])).mappings().one()
                 if candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0':
                     raise ValueError('Semolina Kitchen + Bar is excluded from new provider attempts')
@@ -1059,6 +1076,7 @@ def create_app(database=None):
     @app.get('/api/admin/personalization/eligible-pilot-candidates')
     def eligible_personalization_pilot_candidates(request:Request):
         auth.require_role(request.state.session,'ADMIN')
+        from .service import email_contacts
         with db.transaction() as c:
             rows=c.execute(select(candidate_table.c.id,candidate_table.c.name,candidate_table.c.website,
                 candidate_table.c.kind).where(candidate_table.c.fixture.is_(False),
@@ -1068,6 +1086,7 @@ def create_app(database=None):
                     candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
                     (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
                     (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
+                    exists(select(contact_table.c.id).where(email_contacts())),
                     ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists(),
                     ~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
                         personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists())
@@ -1263,6 +1282,7 @@ def create_app(database=None):
                     raise ValueError('The replacement grant would exceed the existing $5.00 global cumulative provider-spend ceiling')
             elif len(ids)==1:
                 candidate=c.execute(select(candidate_table).where(candidate_table.c.id==ids[0]).with_for_update()).mappings().first()
+                from .service import email_contacts
                 attempts=c.execute(select(personalization_attempts.c.status).where(personalization_attempts.c.candidate_id==ids[0])).scalars().all()
                 if (not candidate or candidate['name'].strip().casefold()=='semolina kitchen + bar' or ids[0]=='osm:0049f46cc4ea2f170b9628b0'
                     or candidate['fixture'] or candidate['suppressed'] or candidate['website_status']!='VERIFIED'
@@ -1270,6 +1290,8 @@ def create_app(database=None):
                     or candidate['personalization_status']=='READY' or candidate['personalization_analysis_version']=='semantic-openai-v1'
                     or (candidate['personalization_retry_after'] and candidate['personalization_retry_after']>now())
                     or (candidate['personalization_lease_until'] and candidate['personalization_lease_until']>now())
+                    or not c.scalar(select(func.count()).select_from(candidate_table).where(
+                        candidate_table.c.id==ids[0],exists(select(contact_table.c.id).where(email_contacts()))))
                     or any(status in {'UNKNOWN_SPEND','RESERVED'} for status in attempts)
                     or c.scalar(select(func.count()).select_from(invitations).where(invitations.c.candidate_id==ids[0]))
                     or ids[0] not in _existing_100_manifest_ids(c)):
@@ -1295,24 +1317,13 @@ def create_app(database=None):
         if hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()!=grant['candidate_ids_sha256']:
             raise ValueError('Approved candidate manifest integrity check failed')
         single_pilot=len(ids)==1
+        from .personalization_batch import eligibility
         grant_budget=Decimal(grant['total_budget_usd'])
         if not grant_budget.is_finite() or (single_pilot and not Decimal('0')<grant_budget<=Decimal('0.05')) or (not single_pilot and not Decimal('0.25')<grant_budget<=Decimal('5.00')):
             raise ValueError('Persisted authorization has an invalid spending limit for its candidate scope')
         with db.transaction() as c:
-            pending=c.execute(select(candidate_table.c.id).where(candidate_table.c.id.in_(ids),
-                candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
-                candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
-                candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
-                candidate_table.c.personalization_status!='READY',
-                candidate_table.c.personalization_analysis_version.is_(None),
-                (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
-                (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
-                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists(),
-                (candidate_table.c.id.in_(ids) if single_pilot else True),
-                candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
-                (~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
-                    personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists())
-                ).order_by(candidate_table.c.id).limit(1 if single_pilot else 5)).scalars().all()
+            pending=c.execute(select(candidate_table.c.id).where(eligibility(ids))
+                .order_by(candidate_table.c.id).limit(1 if single_pilot else 5)).scalars().all()
             if single_pilot and ids[0] not in _existing_100_manifest_ids(c):
                 raise ValueError('Authorized candidate is no longer part of an intact saved 100-ID manifest')
         if not pending:return {'status':'COMPLETED','attempted':0,'completed':0,'remaining':0,'invitations_created':0}
@@ -1325,17 +1336,7 @@ def create_app(database=None):
         with db.transaction() as c:
             ready=c.scalar(select(func.count()).select_from(candidate_table).where(candidate_table.c.id.in_(ids),candidate_table.c.personalization_status=='READY'))
             result['remaining']=len(ids)-ready if single_pilot else 100-ready
-            result['eligible_remaining']=c.scalar(select(func.count()).select_from(candidate_table).where(
-                candidate_table.c.id.in_(ids),candidate_table.c.kind.in_(['company','hotel']),candidate_table.c.fixture.is_(False),
-                candidate_table.c.suppressed.is_(False),candidate_table.c.website_status=='VERIFIED',
-                candidate_table.c.qualification.in_(['ELIGIBLE','QUALIFIED']),candidate_table.c.personalization_status!='READY',
-                candidate_table.c.personalization_analysis_version.is_(None),
-                (candidate_table.c.personalization_retry_after.is_(None)| (candidate_table.c.personalization_retry_after<=now())),
-                (candidate_table.c.personalization_lease_until.is_(None)| (candidate_table.c.personalization_lease_until<now())),
-                candidate_table.c.name!='Semolina Kitchen + Bar',candidate_table.c.id!='osm:0049f46cc4ea2f170b9628b0',
-                ~select(personalization_attempts.c.id).where(personalization_attempts.c.candidate_id==candidate_table.c.id,
-                    personalization_attempts.c.status.in_(['UNKNOWN_SPEND','RESERVED'])).exists(),
-                ~select(invitations.c.id).where(invitations.c.candidate_id==candidate_table.c.id).exists()))
+            result['eligible_remaining']=c.scalar(select(func.count()).select_from(candidate_table).where(eligibility(ids)))
         return result
 
     @app.get('/api/admin/personalization/replacement-cohort')

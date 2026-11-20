@@ -84,8 +84,12 @@ def _sql_evidence_matches_contact():
     pattern=(r'(^|[^a-z0-9_.+-])' + func.lower(contacts.c.email) + r'($|[^a-z0-9_.-]|[.](?:$|[\s,;:!?)]))')
     return func.lower(func.coalesce(contacts.c.evidence,'')).regexp_match(pattern)
 
-def email_contacts():
-    # This prefilter mirrors the material authorization gates used at preview and commit.
+def email_contact_evidence():
+    """Saved contact evidence that is first-party, exact-match, and general-purpose.
+
+    Verification freshness is deliberately separate so the ADMIN readiness view
+    can distinguish evidence awaiting verification from a genuinely missing email.
+    """
     first_party=or_(*[contacts.c.source_url.like(prefix+candidates.c.domain+'/%') for prefix in ('https://','http://','https://www.','http://www.')],
                     *[contacts.c.source_url==prefix+candidates.c.domain for prefix in ('https://','http://','https://www.','http://www.')])
     purpose=func.coalesce(contacts.c.purpose,'')
@@ -95,19 +99,51 @@ def email_contacts():
     placeholder=or_(*[contacts.c.email.ilike('%@'+term) for term in _PLACEHOLDER_HOSTS],
         contacts.c.email.ilike('%@example.%'),contacts.c.email.ilike('%@test.%'))
     fresh_after=(datetime.now(timezone.utc)-CONTACT_VERIFICATION_MAX_AGE).isoformat()
-    regular=and_(contacts.c.verification=='VERIFIED',contacts.c.verified_at.is_not(None),contacts.c.verified_at>=fresh_after,
-        supported,~restricted,~blocked_local,~placeholder,_sql_evidence_matches_contact())
-    fixture_owner=and_(candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED')
-    return and_(contacts.c.candidate_id==candidates.c.id,contacts.c.email.like('%@%.%'),contacts.c.email.not_like('% %'),contacts.c.suppressed.is_(False),
-                or_(regular,fixture_owner),
-                or_(first_party,fixture_owner),
-                ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
+    regular_evidence=and_(contacts.c.candidate_id==candidates.c.id,contacts.c.email.like('%@%.%'),
+        contacts.c.email.not_like('% %'),contacts.c.suppressed.is_(False),first_party,
+        supported,~restricted,~blocked_local,~placeholder,_sql_evidence_matches_contact(),
+        ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
+    return regular_evidence
+
+def email_contacts():
+    """Contacts currently authorized for invitation-oriented work."""
+    fresh_after=(datetime.now(timezone.utc)-CONTACT_VERIFICATION_MAX_AGE).isoformat()
+    fresh_before=(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()
+    regular=and_(email_contact_evidence(),contacts.c.verification=='VERIFIED',
+        contacts.c.verified_at.is_not(None),contacts.c.verified_at>=fresh_after,
+        contacts.c.verified_at<=fresh_before)
+    fixture_owner=and_(contacts.c.candidate_id==candidates.c.id,
+        candidates.c.fixture.is_(True),contacts.c.verification=='OWNER_AUTHORIZED',
+        contacts.c.email.like('%@%.%'),contacts.c.email.not_like('% %'),
+        contacts.c.suppressed.is_(False),
+        ~exists(select(suppressions.c.email).where(func.lower(suppressions.c.email)==func.lower(contacts.c.email))))
+    return or_(regular,fixture_owner)
 
 def completed_personalization():
     """The persisted semantic quality result is authoritative; legacy READY is a cache."""
     return and_(candidates.c.personalization_quality_status=='PASS',
         candidates.c.personalization_analysis_version=='semantic-openai-v1',
         candidates.c.personalization_version>0,candidates.c.fixture.is_(False))
+
+def contact_readiness_counts(db):
+    """Database-backed counts for the already-personalized real-business scope."""
+    scope=and_(candidates.c.kind.in_(['company','hotel']),candidates.c.fixture.is_(False),
+        candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+        candidates.c.suppressed.is_(False),candidates.c.personalization_quality_status=='PASS',
+        candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0)
+    ready=exists(select(contacts.c.id).where(email_contacts()))
+    evidence=exists(select(contacts.c.id).where(email_contact_evidence()))
+    with db.transaction() as c:
+        total=c.scalar(select(func.count()).select_from(candidates).where(scope)) or 0
+        verified=c.scalar(select(func.count()).select_from(candidates).where(scope,ready)) or 0
+        pending=c.scalar(select(func.count()).select_from(candidates).where(scope,~ready,evidence)) or 0
+        recovered=c.scalar(select(func.count(func.distinct(events.c.entity_id))).select_from(
+            events.join(candidates,events.c.entity_id==candidates.c.id)).where(
+                scope,events.c.event=='FIRST_PARTY_CONTACT_RECOVERED')) or 0
+    return {'scope':'COMPLETED_SEMANTIC_PASS_REAL_QUALIFIED_COMPANIES_AND_HOTELS',
+        'scope_count':int(total),'contact_verified':int(verified),
+        'contact_pending_verification':int(pending),
+        'contact_missing':max(0,int(total-verified-pending)),'contact_recovered':int(recovered)}
 
 def authorized_email_count():
     return select(func.count(func.distinct(func.lower(contacts.c.email)))).where(email_contacts()).correlate(candidates).scalar_subquery()
@@ -381,25 +417,17 @@ def contact_block_reasons(c,row,*,saved_contacts=None,suppressed_emails=None):
             reasons.append('Contact is for a restricted purpose and cannot be used for invitations')
     return list(dict.fromkeys(reasons)) or ['No saved email passed all contact authorization checks']
 
-def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
-    """Persist only an email visibly published on a verified same-site contact page."""
+def _inspect_first_party_contact_page(email,website,source_url,fetcher=None):
+    """Verify one saved address against a bounded live official-site page."""
     import html as html_lib
     from bs4 import BeautifulSoup
     from .personalization import fetch_page
     fetcher=fetcher or fetch_page
     normalized=(email or '').strip().casefold()
     if not EMAIL.fullmatch(normalized):raise ValueError('A valid email address is required')
-    with db.transaction() as c:
-        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().first()
-        if not row:raise LookupError('Candidate not found')
-        row=dict(row)
-        if row.get('fixture') or row.get('suppressed') or row.get('website_status')!='VERIFIED':
-            raise ValueError('Contact discovery requires a real, unsuppressed candidate with verified website identity')
-        if not same_site(row['website'],source_url):raise ValueError('Contact evidence must come from the verified business website')
-        if c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==normalized)):
-            raise ValueError('Email is on the global suppression list')
+    if not same_site(website,source_url):raise ValueError('Contact evidence must come from the verified business website')
     final_url,raw_html,truncated=fetcher(source_url)
-    if truncated or not same_site(row['website'],final_url):raise ValueError('Contact page was truncated or redirected outside the verified business website')
+    if truncated or not same_site(website,final_url):raise ValueError('Contact page was truncated or redirected outside the verified business website')
     soup=BeautifulSoup(raw_html,'html.parser')
     mailto={html_lib.unescape(a.get('href','')[7:].split('?',1)[0]).strip().casefold()
         for a in soup.select('a[href^="mailto:"]')}
@@ -427,10 +455,28 @@ def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
     checksum=hashlib.sha256(raw_html.encode('utf-8')).hexdigest();verified_at=now()
     verification_reason='Live bounded same-site page fetch; exact address visible; robots and redirect checks passed.'
     authorization_reason='Exact address matched visible official-site evidence; page context identifies general business inquiries; no suppression matched.'
+    return {'email':normalized,'source_url':final_url,'evidence':evidence,'source_checksum':checksum,
+        'source_ref':'first-party-contact-page:'+parsed.netloc+parsed.path,'verified_at':verified_at,
+        'verification_reason':verification_reason,'authorization_reason':authorization_reason}
+
+def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
+    """Persist only an email visibly published on a verified same-site contact page."""
+    normalized=(email or '').strip().casefold()
+    if not EMAIL.fullmatch(normalized):raise ValueError('A valid email address is required')
+    with db.transaction() as c:
+        row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().first()
+        if not row:raise LookupError('Candidate not found')
+        row=dict(row)
+        if row.get('fixture') or row.get('suppressed') or row.get('website_status')!='VERIFIED':
+            raise ValueError('Contact discovery requires a real, unsuppressed candidate with verified website identity')
+        if not same_site(row['website'],source_url):raise ValueError('Contact evidence must come from the verified business website')
+        if c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==normalized)):
+            raise ValueError('Email is on the global suppression list')
+    verified=_inspect_first_party_contact_page(normalized,row['website'],source_url,fetcher)
     contact_id='contact-'+uuid.uuid4().hex
     with db.transaction(serialized=True) as c:
         row=c.execute(select(candidates).where(candidates.c.id==ident)).mappings().first()
-        if not row or row['fixture'] or row['suppressed'] or row['website_status']!='VERIFIED' or not same_site(row['website'],final_url):
+        if not row or row['fixture'] or row['suppressed'] or row['website_status']!='VERIFIED' or not same_site(row['website'],verified['source_url']):
             raise ValueError('Candidate safety status changed during contact discovery')
         if c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==normalized)):
             raise ValueError('Email was suppressed during contact discovery')
@@ -438,18 +484,116 @@ def add_contact_from_first_party_page(db,ident,email,source_url,fetcher=None):
         if existing:
             raise ValueError('This candidate already has this contact; existing provenance was preserved')
         c.execute(contacts.insert().values(id=contact_id,candidate_id=ident,kind='EMAIL',email=normalized,
-            source_url=final_url,evidence=evidence,verification='VERIFIED',purpose='general business',suppressed=False,
-            source_ref='first-party-contact-page:'+parsed.netloc+parsed.path,source_checksum=checksum,
-            verified_at=verified_at,verification_reason=verification_reason,authorization_reason=authorization_reason,
-            raw=dump({'discovery':'BOUNDED_FIRST_PARTY_CONTACT_PAGE','source_url':final_url,'source_checksum':checksum,
-                'verified_at':verified_at,'verification_reason':verification_reason,
-                'authorization_reason':authorization_reason,'email_visible_on_page':True,'robots_respected':True})))
+            source_url=verified['source_url'],evidence=verified['evidence'],verification='VERIFIED',purpose='general business',suppressed=False,
+            source_ref=verified['source_ref'],source_checksum=verified['source_checksum'],
+            verified_at=verified['verified_at'],verification_reason=verified['verification_reason'],authorization_reason=verified['authorization_reason'],
+            raw=dump({'discovery':'BOUNDED_FIRST_PARTY_CONTACT_PAGE','source_url':verified['source_url'],'source_checksum':verified['source_checksum'],
+                'verified_at':verified['verified_at'],'verification_reason':verified['verification_reason'],
+                'authorization_reason':verified['authorization_reason'],'email_visible_on_page':True,'robots_respected':True})))
         c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='FIRST_PARTY_CONTACT_DISCOVERED',
-            detail=dump({'contact_id':contact_id,'source_url':final_url,'source_checksum':checksum,
+            detail=dump({'contact_id':contact_id,'source_url':verified['source_url'],'source_checksum':verified['source_checksum'],
                 'email_sha256':hashlib.sha256(normalized.encode()).hexdigest(),'purpose':'general business'}),created_at=now()))
-    return {'contact_id':contact_id,'candidate_id':ident,'email':normalized,'source_url':final_url,
-        'verification':'VERIFIED','purpose':'general business','source_checksum':checksum,'verified_at':verified_at,
-        'verification_reason':verification_reason,'authorization_reason':authorization_reason}
+    return {'contact_id':contact_id,'candidate_id':ident,'email':normalized,
+        'verification':'VERIFIED','purpose':'general business',**verified}
+
+def recover_saved_first_party_contacts(db,limit=25,fetcher=None):
+    """Recheck saved, provenance-backed emails for a bounded personalized scope.
+
+    No address is guessed or discovered from scratch. The exact saved address
+    and source URL must first match preserved evidence and checksums, then the
+    current official page is fetched with the existing robots/redirect/SSRF
+    policy before VERIFIED is written.
+    """
+    if not isinstance(limit,int) or not 1<=limit<=25:
+        raise ValueError('Contact recovery is bounded to 1–25 candidates per invocation')
+    scope=and_(candidates.c.kind.in_(['company','hotel']),candidates.c.fixture.is_(False),
+        candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+        candidates.c.suppressed.is_(False),candidates.c.personalization_quality_status=='PASS',
+        candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0,
+        ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
+    has_ready=exists(select(contacts.c.id).where(email_contacts()))
+    # Existing page checksum and source reference are mandatory before a live
+    # refresh; imported addresses without those provenance fields stay pending.
+    provenance=and_(email_contact_evidence(),contacts.c.source_ref.is_not(None),
+        contacts.c.source_checksum.regexp_match(r'^[0-9a-fA-F]{64}$'))
+    recoverable_contact=exists(select(contacts.c.id).where(provenance))
+    with db.transaction() as c:
+        candidate_ids=c.execute(select(candidates.c.id).where(
+            scope,~has_ready,recoverable_contact).order_by(candidates.c.id).limit(limit)).scalars().all()
+        rows=c.execute(select(candidates.c.id.label('candidate_id'),candidates.c.website,
+            contacts.c.id.label('contact_id'),contacts.c.email,contacts.c.source_url,
+            contacts.c.source_ref,contacts.c.source_checksum,contacts.c.evidence,
+            contacts.c.verification,contacts.c.verified_at)
+            .select_from(candidates.join(contacts,contacts.c.candidate_id==candidates.c.id))
+            .where(candidates.c.id.in_(candidate_ids),provenance)
+            .order_by(candidates.c.id,contacts.c.id)).mappings().all()
+    selected=[];seen=set()
+    for row in rows:
+        if row['candidate_id'] in seen:continue
+        seen.add(row['candidate_id']);selected.append(dict(row))
+        if len(selected)>=limit:break
+    outcomes=[]
+    for saved in selected:
+        try:
+            verified=_inspect_first_party_contact_page(saved['email'],saved['website'],saved['source_url'],fetcher)
+            email=saved['email'].strip().casefold()
+            with db.transaction(serialized=True) as c:
+                candidate_row=c.execute(select(candidates).where(candidates.c.id==saved['candidate_id']).with_for_update()).mappings().first()
+                contact_row=c.execute(select(contacts).where(contacts.c.id==saved['contact_id'],
+                    contacts.c.candidate_id==saved['candidate_id']).with_for_update()).mappings().first()
+                if (not candidate_row or not contact_row or candidate_row['fixture'] or candidate_row['suppressed']
+                    or candidate_row['website_status']!='VERIFIED'
+                    or candidate_row['qualification'] not in {'ELIGIBLE','QUALIFIED'}
+                    or candidate_row['personalization_quality_status']!='PASS'
+                    or candidate_row['personalization_analysis_version']!='semantic-openai-v1'
+                    or c.scalar(select(func.count()).select_from(invitations).where(
+                        invitations.c.candidate_id==saved['candidate_id']))):
+                    raise ValueError('Candidate left the bounded contact-recovery scope during verification')
+                if c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email)):
+                    raise ValueError('Saved email became globally suppressed during verification')
+                if (contact_row['email'].strip().casefold()!=email
+                    or contact_row['source_ref']!=saved['source_ref']
+                    or contact_row['source_checksum']!=saved['source_checksum']
+                    or not exact_email_in_evidence(email,contact_row['evidence'])
+                    or not same_site(candidate_row['website'],verified['source_url'])):
+                    raise ValueError('Saved source identity or evidence changed during verification')
+                old_raw=parse(contact_row.get('raw')) if contact_row.get('raw') else {}
+                if not isinstance(old_raw,dict):old_raw={'prior_raw':old_raw}
+                history=list(old_raw.get('contact_reverification_history') or [])
+                history.append({'at':verified['verified_at'],'prior_verification':contact_row['verification'],
+                    'prior_verified_at':contact_row['verified_at'],'prior_source_url':contact_row['source_url'],
+                    'prior_source_ref':contact_row['source_ref'],'prior_source_checksum':contact_row['source_checksum'],
+                    'prior_evidence':contact_row['evidence'],
+                    'prior_evidence_sha256':hashlib.sha256((contact_row['evidence'] or '').encode()).hexdigest(),
+                    'new_source_url':verified['source_url'],'new_source_ref':verified['source_ref'],
+                    'new_source_checksum':verified['source_checksum']})
+                old_raw['contact_reverification_history']=history
+                old_raw.update({'discovery':'BOUNDED_FIRST_PARTY_CONTACT_REVERIFICATION',
+                    'source_url':verified['source_url'],'source_checksum':verified['source_checksum'],
+                    'verified_at':verified['verified_at'],'verification_reason':verified['verification_reason'],
+                    'authorization_reason':verified['authorization_reason'],'email_visible_on_page':True,
+                    'robots_respected':True})
+                c.execute(contacts.update().where(contacts.c.id==saved['contact_id']).values(
+                    source_url=verified['source_url'],evidence=verified['evidence'],verification='VERIFIED',
+                    purpose='general business',suppressed=False,source_ref=verified['source_ref'],
+                    source_checksum=verified['source_checksum'],verified_at=verified['verified_at'],
+                    verification_reason=verified['verification_reason'],authorization_reason=verified['authorization_reason'],
+                    raw=dump(old_raw)))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=saved['candidate_id'],
+                    event='FIRST_PARTY_CONTACT_RECOVERED',detail=dump({'contact_id':saved['contact_id'],
+                        'source_url':verified['source_url'],'source_ref':verified['source_ref'],
+                        'prior_source_checksum':saved['source_checksum'],'source_checksum':verified['source_checksum'],
+                        'email_sha256':hashlib.sha256(email.encode()).hexdigest(),
+                        'verification':'VERIFIED','method':'SAVED_EVIDENCE_THEN_LIVE_FIRST_PARTY_RECHECK'}),
+                    created_at=verified['verified_at']))
+            outcomes.append({'candidate_id':saved['candidate_id'],'contact_id':saved['contact_id'],
+                'status':'RECOVERED','source_checksum':verified['source_checksum']})
+        except Exception as exc:
+            outcomes.append({'candidate_id':saved['candidate_id'],'contact_id':saved['contact_id'],
+                'status':'PENDING_VERIFICATION','reason':str(exc)[:240]})
+    return {'status':'COMPLETED','scope_limit':limit,'examined':len(outcomes),
+        'recovered':sum(item['status']=='RECOVERED' for item in outcomes),
+        'pending':sum(item['status']=='PENDING_VERIFICATION' for item in outcomes),'outcomes':outcomes}
 
 def contact_readiness(c,row,*,contact_rows=None,suppressed_emails=None):
     """An invitation-contact check independent from semantic personalization."""
@@ -500,9 +644,9 @@ def eligible_recipient(c,row,recipient_choice=None,*,lookup=None):
 def select_pilot_cohort(c, limit=100):
     """Select an invitation-oriented cohort before paid personalization.
 
-    Require one independently first-party, verified business email and saved
-    source provenance at selection time. This check is separate from semantic
-    personalization eligibility and does not create invitations.
+    Require at least one independently first-party, verified business email and
+    saved source provenance at selection time. Multiple valid contacts are
+    allowed; no invitation recipient is selected until explicit batch review.
     """
     if limit != 100: raise ValueError('The professor pilot cohort is fixed at 100 companies')
     rows=c.execute(select(candidates).where(candidates.c.kind=='company',candidates.c.fixture.is_(False),
@@ -516,20 +660,19 @@ def select_pilot_cohort(c, limit=100):
     seen_domains={host(row.website) for row in prior_invitations if host(row.website)}
     seen_recipients={(row.recipient or '').strip().casefold() for row in prior_invitations if row.recipient}
     for item in rows:
-        row=dict(item);recipient=None;matching=[]
+        row=dict(item);matching=[]
         for contact in c.execute(select(contacts).where(contacts.c.candidate_id==row['id'])).mappings():
             email=(contact['email'] or '').strip().lower()
             suppressed=bool(c.scalar(select(suppressions.c.email).where(func.lower(suppressions.c.email)==email)))
             if contact_is_authorized(row,contact,suppressed=suppressed):matching.append(dict(contact))
-        if len(matching)==1:recipient=matching[0]['email'].strip().lower()
-        elif len(matching)>1:continue
+        options=sorted({contact['email'].strip().lower() for contact in matching})
+        available=[email for email in options if email not in seen_recipients]
         domain=host(row.get('website'))
-        if (not recipient or not domain or domain in seen_domains or recipient.casefold() in seen_recipients
-            or c.scalar(select(suppressions.c.email).where(suppressions.c.email==recipient))):
+        if (not available or not domain or domain in seen_domains):
             continue
         key=(row.get('industry') or 'Unclassified').strip() or 'Unclassified'
-        row['_cohort_contact']=matching[0]
-        by_industry.setdefault(key,[]).append((row,recipient,domain))
+        row['_cohort_contact_options']=matching
+        by_industry.setdefault(key,[]).append((row,available[0],domain))
     # Round-robin industries so a long single-industry run cannot monopolize the cohort.
     selected=[]
     industries=sorted(by_industry)
@@ -550,17 +693,23 @@ def select_pilot_cohort(c, limit=100):
 
 def cohort_member_snapshot(row):
     """Stable, reviewable cohort evidence snapshot; does not mutate candidate."""
-    contact=row['_cohort_contact']
+    contacts_for_candidate=row.get('_cohort_contact_options') or []
+    options=sorted({(contact.get('email') or '').strip().casefold() for contact in contacts_for_candidate})
+    contact=contacts_for_candidate[0] if len(contacts_for_candidate)==1 else None
     return {
         'criteria_version':'verified-company-cohort-v2',
         'candidate_id':row['id'],'company_name':row['name'],'business_description':row.get('description'),'industry':row.get('industry'),
         'location':row.get('location'),'website':row['website'],'website_status':row['website_status'],
         'qualification_status':row['qualification'],'suppressed':bool(row['suppressed']),
         'outreach_eligibility':'COHORT_ELIGIBLE_NOT_INVITATION_READY',
-        'business_email':contact['email'],'contact_kind':contact.get('kind'),'contact_purpose':contact.get('purpose'),
-        'contact_verification':contact['verification'],
-        'contact_source_url':contact['source_url'],'contact_evidence':contact['evidence'],
-        'contact_source_ref':contact.get('source_ref'),'contact_source_checksum':contact.get('source_checksum'),
+        'business_email':contact['email'] if contact else None,
+        'business_email_options':options,'recipient_selection_required':len(options)>1,
+        'contact_kind':contact.get('kind') if contact else None,'contact_purpose':contact.get('purpose') if contact else None,
+        'contact_verification':contact['verification'] if contact else 'MULTIPLE_VERIFIED_OPTIONS' if options else None,
+        'contact_source_url':contact.get('source_url') if contact else None,
+        'contact_evidence':contact.get('evidence') if contact else None,
+        'contact_source_ref':contact.get('source_ref') if contact else None,
+        'contact_source_checksum':contact.get('source_checksum') if contact else None,
         'candidate_source':row.get('source'),'candidate_source_ref':row.get('source_ref'),
         'candidate_source_checksum':row.get('source_checksum'),
         'personalization_status':('READY' if row.get('personalization_status')=='READY' and

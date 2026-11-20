@@ -289,6 +289,13 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         review=db.execute("SELECT decision,reviewer_email,reviewed_at,note FROM research_report_reviews WHERE report_id=? AND document_sha256=? ORDER BY reviewed_at DESC LIMIT 1",(report_id,digest or "")).fetchone()
                     self._json({"report_id":report_id,"status":report["status"],"document_sha256":digest,
                         "decision":review["decision"] if review else "PENDING_REVIEW","review":dict(review) if review else None});return
+            if parsed.path == "/api/research/contact-readiness":
+                try:
+                    from outreach_agent.contact_recovery import contact_readiness_summary
+                    self._json(contact_readiness_summary(REGISTRY_DB))
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    self._json({"error": str(exc)}, 400)
+                return
             if parsed.path == "/api/public/summary":
                 self._json({"error": "dashboard authentication required"}, 401)
                 return
@@ -718,13 +725,42 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     )
                     self._json(result, 200 if result.get("status") == "EXISTING" else 201)
                     return
+                if parsed.path == "/api/recruitment/contact-options":
+                    profile_ids = list(dict.fromkeys(str(value).strip() for value in (body.get("profile_ids") or []) if str(value).strip()))
+                    if not profile_ids or len(profile_ids) > 500:
+                        self._json({"error": "select between 1 and 500 companies"}, 400)
+                        return
+                    from outreach_agent.contact_eligibility import verified_business_email_channels
+                    recipients, names = {}, {}
+                    for profile_id in profile_ids:
+                        try:
+                            record = get_record(profile_id, REGISTRY_DB)
+                        except (KeyError, ValueError):
+                            recipients[profile_id] = []
+                            continue
+                        names[profile_id] = record.get("name") or profile_id
+                        recipients[profile_id] = sorted({str(item["email"]).strip().casefold() for item in verified_business_email_channels(record)})
+                    self._json({"recipients": recipients, "names": names})
+                    return
                 if parsed.path == "/api/recruitment/batch-generate":
                     secret = os.environ.get("RESEARCH_QUESTIONNAIRE_SECRET")
                     if not secret:
                         self._json({"error": "Batch invitation drafting requires RESEARCH_QUESTIONNAIRE_SECRET"}, 503)
                         return
                     try:
-                        result = generate_invitation_batch([str(value) for value in (body.get("profile_ids") or [])], secret=secret, path=REGISTRY_DB)
+                        result = generate_invitation_batch(
+                            [str(value) for value in (body.get("profile_ids") or [])], secret=secret, path=REGISTRY_DB,
+                            recipient_selections={str(k): str(v) for k, v in (body.get("recipient_selections") or {}).items()},
+                        )
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        self._json({"error": str(exc)}, 400)
+                        return
+                    self._json(result, 200)
+                    return
+                if parsed.path == "/api/research/contact-recovery":
+                    try:
+                        from outreach_agent.contact_recovery import recover_personalized_contacts
+                        result = recover_personalized_contacts(REGISTRY_DB, limit=int(body.get("limit", 25)))
                     except (ValueError, OSError, sqlite3.Error) as exc:
                         self._json({"error": str(exc)}, 400)
                         return
@@ -744,10 +780,13 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                         return
                     from outreach_agent.research_lifecycle import stored_invitation_personalization
                     from outreach_agent.geo_engine_handoff import OWNER_FIXTURES
+                    from outreach_agent.contact_eligibility import verified_business_email_channels
                     eligible, excluded = [], []
                     for row in result["records"]:
                         try:
                             stored_invitation_personalization(row)
+                            if not verified_business_email_channels(row):
+                                raise PermissionError("no verified, evidence-matched first-party business email")
                             if row["profile_type"] == "owner_controlled_test" and row["profile_id"] not in OWNER_FIXTURES:
                                 raise PermissionError("owner fixture is not authorized for this run")
                             eligible.append(row["profile_id"])
@@ -842,9 +881,20 @@ def make_handler(data: dict, campaign_store: CampaignStore | None = None,
                     if not secret:
                         self._json({"error": "Questionnaire invitations are disabled until RESEARCH_QUESTIONNAIRE_SECRET is configured"}, 503)
                         return
-                    invitation_id, token = create_questionnaire_invitation(str(body["profile_id"]), secret=secret, path=REGISTRY_DB, expires_at=body.get("expires_at"))
-                    reference = get_invitation_reference(invitation_id, path=REGISTRY_DB)
-                    self._json({"invitation_id": invitation_id, "invitation_reference": reference, "questionnaire_url": prefilled_form_url(reference), "status": "INVITED"}, 201)
+                    from outreach_agent.contact_eligibility import verified_business_email_channels
+                    profile_id = str(body["profile_id"])
+                    record = get_record(profile_id, REGISTRY_DB)
+                    eligible = {str(item["email"]).strip().casefold() for item in verified_business_email_channels(record)}
+                    recipient = str(body.get("delivery_recipient") or "").strip().casefold()
+                    if len(eligible) > 1 and not recipient:
+                        self._json({"error": "choose an explicit verified invitation recipient", "recipients": sorted(eligible)}, 409)
+                        return
+                    recipient = recipient or (next(iter(eligible)) if eligible else "")
+                    if not recipient or recipient not in eligible:
+                        self._json({"error": "a verified, evidence-matched first-party business email is required"}, 409)
+                        return
+                    result = create_manual_invitation_draft(profile_id, delivery_recipient=recipient, secret=secret, path=REGISTRY_DB, expires_at=body.get("expires_at"))
+                    self._json(result, 200 if result.get("status") == "EXISTING" else 201)
                     return
                 if parsed.path == "/api/recruitment/approve-batch":
                     self._json(approve_email_batch(list(body.get("draft_ids") or []), str(body.get("reviewer") or ""), path=REGISTRY_DB))

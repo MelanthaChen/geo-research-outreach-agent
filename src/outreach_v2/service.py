@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64,binascii,hashlib,json,secrets,uuid
+from collections import Counter
 import re
 from datetime import datetime,timedelta,timezone
 from urllib.parse import urlparse
@@ -274,11 +275,26 @@ def _invitation_state_from_records(invitation,batch,*,provider_confirmed=False,m
     if batch and batch.get('first_downloaded_at'):return 'INVITATION_EXPORTED'
     return 'INVITATION_DRAFT'
 
+def invitation_state_rows_query(batch_id=None):
+    """Return one normalized state per invitation for portable aggregation.
+
+    The state expression contains correlated EXISTS predicates and bound CASE
+    values. Grouping by that expression makes PostgreSQL receive different
+    bind parameters in SELECT and GROUP BY, so the expressions are not
+    structurally identical. Aggregate the returned state strings in Python.
+    """
+    query=select(invitation_state_expression().label('state')).select_from(
+        invitations.join(batches,invitations.c.batch_id==batches.c.id))
+    if batch_id is not None:
+        query=query.where(invitations.c.batch_id==batch_id)
+    return query
+
+def invitation_state_counts(connection,batch_id=None):
+    return Counter(state for state in connection.execute(
+        invitation_state_rows_query(batch_id)).scalars().all() if state is not None)
+
 def batch_invitation_state_summary(connection,batch_id):
-    grouped=connection.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
-        .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
-        .where(invitations.c.batch_id==batch_id).group_by(invitation_state_expression())).all()
-    counts={row.state:int(row.count) for row in grouped}
+    counts=invitation_state_counts(connection,batch_id)
     total=sum(counts.values())
     if not total:return 'INVITATION_DRAFT'
     sent=counts.get('INVITATION_MANUALLY_SENT',0)+counts.get('INVITATION_PROVIDER_SENT',0)
@@ -1127,11 +1143,9 @@ def invitation_history_reconciliation(db):
     """
     with db.transaction() as c:
         invitations_by_state={key:0 for key in INVITATION_STATES}
-        grouped=c.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
-            .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
-            .group_by(invitation_state_expression())).all()
-        for row in grouped:
-            if row.state in invitations_by_state:invitations_by_state[row.state]=row.count
+        counts=invitation_state_counts(c)
+        for state,count in counts.items():
+            if state in invitations_by_state:invitations_by_state[state]=count
         batch_rows=c.execute(select(batches.c.id,batches.c.send_status,batches.c.send_evidence,
             batches.c.send_recorded_at,batches.c.pilot_review_status,batches.c.discarded_at,
             batches.c.first_downloaded_at,invitation_generation_batches.c.status.label('generation_status'))

@@ -3608,6 +3608,23 @@ def test_legacy_send_labels_without_evidence_are_normalized_but_real_audit_evide
     assert report['invitation_records']['INVITATION_MANUALLY_SENT'] == 0
 
 
+def test_postgres_lifecycle_status_queries_avoid_grouping_bound_case_expression(db,monkeypatch):
+    from sqlalchemy.dialects import postgresql
+    from outreach_v2.service import invitation_state_rows_query,invitation_history_reconciliation
+    candidate(db,ident='lifecycle-query-portability',email='public@portable.org',
+        website='https://portable.example',name='Lifecycle Query Portability')
+    batch=invite(db,['lifecycle-query-portability'],key='lifecycle-query-portability-key')
+    statement=str(invitation_state_rows_query(batch['id']).compile(dialect=postgresql.dialect())).upper()
+    assert 'GROUP BY' not in statement
+    client,_=_invitation_api_client(db,monkeypatch)
+    listing=client.get('/api/batches')
+    assert listing.status_code==200
+    assert listing.json()['rows'][0]['invitation_counts']=={'INVITATION_PENDING_REVIEW':1}
+    reconciliation=client.get('/api/admin/invitations/reconciliation')
+    assert reconciliation.status_code==200
+    assert reconciliation.json()['invitation_records']['INVITATION_PENDING_REVIEW']==1
+
+
 def test_legacy_manual_send_can_be_corrected_without_removing_original_audit(db, monkeypatch):
     from outreach_v2.service import invitation_history_reconciliation
     candidate(db, ident='legacy-manual-send', email='legacy-manual@status.org', website='https://legacy-status.example',

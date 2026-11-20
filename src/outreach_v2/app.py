@@ -411,10 +411,7 @@ def create_app(database=None):
             for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings():
                 item=dict(r)
                 item['send_status']=service.batch_invitation_state_summary(c,item['id'])
-                item['invitation_counts']={state:int(count) for state,count in c.execute(select(
-                    service.invitation_state_expression().label('state'),func.count().label('count')).select_from(
-                    invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
-                    invitations.c.batch_id==item['id']).group_by(service.invitation_state_expression())).all()}
+                item['invitation_counts']=dict(service.invitation_state_counts(c,item['id']))
                 rows.append(item)
             return {'rows':rows}
     @app.get('/api/batches/{ident}/generation')

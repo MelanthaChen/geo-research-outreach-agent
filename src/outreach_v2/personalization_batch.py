@@ -10,10 +10,11 @@ from decimal import Decimal
 
 from sqlalchemy import and_, exists, func, or_, select
 
-from .db import (candidates, events, invitations, now, personalization_attempts,
+from .db import (candidates, contacts, events, invitations, now, personalization_attempts,
     personalization_authorizations, personalization_campaigns)
 from .replay_policy import replay_allowed_for_contract
 from .screening_campaign import OPEN_ENDED_BUDGET, ids_sha256, EXPECTED_SOURCE_SHA256, EXPECTED_SOURCE_COUNT
+from .service import email_contact_evidence, email_contacts
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
@@ -219,6 +220,10 @@ def eligibility(ids, stamp=None):
         # persisted semantic version is complete for this GPT cohort.
         not_semantically_complete,
         retry_state,
+        # Invitation-oriented personalization must not spend before a currently
+        # authorized first-party business email is available. This is a selector
+        # gate; manifest membership and prior personalization remain unchanged.
+        exists(select(contacts.c.id).where(email_contacts())),
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until <= stamp),
         ~exists(select(invitations.c.id).where(invitations.c.candidate_id == candidates.c.id)),
         ~exists(select(personalization_attempts.c.id).where(
@@ -247,6 +252,16 @@ def progress(db, grant, ids):
             if item.status in {'RESERVED', 'UNKNOWN_SPEND'}:
                 unresolved += max(cost, Decimal(str(item.reserved_usd or 0)))
         eligible = c.scalar(select(func.count()).select_from(candidates).where(eligibility(ids))) or 0
+        ready_contact = exists(select(contacts.c.id).where(email_contacts()))
+        saved_evidence = exists(select(contacts.c.id).where(email_contact_evidence()))
+        contact_ready_count = c.scalar(select(func.count()).select_from(candidates).where(
+            candidates.c.id.in_(ids), ready_contact)) or 0
+        contact_pending_count = c.scalar(select(func.count()).select_from(candidates).where(
+            candidates.c.id.in_(ids), ~ready_contact, saved_evidence)) or 0
+        manifest_count = c.scalar(select(func.count()).select_from(candidates).where(
+            candidates.c.id.in_(ids))) or 0
+        recovered_count = c.scalar(select(func.count(func.distinct(events.c.entity_id))).where(
+            events.c.entity_id.in_(ids), events.c.event == 'FIRST_PARTY_CONTACT_RECOVERED')) or 0
         status = grant['status']
         checkpoint = c.execute(select(events.c.created_at, events.c.detail).where(
             events.c.entity_id == grant['id'],
@@ -281,6 +296,10 @@ def progress(db, grant, ids):
             continue
     return {'authorization_id': grant['id'], 'status': status, 'candidate_count': len(ids),
         'processed': int(passed + failed), 'eligible_remaining': int(eligible),
+        'contact_verified': int(contact_ready_count),
+        'contact_missing': max(0, int(manifest_count-contact_ready_count-contact_pending_count)),
+        'contact_pending_verification': int(contact_pending_count),
+        'contact_recovered': int(recovered_count),
         'quality_pass': int(passed), 'quality_fail': int(failed), 'provider_attempts': int(attempts),
         'actual_cost_usd': str(actual), 'unresolved_reserved_usd': str(unresolved),
         'total_budget_cap_usd': str(grant['total_budget_usd']), 'candidate_ids_sha256': grant['candidate_ids_sha256'],
@@ -297,6 +316,25 @@ def progress(db, grant, ids):
                 and (detail.get('last_batch') or {}).get('attempted') == 0
                 and (detail.get('last_batch') or {}).get('completed') == 0)(json.loads(no_progress['detail']))),
         'next_retry_at': min(future_retries).isoformat() if future_retries else None}
+
+
+def _record_contact_deferrals(db, authorization_id, ids):
+    """Record contact blockers without altering immutable campaign membership."""
+    ready_contact = exists(select(contacts.c.id).where(email_contacts()))
+    saved_evidence = exists(select(contacts.c.id).where(email_contact_evidence()))
+    with db.transaction(serialized=True) as c:
+        rows = c.execute(select(candidates.c.id, saved_evidence.label('has_evidence')).where(
+            candidates.c.id.in_(ids), ~ready_contact)).all()
+        for candidate_id, has_evidence in rows:
+            event_id=f'contact-deferred:{authorization_id}:{candidate_id}'
+            if c.scalar(select(events.c.id).where(events.c.id==event_id)):
+                continue
+            reason='CONTACT_PENDING_VERIFICATION' if has_evidence else 'CONTACT_MISSING'
+            c.execute(events.insert().values(id=event_id,entity_id=candidate_id,
+                event='PERSONALIZATION_CONTACT_DEFERRED',
+                detail=json.dumps({'authorization_id':authorization_id,'reason':reason,
+                    'manifest_membership_preserved':True,'paid_personalization_started':False},
+                    sort_keys=True,separators=(',',':')),created_at=now()))
 
 
 def is_active(ident):
@@ -411,6 +449,7 @@ def _run_locked(db, ident):
                 next_ids = c.execute(select(candidates.c.id).where(eligibility(ids)).order_by(
                     candidates.c.personalization_at.asc().nulls_first(), candidates.c.id).limit(BATCH_SIZE)).scalars().all()
             if not next_ids:
+                _record_contact_deferrals(db, ident, ids)
                 delay = _retry_wait(db, ids)
                 if delay is not None:
                     with db.transaction() as c:

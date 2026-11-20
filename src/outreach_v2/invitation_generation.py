@@ -182,8 +182,8 @@ def process_one(db, *, chunk_size=DEFAULT_CHUNK_SIZE, batch_id=None):
                 recipient, reasons = service.eligible_recipient(c, row, frozen.get('recipient_choice'), lookup=lookup)
                 if recipient != item['recipient'] or reasons:
                     reason = '; '.join(reasons) or 'Authorized recipient changed after review'
-                elif item['recipient'].strip().casefold() in lookup['existing_invited_recipients']:
-                    reason = 'Recipient already has an invitation; duplicate generation is blocked'
+                elif item['recipient'].strip().casefold() in lookup['confirmed_sent_recipients']:
+                    reason = 'Recipient already has a confirmed sent invitation; duplicate generation is blocked'
             if reason:
                 item_updates.append({'_item_id':item['id'],'_status':'SKIPPED',
                     '_invitation_id':None,'_error':reason})
@@ -198,8 +198,6 @@ def process_one(db, *, chunk_size=DEFAULT_CHUNK_SIZE, batch_id=None):
             item_updates.append({'_item_id':item['id'],'_status':'GENERATED',
                 '_invitation_id':invitation['id'],'_error':None})
             generated.append(invitation)
-            lookup['candidate_ids_with_invitations'].add(row['id'])
-            lookup['existing_invited_recipients'].add(item['recipient'].strip().casefold())
         # Keep all chunk writes in the existing transaction, but send rows to
         # the database as executemany batches instead of one round trip per
         # invitation and per item. A database error still rolls back the whole

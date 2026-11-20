@@ -54,7 +54,7 @@ batches = table('batches', col('id', String, primary_key=True), col('request_key
     col('discarded_at'), col('discarded_by'), col('discard_reason'), col('first_downloaded_at'), col('last_downloaded_at'),col('last_downloaded_by'),
     col('download_count', Integer, nullable=False, default=0, server_default='0'))
 invitations = table('invitations', col('id', String, primary_key=True),
-    Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), unique=True, nullable=False),
+    Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), nullable=False, index=True),
     Column('batch_id', String, ForeignKey(f'{SCHEMA}.batches.id'), nullable=False, index=True),
     col('reference', String, unique=True, nullable=False), col('recipient', String, nullable=False),
     col('website', nullable=False), col('company_name', nullable=False), col('subject'), col('body'), col('form_url'),
@@ -222,7 +222,7 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'invitations': {'manual_sent_at': 'TEXT', 'manual_sent_by': 'TEXT', 'manual_send_note': 'TEXT',
         'manual_send_corrected_at':'TEXT','manual_send_corrected_by':'TEXT',
         'provider_message_id': 'TEXT'}
-})]
+}), (16, 'allow-versioned-unsent-invitation-drafts', {})]
 
 class Database:
     def __init__(self, url=None):
@@ -341,9 +341,89 @@ class Database:
                 # inside a transaction. Leave its version marker to that step.
                 if version == 12 and self.postgres:
                     continue
+                if version == 16:
+                    self._remove_unique_invitation_candidate(c)
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
         if self.postgres:
             self._apply_online_candidate_index_migration()
+
+    def _remove_unique_invitation_candidate(self, connection):
+        """Allow immutable draft versions while retaining candidate lookup indexes."""
+        column_names={column['name'] for column in inspect(connection).get_columns(
+            'invitations',schema=SCHEMA if self.postgres else None)}
+        # Some very old/import-only SQLite fixtures did not model invitation
+        # ownership. Leave those partial schemas untouched until their owner
+        # migration provides candidate_id.
+        if 'candidate_id' not in column_names:
+            return
+        if self.postgres:
+            quote = self.engine.dialect.identifier_preparer.quote
+            for constraint in inspect(connection).get_unique_constraints('invitations', schema=SCHEMA):
+                if constraint.get('column_names') == ['candidate_id']:
+                    connection.execute(text(
+                        f'ALTER TABLE {SCHEMA}.invitations DROP CONSTRAINT {quote(constraint["name"])}'))
+            # Older schemas may have implemented uniqueness as a standalone index.
+            for index in inspect(connection).get_indexes('invitations', schema=SCHEMA):
+                if index.get('unique') and index.get('column_names') == ['candidate_id']:
+                    connection.execute(text(f'DROP INDEX IF EXISTS {SCHEMA}.{quote(index["name"])}'))
+            indexes = inspect(connection).get_indexes('invitations', schema=SCHEMA)
+            if not any(index.get('column_names') == ['candidate_id'] for index in indexes):
+                connection.execute(text(f'CREATE INDEX ix_invitations_candidate_id ON {SCHEMA}.invitations (candidate_id)'))
+            return
+
+        inspector = inspect(connection)
+        unique = inspector.get_unique_constraints('invitations')
+        candidate_unique_constraint = any(item.get('column_names') == ['candidate_id'] for item in unique)
+        candidate_unique_indexes = [item for item in inspector.get_indexes('invitations')
+            if item.get('unique') and item.get('column_names') == ['candidate_id']]
+        if candidate_unique_indexes and not candidate_unique_constraint:
+            for index in candidate_unique_indexes:
+                connection.execute(text(f'DROP INDEX IF EXISTS "{index["name"]}"'))
+            candidate_unique_indexes=[]
+        if not candidate_unique_constraint:
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_invitations_candidate_id ON invitations (candidate_id)'))
+            return
+        # SQLite cannot drop a table constraint in place. Rebuild only this table,
+        # with foreign-key enforcement disabled by _initialization_connection,
+        # copying every historical field before swapping it back into place.
+        connection.execute(text('''CREATE TABLE invitations_v16_new (
+            id VARCHAR NOT NULL PRIMARY KEY,
+            candidate_id VARCHAR NOT NULL REFERENCES candidates(id),
+            batch_id VARCHAR NOT NULL REFERENCES batches(id),
+            reference VARCHAR NOT NULL UNIQUE,
+            recipient VARCHAR NOT NULL,
+            website TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            subject TEXT,
+            body TEXT,
+            form_url TEXT,
+            template_version TEXT,
+            questionnaire_id TEXT,
+            personalization TEXT,
+            generated_at TEXT,
+            exported_at TEXT,
+            send_status TEXT,
+            consent_status TEXT,
+            authority TEXT,
+            researcher_name TEXT,
+            university_affiliation TEXT,
+            reply_to TEXT,
+            sender_email TEXT,
+            sender_name TEXT,
+            manual_sent_at TEXT,
+            manual_sent_by TEXT,
+            manual_send_note TEXT,
+            manual_send_corrected_at TEXT,
+            manual_send_corrected_by TEXT,
+            provider_message_id TEXT
+        )'''))
+        columns = [column['name'] for column in inspect(connection).get_columns('invitations')]
+        names = ', '.join(f'"{name}"' for name in columns)
+        connection.execute(text(f'INSERT INTO invitations_v16_new ({names}) SELECT {names} FROM invitations'))
+        connection.execute(text('DROP TABLE invitations'))
+        connection.execute(text('ALTER TABLE invitations_v16_new RENAME TO invitations'))
+        connection.execute(text('CREATE INDEX ix_invitations_batch_id ON invitations (batch_id)'))
+        connection.execute(text('CREATE INDEX ix_invitations_candidate_id ON invitations (candidate_id)'))
 
     def _apply_online_candidate_index_migration(self):
         """Create the candidate ordering index without blocking campaign writes."""

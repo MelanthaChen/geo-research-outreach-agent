@@ -772,7 +772,9 @@ def _eligible_query(stamp, selected_ids=(), retry_candidate_ids=()):
         candidates.c.website_status == 'VERIFIED', candidates.c.qualification.in_(['ELIGIBLE', 'QUALIFIED']),
         candidates.c.suppressed.is_(False), personalization_state, retry_state,
         # Defense in depth: direct backfill and every batch mode share the same
-        # invitation-purpose verified-contact gate before any provider call.
+        # shared public-evidence contact gate before any provider call. The
+        # exact address, first-party provenance, business purpose, validity,
+        # and suppression checks are the same as invitation preparation.
         exists(select(contacts.c.id).where(email_contacts())),
         or_(candidates.c.personalization_lease_until.is_(None), candidates.c.personalization_lease_until < stamp),
         no_prior_invitation)

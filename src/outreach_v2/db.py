@@ -50,14 +50,18 @@ suppressions = table('suppressions', col('email', String, primary_key=True), col
 batches = table('batches', col('id', String, primary_key=True), col('request_key', String, unique=True, nullable=False),
     col('selection_hash', String, nullable=False), col('created_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
     col('send_evidence'), col('send_recorded_at'), col('excluded', default='[]'), col('package', LargeBinary), col('bulk_subject'),
-    col('pilot_review_status', String, default='NOT_REQUIRED'), col('pilot_review_sha256'), col('pilot_reviewed_by'), col('pilot_reviewed_at'))
+    col('pilot_review_status', String, default='NOT_REQUIRED'), col('pilot_review_sha256'), col('pilot_reviewed_by'), col('pilot_reviewed_at'),
+    col('discarded_at'), col('discarded_by'), col('discard_reason'), col('first_downloaded_at'), col('last_downloaded_at'),col('last_downloaded_by'),
+    col('download_count', Integer, nullable=False, default=0, server_default='0'))
 invitations = table('invitations', col('id', String, primary_key=True),
     Column('candidate_id', String, ForeignKey(f'{SCHEMA}.candidates.id'), unique=True, nullable=False),
     Column('batch_id', String, ForeignKey(f'{SCHEMA}.batches.id'), nullable=False, index=True),
     col('reference', String, unique=True, nullable=False), col('recipient', String, nullable=False),
     col('website', nullable=False), col('company_name', nullable=False), col('subject'), col('body'), col('form_url'),
     col('template_version'), col('questionnaire_id'), col('personalization'), col('generated_at'), col('exported_at'), col('send_status', default='UNVERIFIED'),
-    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'), col('researcher_name'), col('university_affiliation'), col('reply_to'), col('sender_email'), col('sender_name'))
+    col('consent_status', default='NOT_RECEIVED'), col('authority', default='{}'), col('researcher_name'), col('university_affiliation'), col('reply_to'), col('sender_email'), col('sender_name'),
+    col('manual_sent_at'), col('manual_sent_by'), col('manual_send_note'), col('manual_send_corrected_at'),
+    col('manual_send_corrected_by'), col('provider_message_id'))
 submissions = table('submissions', col('id', String, primary_key=True),
     Column('invitation_id', String, ForeignKey(f'{SCHEMA}.invitations.id'), index=True), col('reference'),
     col('interest'), col('authorization'), col('representative_name'), col('representative_role'), col('representative_email'),
@@ -211,7 +215,14 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'personalization_authorizations': {'campaign_id': 'TEXT'}
 }), (12, 'candidate-name-id-pagination-index', {}), (13, 'dated-evidence-backed-recipient-authorization', {
     'contacts': {'verified_at': 'TEXT', 'verification_reason': 'TEXT', 'authorization_reason': 'TEXT'}
-}), (14, 'durable-chunked-invitation-generation', {})]
+}), (14, 'durable-chunked-invitation-generation', {}), (15, 'audited-manual-invitation-lifecycle', {
+    'batches': {'discarded_at': 'TEXT', 'discarded_by': 'TEXT', 'discard_reason': 'TEXT',
+        'first_downloaded_at': 'TEXT', 'last_downloaded_at': 'TEXT', 'last_downloaded_by':'TEXT',
+        'download_count': "INTEGER NOT NULL DEFAULT 0"},
+    'invitations': {'manual_sent_at': 'TEXT', 'manual_sent_by': 'TEXT', 'manual_send_note': 'TEXT',
+        'manual_send_corrected_at':'TEXT','manual_send_corrected_by':'TEXT',
+        'provider_message_id': 'TEXT'}
+})]
 
 class Database:
     def __init__(self, url=None):

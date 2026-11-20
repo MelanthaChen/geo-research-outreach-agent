@@ -55,7 +55,7 @@ def build_package(invitations,excluded,bulk_subject):
         for paragraph in inv['body'].split('\n\n'):preview.add_paragraph(paragraph)
     rendered=io.BytesIO();preview.save(rendered)
     manifest={'template':'manual-invitation-v1/evidence-2','bulk_subject':bulk_subject,'columns':list(columns),
-              'status':'EXPORTED','sending_status':'UNVERIFIED','count':len(rows),
+              'status':'DRAFT_GENERATED','sending_status':'UNVERIFIED','count':len(rows),
               'invitations':[{k:row[k] for k in ('invitation_id','company_id','company_name','recipient_email','invitation_reference','questionnaire_url')} for row in rows],
               'excluded':excluded}
     output=io.BytesIO()

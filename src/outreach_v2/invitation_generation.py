@@ -136,7 +136,7 @@ def _invitation_row(row, recipient, template, questionnaire):
         reply_to=(template['reply_to'] if template else env.get('OUTREACH_REPLY_TO')),
         sender_name=(template.get('sender_name') if template else (env.get('OUTREACH_INVITATION_SENDER_NAME') or env.get('OUTREACH_RESEARCHER_NAME'))),
         sender_email=(template['sender'] if template else (env.get('OUTREACH_INVITATION_SENDER') or env.get('OUTREACH_REPLY_TO'))),
-        personalization=dump(p), generated_at=now(), exported_at=None, send_status='UNVERIFIED',
+        personalization=dump(p), generated_at=now(), exported_at=None, send_status='DRAFT_GENERATED',
         consent_status='NOT_RECEIVED', authority=dump(authority))
 
 
@@ -259,11 +259,11 @@ def process_one(db, *, chunk_size=DEFAULT_CHUNK_SIZE, batch_id=None):
         if current!='FINALIZING':
             return {'batch_id':batch_id,'status':current,'completed_items':total_items,'total_items':total_items}
         c.execute(batches.update().where(batches.c.id==batch_id).values(
-            package=package,excluded=dump(excluded),exported_at=now(),pilot_review_status='PENDING_REVIEW'))
+            package=package,excluded=dump(excluded),pilot_review_status='PENDING_REVIEW'))
         c.execute(invitation_generation_batches.update().where(
             invitation_generation_batches.c.batch_id==batch_id).values(
                 status=final_status,lease_token=None,lease_until=None,updated_at=now(),error=None))
-        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='EXPORTED',
+        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='INVITATION_BATCH_GENERATED',
             detail=dump({'count':len(package_rows),'excluded':len(excluded),'package_sha256':digest}),created_at=now()))
     return {'batch_id':batch_id,'status':final_status,'completed_items':total_items,
             'total_items':total_items,'invitation_count':len(package_rows),'package_sha256':digest}

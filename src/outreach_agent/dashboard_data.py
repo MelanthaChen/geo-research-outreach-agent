@@ -147,15 +147,24 @@ def _record(row: sqlite3.Row) -> dict[str, Any]:
 
 def _suitable_channel(company: dict[str, Any], contact: dict[str, Any]) -> bool:
     channel_type = contact.get("channel_type") or ""
-    if channel_type not in SUITABLE_CHANNEL_TYPES or contact.get("review_status") == "REJECTED":
+    if channel_type not in SUITABLE_CHANNEL_TYPES:
         return False
     source_url = contact.get("source_url") or contact.get("channel_url") or ""
     if not source_url or _domain(source_url) != company.get("normalized_domain"):
         return False
     if channel_type == "CONTACT_FORM":
-        return bool(contact.get("channel_url")) and _domain(contact["channel_url"]) == company.get("normalized_domain")
-    email = (contact.get("email") or "").strip()
-    return "@" in email and _domain("https://" + email.rsplit("@", 1)[-1]) == company.get("normalized_domain")
+        return (bool(contact.get("channel_url")) and _domain(contact["channel_url"]) == company.get("normalized_domain")
+                and str(contact.get("review_status") or "").upper() not in {"REJECTED", "SUPPRESSED", "INVALID"})
+    from outreach_agent.contact_eligibility import eligible_business_email_channels
+    website = company.get("website") or ("https://" + str(company.get("normalized_domain") or ""))
+    record = {
+        "identity_verification_status": company.get("identity_verification_status"),
+        "official_website": website,
+        "suppression_status": company.get("suppression_status"),
+        "contact_channels": [{**contact, "source_url": source_url,
+            "evidence": contact.get("evidence") or contact.get("evidence_text") or contact.get("purpose") or ""}],
+    }
+    return bool(eligible_business_email_channels(record))
 
 
 def _domain(url: str) -> str:

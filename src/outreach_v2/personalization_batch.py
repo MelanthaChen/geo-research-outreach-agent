@@ -14,7 +14,7 @@ from .db import (candidates, contacts, events, invitations, now, personalization
     personalization_authorizations, personalization_campaigns)
 from .replay_policy import replay_allowed_for_contract
 from .screening_campaign import OPEN_ENDED_BUDGET, ids_sha256, EXPECTED_SOURCE_SHA256, EXPECTED_SOURCE_COUNT
-from .service import email_contacts, invitation_contacts, verified_email_contacts
+from .service import email_contacts, invitation_contacts
 
 BATCH_SIZE = 5
 MAX_TOTAL_BUDGET_USD = Decimal('5.00')
@@ -253,17 +253,10 @@ def progress(db, grant, ids):
                 unresolved += max(cost, Decimal(str(item.reserved_usd or 0)))
         eligible = c.scalar(select(func.count()).select_from(candidates).where(eligibility(ids))) or 0
         eligible_contact = exists(select(contacts.c.id).where(invitation_contacts()))
-        verified_contact = exists(select(contacts.c.id).where(invitation_contacts(),verified_email_contacts()))
-        contact_ready_count = c.scalar(select(func.count()).select_from(candidates).where(
-            candidates.c.id.in_(ids), verified_contact)) or 0
         contact_eligible_count = c.scalar(select(func.count()).select_from(candidates).where(
             candidates.c.id.in_(ids), eligible_contact)) or 0
-        contact_pending_count = c.scalar(select(func.count()).select_from(candidates).where(
-            candidates.c.id.in_(ids), eligible_contact, ~verified_contact)) or 0
         manifest_count = c.scalar(select(func.count()).select_from(candidates).where(
             candidates.c.id.in_(ids))) or 0
-        recovered_count = c.scalar(select(func.count(func.distinct(events.c.entity_id))).where(
-            events.c.entity_id.in_(ids), events.c.event == 'FIRST_PARTY_CONTACT_RECOVERED')) or 0
         status = grant['status']
         checkpoint = c.execute(select(events.c.created_at, events.c.detail).where(
             events.c.entity_id == grant['id'],
@@ -298,11 +291,8 @@ def progress(db, grant, ids):
             continue
     return {'authorization_id': grant['id'], 'status': status, 'candidate_count': len(ids),
         'processed': int(passed + failed), 'eligible_remaining': int(eligible),
-        'contact_verified': int(contact_ready_count),
-        'contact_eligible': int(contact_eligible_count),
-        'contact_missing': max(0, int(manifest_count-contact_eligible_count)),
-        'contact_pending_verification': int(contact_pending_count),
-        'contact_recovered': int(recovered_count),
+        'eligible_for_invitation_drafting': int(contact_eligible_count),
+        'no_eligible_contact': max(0, int(manifest_count-contact_eligible_count)),
         'quality_pass': int(passed), 'quality_fail': int(failed), 'provider_attempts': int(attempts),
         'actual_cost_usd': str(actual), 'unresolved_reserved_usd': str(unresolved),
         'total_budget_cap_usd': str(grant['total_budget_usd']), 'candidate_ids_sha256': grant['candidate_ids_sha256'],

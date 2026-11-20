@@ -12,7 +12,7 @@ from outreach_agent.contact_eligibility import (
     contact_readiness_counts,
     evidence_fingerprint,
     first_party_business_email_evidence,
-    verified_business_email_channels,
+    eligible_business_email_channels,
 )
 from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, init_registry, now
 
@@ -129,5 +129,4 @@ def contact_readiness_summary(path: Any = REGISTRY_DB) -> dict[str, int]:
     _ensure_schema(path)
     with _connect(path) as db:
         rows = db.execute("SELECT * FROM research_records WHERE profile_type<>'owner_controlled_test'").fetchall()
-        recovered = db.execute("SELECT COUNT(DISTINCT profile_id) FROM contact_recovery_audit WHERE outcome='RECOVERED'").fetchone()[0]
-    return contact_readiness_counts([dict(row) for row in rows], recovered_count=int(recovered or 0))
+    return contact_readiness_counts([dict(row) for row in rows])

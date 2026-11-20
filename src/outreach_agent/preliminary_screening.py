@@ -22,7 +22,7 @@ from urllib.robotparser import RobotFileParser
 from urllib.request import Request, urlopen
 
 from outreach_agent.research_lifecycle import REGISTRY_DB, init_registry, now
-from outreach_agent.contact_eligibility import verified_business_email_channels
+from outreach_agent.contact_eligibility import eligible_business_email_channels
 
 
 SCREENING_VERSION = "preliminary-screening/v1"
@@ -144,7 +144,7 @@ def _channels(row: sqlite3.Row | dict) -> list[dict]:
 
 
 def _usable_channels(row: sqlite3.Row | dict) -> list[dict]:
-    return verified_business_email_channels(row)
+    return eligible_business_email_channels(row)
 
 
 def audit_readiness(path: Path = REGISTRY_DB) -> dict[str, object]:
@@ -162,7 +162,7 @@ def audit_readiness(path: Path = REGISTRY_DB) -> dict[str, object]:
         if row["qualification_status"] != "ELIGIBLE": reasons.append("NOT_ELIGIBLE_OR_NEEDS_REVIEW")
         # Company size is a soft prioritization signal, not a screening gate.
         channels = _usable_channels(row)
-        if not channels: reasons.append("NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")
+        if not channels: reasons.append("NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL")
         if not row["provenance_json"] or row["provenance_json"] in {"[]", "{}"}: reasons.append("MISSING_PROVENANCE")
         if row["consent_status"] in {"DECLINED", "WITHDRAWN"} or row["recruitment_status"] == "EXCLUDED": reasons.append("SUPPRESSED_OR_EXCLUDED")
         if row["screening_status"] not in {"COMPLETE", "SCREENING_COMPLETE"}: reasons.append("MISSING_PRELIMINARY_SCREENING")
@@ -175,12 +175,20 @@ def select_candidates(path: Path = REGISTRY_DB, *, limit: int = 25, profile_type
     if not 1 <= limit <= 250:
         raise ValueError("limit must be between 1 and 250")
     _schema(path)
-    where = ["identity_verification_status='VERIFIED'", "geographic_classification='VERIFIED_US'", "qualification_status='ELIGIBLE'", "official_website <> ''", "screening_status NOT IN ('COMPLETE','SCREENING_COMPLETE')", "profile_type <> 'owner_controlled_test'", "contact_verification_status='CONTACT_VERIFIED'", "suppression_status<>'SUPPRESSED'", "withdrawal_status<>'WITHDRAWN'", "consent_status NOT IN ('DECLINED','WITHDRAWN')", "recruitment_status NOT IN ('EXCLUDED','UNSUBSCRIBED')"]
+    where = ["identity_verification_status='VERIFIED'", "geographic_classification='VERIFIED_US'", "qualification_status='ELIGIBLE'", "official_website <> ''", "screening_status NOT IN ('COMPLETE','SCREENING_COMPLETE')", "profile_type <> 'owner_controlled_test'", "suppression_status<>'SUPPRESSED'", "withdrawal_status<>'WITHDRAWN'", "consent_status NOT IN ('DECLINED','WITHDRAWN')", "recruitment_status NOT IN ('EXCLUDED','UNSUBSCRIBED')"]
     args: list[str] = []
     if profile_type:
         where.append("profile_type=?"); args.append(profile_type)
+    selected: list[str] = []
     with sqlite3.connect(path) as db:
-        return [row[0] for row in db.execute("SELECT profile_id FROM research_records WHERE " + " AND ".join(where) + " ORDER BY updated_at,profile_id LIMIT ?", args + [limit])]
+        db.row_factory = sqlite3.Row
+        cursor = db.execute("SELECT * FROM research_records WHERE " + " AND ".join(where) + " ORDER BY updated_at,profile_id", args)
+        for row in cursor:
+            if eligible_business_email_channels(row):
+                selected.append(row["profile_id"])
+                if len(selected) >= limit:
+                    break
+    return selected
 
 
 def _fetch(url: str, config: ScreeningConfig, *, mock: bool, name: str, industry: str | None) -> tuple[list[dict[str, str]], dict[str, str]]:
@@ -229,8 +237,8 @@ def run_job(job_id: str, path: Path = REGISTRY_DB, *, provider: ScreeningProvide
             if pause_after is not None and processed >= pause_after:
                 db.execute("UPDATE screening_jobs SET status='PAUSED' WHERE job_id=?", (job_id,)); break
             try:
-                if not verified_business_email_channels(dict(item)):
-                    db.execute("UPDATE screening_queue SET status='BLOCKED_CONTACT_INELIGIBLE',last_error='Paid screening deferred: verified first-party business email is missing or no longer eligible' WHERE job_id=? AND profile_id=?", (job_id,item["profile_id"]))
+                if not eligible_business_email_channels(dict(item)):
+                    db.execute("UPDATE screening_queue SET status='BLOCKED_CONTACT_INELIGIBLE',last_error='Paid screening deferred: eligible first-party business email is missing or no longer supported by official-site evidence' WHERE job_id=? AND profile_id=?", (job_id,item["profile_id"]))
                     processed += 1
                     continue
                 if item["qualification_status"] != "ELIGIBLE" or item["geographic_classification"] != "VERIFIED_US" or item["suppression_status"] == "SUPPRESSED" or item["withdrawal_status"] == "WITHDRAWN" or item["consent_status"] in {"DECLINED","WITHDRAWN"} or item["recruitment_status"] in {"EXCLUDED","UNSUBSCRIBED"}:
@@ -271,7 +279,7 @@ def calculate_readiness(row: sqlite3.Row | dict, opportunities: list[dict]) -> t
     if row["qualification_status"] != "ELIGIBLE": reasons.append("NOT_ELIGIBLE_OR_NEEDS_REVIEW")
     # Company size remains available for ordering but is not required here.
     channels = _usable_channels(row)
-    if not channels: reasons.append("NO_VERIFIED_FIRST_PARTY_BUSINESS_EMAIL")
+    if not channels: reasons.append("NO_ELIGIBLE_FIRST_PARTY_BUSINESS_EMAIL")
     if not row["provenance_json"] or row["provenance_json"] in {"[]", "{}"}: reasons.append("MISSING_PROVENANCE")
     if row["consent_status"] in {"DECLINED", "WITHDRAWN"} or row["recruitment_status"] == "EXCLUDED": reasons.append("SUPPRESSED_OR_EXCLUDED")
     if not opportunities: reasons.append("NO_EVIDENCE_BACKED_OPPORTUNITY")

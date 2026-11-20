@@ -11,7 +11,7 @@ from outreach_agent.preliminary_screening import ScreeningConfig, _fetch, _hash
 from outreach_agent.outreach_pipeline import mail_merge_safe_subject
 from outreach_agent.research_lifecycle import REGISTRY_DB, _connect, get_record, now, persist_combined_screening_and_draft
 from outreach_agent.screening_provider import PROMPT_VERSION, call as call_ai, configured_provider
-from outreach_agent.contact_eligibility import verified_business_email_channels
+from outreach_agent.contact_eligibility import eligible_business_email_channels
 from outreach_agent.geographic_eligibility import is_us_eligible
 
 MODES = {"RULE_BASED", "LOCAL_LLM", "PAID_API"}
@@ -104,13 +104,13 @@ def run_combined_analysis(profile_id: str, *, mode: str = "RULE_BASED", recipien
         raise PermissionError("invitation personalization requires a qualified business")
     if record.get("suppression_status") == "SUPPRESSED" or record.get("withdrawal_status") == "WITHDRAWN" or record.get("consent_status") in {"DECLINED", "WITHDRAWN"} or record.get("recruitment_status") in {"EXCLUDED", "UNSUBSCRIBED"}:
         raise PermissionError("invitation personalization is blocked for suppressed or withdrawn records")
-    contacts = verified_business_email_channels(record)
-    verified_recipients = sorted({str(item["email"]).strip().casefold() for item in contacts})
+    contacts = eligible_business_email_channels(record)
+    eligible_recipients = sorted({str(item["email"]).strip().casefold() for item in contacts})
     selected_recipient = recipient.strip().casefold()
-    if not verified_recipients:
-        raise PermissionError("paid invitation personalization requires a verified, evidence-matched first-party business email")
-    if selected_recipient not in verified_recipients:
-        raise PermissionError("select a verified first-party recipient for this company before invitation personalization")
+    if not eligible_recipients:
+        raise PermissionError("paid invitation personalization requires an eligible first-party business email supported by official-site evidence")
+    if selected_recipient not in eligible_recipients:
+        raise PermissionError("select an eligible first-party recipient for this company before invitation personalization")
     cached = None if force_refetch else _cached_pages(profile_id, path)
     if cached:
         pages, prior = cached

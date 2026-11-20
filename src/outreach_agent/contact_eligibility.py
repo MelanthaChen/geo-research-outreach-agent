@@ -8,19 +8,15 @@ import re
 from urllib.parse import urlsplit
 from typing import Any
 
+from outreach_v2.contact_purpose import GENERAL_LABEL, classify_public_contact_purpose
 
 BUSINESS_EMAIL_TYPES = frozenset({
     "GENERAL_BUSINESS_EMAIL", "BUSINESS_DEVELOPMENT_EMAIL",
     "PARTNERSHIP_EMAIL", "SALES_MARKETING_EMAIL", "NAMED_PERSON_EMAIL",
 })
-VERIFIED_REVIEW_STATES = frozenset({"VERIFIED", "CONTACT_VERIFIED", "APPROVED"})
+BLOCKED_CONTACT_STATES = frozenset({"INVALID", "REJECTED", "SUPPRESSED", "BLOCKED", "UNSUBSCRIBED",
+    "MAYBE", "DO_NOT_USE", "UNSUITABLE"})
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-RESTRICTED_PURPOSE = re.compile(
-    r"\b(?:support|help\s*desk|technical\s*support|privacy|legal|abuse|security|dpo|hr|"
-    r"accessibility|billing|careers?|recruit(?:ing|ment)?|jobs?|customer\s+service)\b", re.I
-)
-
-
 def _json_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, str):
         try:
@@ -62,6 +58,10 @@ def first_party_business_email_evidence(record: Any) -> list[dict[str, Any]]:
     """
     if str(_value(record, "identity_verification_status", "")).upper() != "VERIFIED":
         return []
+    if str(_value(record, "suppression_status", "")).upper() in BLOCKED_CONTACT_STATES:
+        return []
+    if str(_value(record, "contact_verification_status", "")).upper() in BLOCKED_CONTACT_STATES:
+        return []
     website = str(_value(record, "official_website") or "")
     channels_raw = _value(record, "contact_channels_json", _value(record, "contact_channels", []))
     channels = _json_list(channels_raw)
@@ -71,48 +71,38 @@ def first_party_business_email_evidence(record: Any) -> list[dict[str, Any]]:
         kind = str(item.get("channel_type") or "").upper()
         source = str(item.get("source_url") or item.get("channel_url") or "").strip()
         evidence = str(item.get("evidence") or item.get("evidence_text") or item.get("excerpt") or "")
-        purpose = " ".join(str(item.get(key) or "") for key in ("purpose", "evidence", "evidence_text", "channel_type"))
+        purpose = str(item.get("purpose") or item.get("purpose_classification") or "")
         review_status = str(item.get("review_status") or "").upper()
         if not EMAIL_RE.fullmatch(email) or kind not in BUSINESS_EMAIL_TYPES:
             continue
         if not source or not same_first_party_site(website, source):
             continue
-        if review_status == "REJECTED":
+        states = [review_status]
+        states.extend(str(item.get(key) or "").upper() for key in (
+            "verification_status", "email_verification_status", "validation_status",
+            "contact_status", "suppression_status", "status"))
+        if any(state in BLOCKED_CONTACT_STATES for state in states):
             continue
-        if email not in evidence.casefold():
+        if item.get("suppressed") is True or item.get("is_suppressed") is True:
             continue
-        if RESTRICTED_PURPOSE.search(email.split("@", 1)[0].replace(".", " ").replace("_", " ").replace("-", " ") + " " + purpose):
+        if not any(match.group(0).casefold() == email for match in
+                   re.finditer(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", evidence, re.I)):
+            continue
+        if classify_public_contact_purpose(email, evidence, purpose, source) != GENERAL_LABEL:
             continue
         result.append({**item, "email": email, "source_url": source, "evidence": evidence})
     return result
 
 
-def verified_business_email_channels(record: Any) -> list[dict[str, Any]]:
-    """Return only reviewed, purpose-appropriate, evidence-matched business emails."""
-    if str(_value(record, "contact_verification_status", "")).upper() != "CONTACT_VERIFIED":
-        return []
-    verified = []
-    for item in first_party_business_email_evidence(record):
-        if str(item.get("review_status") or "").upper() not in VERIFIED_REVIEW_STATES:
-            continue
-        explicit_states = [item[key] for key in ("verification_status", "email_verification_status") if item.get(key)]
-        if any(str(status).upper() not in VERIFIED_REVIEW_STATES for status in explicit_states):
-            continue
-        verified.append(item)
-    return verified
+def eligible_business_email_channels(record: Any) -> list[dict[str, Any]]:
+    """Evidence-backed public emails; contact review freshness is not a gate."""
+    return first_party_business_email_evidence(record)
 
 
-def contact_readiness_counts(records: list[Any], recovered_count: int = 0) -> dict[str, int]:
-    verified = missing = pending = 0
-    for record in records:
-        if verified_business_email_channels(record):
-            verified += 1
-        elif first_party_business_email_evidence(record):
-            pending += 1
-        else:
-            missing += 1
-    return {"contact_verified": verified, "contact_missing": missing,
-            "contact_pending_verification": pending, "recovered": int(recovered_count)}
+def contact_readiness_counts(records: list[Any]) -> dict[str, int]:
+    eligible = sum(bool(eligible_business_email_channels(record)) for record in records)
+    return {"eligible_for_invitation_drafting": eligible,
+            "no_eligible_contact": max(0, len(records) - eligible)}
 
 
 def evidence_fingerprint(profile_id: str, item: dict[str, Any]) -> str:

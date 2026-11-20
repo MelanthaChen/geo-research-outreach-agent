@@ -3542,6 +3542,8 @@ def test_discard_is_soft_audited_and_hidden_from_active_batch_list(db, monkeypat
     assert batch['id'] not in [row['id'] for row in client.get('/api/batches').json()['rows']]
     archived = client.get('/api/batches?include_discarded=true').json()['rows']
     assert any(row['id'] == batch['id'] and row['discarded_at'] for row in archived)
+    discarded_only = client.get('/api/batches?include_discarded=true&discarded_only=true').json()['rows']
+    assert [row['id'] for row in discarded_only] == [batch['id']]
     invitations_json = client.get('/api/invitations?include_discarded=true').json()['rows']
     invitation = next(row for row in invitations_json if row['batch_id'] == batch['id'])
     assert invitation['status_label'] == 'Discarded'
@@ -3550,6 +3552,146 @@ def test_discard_is_soft_audited_and_hidden_from_active_batch_list(db, monkeypat
         event = c.execute(select(events).where(events.c.entity_id == batch['id'],
             events.c.event == 'INVITATION_BATCH_DISCARDED')).mappings().one()
         assert json.loads(event['detail'])['actor'] == 'chen.yuxuan9@northeastern.edu'
+
+
+def _seed_batch_listing_data(db, sizes, prefix='compact-ui'):
+    """Insert lightweight local-only rows for batch sizes 1, 5, 15, and 156."""
+    result=[];stamp=now()
+    with db.transaction() as c:
+        for batch_index,size in enumerate(sizes):
+            batch_id=f'{prefix}-batch-{batch_index}'
+            c.execute(batches.insert().values(id=batch_id,request_key=f'{prefix}-request-{batch_index}',
+                selection_hash=f'{prefix}-selection-{batch_index}',created_at=stamp,package=b'local-test-package',
+                pilot_review_status='APPROVED' if batch_index==0 else 'PENDING_REVIEW',excluded='[]'))
+            ids=[]
+            for item_index in range(size):
+                ident=f'{prefix}-candidate-{batch_index}-{item_index}'
+                invitation_id=f'{prefix}-invitation-{batch_index}-{item_index}'
+                ids.append(invitation_id)
+                c.execute(candidates.insert().values(id=ident,kind='company',name=f'Local Company {batch_index}-{item_index}',
+                    website=f'https://company-{batch_index}-{item_index}.example',domain='example',created_at=stamp,updated_at=stamp,
+                    personalization=dump({'recipient_copy':{'business_summary':'Local fixture summary',
+                        'distinctive_detail':'Local fixture detail','research_relevance':'Local fixture relevance'}}),
+                    personalization_quality_status='PASS',personalization_quality_errors='[]'))
+                c.execute(invitations.insert().values(id=invitation_id,candidate_id=ident,batch_id=batch_id,
+                    reference=f'{prefix}-reference-{batch_index}-{item_index}',recipient=f'contact{batch_index}-{item_index}@example.test',
+                    website=f'https://company-{batch_index}-{item_index}.example',company_name=f'Local Company {batch_index}-{item_index}',
+                    subject=f'Local subject {item_index}',body=f'Local full email body {item_index}',
+                    personalization=dump({'recipient_copy':{'business_summary':'Local fixture summary',
+                        'distinctive_detail':'Local fixture detail','research_relevance':'Local fixture relevance'}}),
+                    generated_at=stamp,send_status='DRAFT_GENERATED',sender_email='chen.yuxuan9@northeastern.edu'))
+            result.append((batch_id,size,ids))
+    return result
+
+
+def test_compact_batch_api_paginates_1_5_15_156_and_defers_email_content(db,monkeypatch):
+    from time import perf_counter
+    from sqlalchemy import event
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    seeded=_seed_batch_listing_data(db,[1,5,15,156])
+    client,headers=_invitation_api_client(db,monkeypatch)
+    statements=[]
+    def capture(_conn,_cursor,statement,_params,_context,_executemany):statements.append(statement)
+    event.listen(db.engine,'before_cursor_execute',capture)
+    started=perf_counter()
+    try:listing=client.get('/api/batches?page=1&page_size=20')
+    finally:
+        elapsed=(perf_counter()-started)*1000
+        event.remove(db.engine,'before_cursor_execute',capture)
+    assert listing.status_code==200
+    payload=listing.json();assert payload['total']==4 and payload['has_more'] is False
+    by_id={row['id']:row for row in payload['rows']}
+    assert {row['invitation_count'] for row in by_id.values()}=={1,5,15,156}
+    assert all('package' not in row and 'excluded' not in row and 'body' not in row for row in payload['rows'])
+    assert len(statements)<=5
+    print(f'compact batch summary: {len(statements)} SQL statements, {elapsed:.1f} ms, 4 batch rows')
+
+    large=next(batch_id for batch_id,size,_ in seeded if size==156)
+    first=client.get(f'/api/batches/{large}/invitations?page=1&page_size=50').json()
+    fourth=client.get(f'/api/batches/{large}/invitations?page=4&page_size=50').json()
+    assert len(first['rows'])==50 and first['has_more'] is True and first['total']==156
+    assert len(fourth['rows'])==6 and fourth['has_more'] is False
+    assert all('subject' not in item and 'body' not in item for item in first['rows'])
+    assert all(item['recipient'] and item['personalization']['recipient_copy']['business_summary']=='Local fixture summary'
+        for item in first['rows'])
+    invitation_id=first['rows'][0]['id']
+    subject=client.get(f'/api/invitations/{invitation_id}/content?part=subject').json()
+    body=client.get(f'/api/invitations/{invitation_id}/content?part=body').json()
+    assert subject['content'].startswith('Local subject') and body['content'].startswith('Local full email body')
+    assert client.get(f'/api/invitations/{invitation_id}/content?part=all').status_code==422
+    assert client.get(f'/api/batches/{large}/review?page=1&page_size=1').json()['invitations'][0].get('body') is None
+    assert client.get('/api/batches?page=1&page_size=101').status_code==422
+    assert client.get(f'/api/batches/{large}/invitations?page=1&page_size=101').status_code==422
+    assert client.get(f'/api/batches/{large}/invitations?page=1&page_size=50').json()==first
+
+
+def test_compact_batch_routes_require_authorized_session(db):
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    client=TestClient(create_app(db))
+    assert client.get('/api/batches').status_code==401
+    assert client.get('/api/batches/unknown/invitations').status_code==401
+    assert client.get('/api/invitations/unknown/content?part=body').status_code==401
+
+
+def test_compact_batch_actions_reflect_sender_authorization_for_whole_and_partial_send(db,monkeypatch):
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    seeded=_seed_batch_listing_data(db,[2],prefix='compact-sender-policy')
+    batch_id,_,ids=seeded[0]
+    with db.transaction() as c:
+        c.execute(invitations.update().where(invitations.c.id==ids[1]).values(sender_email='other@example.org'))
+    client,_=_invitation_api_client(db,monkeypatch)
+    summary=next(row for row in client.get('/api/batches').json()['rows'] if row['id']==batch_id)
+    assert summary['mark_sent_available'] is False
+    assert summary['partial_send_available'] is True and summary['manual_send_blocked_count']==1
+    page=client.get(f'/api/batches/{batch_id}/invitations').json()['rows']
+    assert next(row for row in page if row['id']==ids[0])['manual_send_available'] is True
+    assert next(row for row in page if row['id']==ids[1])['manual_send_available'] is False
+
+
+@pytest.fixture
+def isolated_postgres_db():
+    import os
+    url=os.environ.get('OUTREACH_TEST_POSTGRES_URL')
+    if not url:pytest.skip('OUTREACH_TEST_POSTGRES_URL is not configured; this test must use an isolated disposable PostgreSQL database')
+    result=Database(url);result.initialize()
+    yield result
+    result.engine.dispose()
+
+
+def test_postgres_compact_batch_summary_uses_bounded_queries(isolated_postgres_db,monkeypatch):
+    from time import perf_counter
+    from sqlalchemy import event
+    import uuid
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    db=isolated_postgres_db;prefix='pg-compact-'+uuid.uuid4().hex[:10]
+    _seed_batch_listing_data(db,[1,5,15,156],prefix=prefix)
+    client,_=_invitation_api_client(db,monkeypatch);statements=[]
+    def capture(_conn,_cursor,statement,_params,_context,_executemany):statements.append(statement)
+    event.listen(db.engine,'before_cursor_execute',capture);started=perf_counter()
+    try:response=client.get('/api/batches?page=1&page_size=20')
+    finally:
+        elapsed=(perf_counter()-started)*1000;event.remove(db.engine,'before_cursor_execute',capture)
+    assert response.status_code==200
+    rows=response.json()['rows'];assert {row['invitation_count'] for row in rows}=={1,5,15,156}
+    assert len(statements)<=5
+    summary_statement_count=len(statements)
+    large=next(row['id'] for row in rows if row['invitation_count']==156)
+    statements.clear();event.listen(db.engine,'before_cursor_execute',capture);started=perf_counter()
+    try:expanded=client.get(f'/api/batches/{large}/invitations?page=4&page_size=50')
+    finally:
+        expanded_elapsed=(perf_counter()-started)*1000;event.remove(db.engine,'before_cursor_execute',capture)
+    page=expanded.json()
+    assert page['total']==156 and len(page['rows'])==6 and page['has_more'] is False
+    assert len(statements)<=5
+    print(f'PostgreSQL expanded invitation page: {len(statements)} SQL statements, {expanded_elapsed:.1f} ms, 6 rows')
+    invitation_id=page['rows'][0]['id'];statements.clear();event.listen(db.engine,'before_cursor_execute',capture);started=perf_counter()
+    try:content=client.get(f'/api/invitations/{invitation_id}/content?part=body')
+    finally:
+        content_elapsed=(perf_counter()-started)*1000;event.remove(db.engine,'before_cursor_execute',capture)
+    assert content.status_code==200 and len(statements)<=3
+    print(f'PostgreSQL lazy email preview: {len(statements)} SQL statements, {content_elapsed:.1f} ms, one body')
+    print(f'PostgreSQL compact batch summary: {summary_statement_count} SQL statements, {elapsed:.1f} ms, 4 batches / 177 invitations')
 
 
 def test_manual_send_correction_appends_event_and_preserves_original_confirmation(db, monkeypatch):

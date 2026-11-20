@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hmac,json,os,uuid,hashlib,secrets,re,csv,io
+from collections import Counter
 import unicodedata
 from urllib.parse import urlparse
 from datetime import datetime,timedelta,timezone
@@ -396,24 +397,59 @@ def create_app(database=None):
             'send_status':lifecycle,'lifecycle_status':lifecycle,'status_label':service.INVITATION_STATES.get(lifecycle,'Draft Generated'),
             'download_available':False,'sent':False}
     @app.get('/api/batches')
-    def batch_list(request:Request,page:int=1,include_discarded:bool=False):
+    def batch_list(request:Request,page:int=1,page_size:int=20,include_discarded:bool=False,discarded_only:bool=False):
         auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        if page<1 or page_size<1 or page_size>100:raise ValueError('Batch pagination must use page >= 1 and page_size from 1 to 100')
         with db.transaction() as c:
-            query=select(*[x for x in batches.c if x.name!='package'],
+            query=select(*[x for x in batches.c if x.name not in {'package','excluded'}],
+                batches.c.excluded.label('excluded_raw'),
                 invitation_generation_batches.c.status.label('generation_status'),
                 invitation_generation_batches.c.completed_items.label('generation_completed'),
                 invitation_generation_batches.c.total_items.label('generation_total'),
                 invitation_generation_batches.c.error.label('generation_error')).select_from(
                     batches.outerjoin(invitation_generation_batches,
                         invitation_generation_batches.c.batch_id==batches.c.id))
-            if not include_discarded:query=query.where(batches.c.discarded_at.is_(None))
-            rows=[]
-            for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings():
-                item=dict(r)
-                item['send_status']=service.batch_invitation_state_summary(c,item['id'])
-                item['invitation_counts']=dict(service.invitation_state_counts(c,item['id']))
-                rows.append(item)
-            return {'rows':rows}
+            if discarded_only:query=query.where(batches.c.discarded_at.is_not(None))
+            elif not include_discarded:query=query.where(batches.c.discarded_at.is_(None))
+            count_query=select(func.count()).select_from(batches)
+            if discarded_only:count_query=count_query.where(batches.c.discarded_at.is_not(None))
+            elif not include_discarded:count_query=count_query.where(batches.c.discarded_at.is_(None))
+            total=c.scalar(count_query) or 0
+            rows=[dict(r) for r in c.execute(query.order_by(batches.c.created_at.desc(),batches.c.id)
+                .limit(page_size).offset((page-1)*page_size)).mappings()]
+            ids=[item['id'] for item in rows]
+            state_counts={ident:Counter() for ident in ids}
+            send_blocked_counts={ident:0 for ident in ids}
+            authorized_senders=_verified_invitation_senders()
+            if ids:
+                for row in c.execute(select(invitations.c.batch_id,invitations.c.sender_email,
+                        service.invitation_state_expression().label('state')).select_from(
+                        invitations.join(batches,invitations.c.batch_id==batches.c.id))
+                        .where(invitations.c.batch_id.in_(ids))).all():
+                    if row.state:
+                        state_counts[row.batch_id][row.state]+=1
+                        if row.state in {'INVITATION_DRAFT','INVITATION_PENDING_REVIEW','INVITATION_EXPORTED'} and (
+                                not row.sender_email or row.sender_email.strip().casefold() not in authorized_senders):
+                            send_blocked_counts[row.batch_id]+=1
+            for item in rows:
+                counts=state_counts[item['id']]
+                item['invitation_counts']={key:int(counts[key]) for key in service.INVITATION_STATES if counts.get(key,0)}
+                item['invitation_count']=sum(counts.values())
+                item['excluded_count']=len(json.loads(item.pop('excluded_raw','[]') or '[]'))
+                # The large serialized exclusion list is not part of the compact summary.
+                item['send_status']=service.batch_state_from_counts(counts)
+                item['send_status_label']=('Partially Sent' if item['send_status']=='PARTIALLY_SENT'
+                    else service.INVITATION_STATES.get(item['send_status'],'Draft Generated'))
+                item['download_available']=item['pilot_review_status']=='APPROVED' and not item['discarded_at']
+                item['unsent_count']=sum(item['invitation_counts'].get(key,0) for key in
+                    ('INVITATION_DRAFT','INVITATION_PENDING_REVIEW','INVITATION_EXPORTED'))
+                item['generation_active']=item.get('generation_status') in {'QUEUED','PROCESSING','RETRY_PENDING','FINALIZING'}
+                item['manual_send_blocked_count']=send_blocked_counts[item['id']]
+                item['mark_sent_available']=item['pilot_review_status']=='APPROVED' and not item['discarded_at'] and item['unsent_count']>0 and item['manual_send_blocked_count']==0
+                item['partial_send_available']=item['pilot_review_status']=='APPROVED' and not item['discarded_at'] and item['unsent_count']>item['manual_send_blocked_count']
+                item['discard_available']=not item['discarded_at'] and not item['generation_active']
+            return {'rows':rows,'page':page,'page_size':page_size,'total':int(total),
+                'has_more':page*page_size<total,'include_discarded':include_discarded,'discarded_only':discarded_only}
     @app.get('/api/batches/{ident}/generation')
     def batch_generation_status(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
@@ -473,18 +509,25 @@ def create_app(database=None):
             payload=row['package']
         return Response(payload,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{ident}.zip"'})
     @app.get('/api/batches/{ident}/review')
-    def review_batch(ident:str,request:Request):
+    def review_batch(ident:str,request:Request,page:int=1,page_size:int=50):
         auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        if page<1 or page_size<1 or page_size>100:raise ValueError('Invitation pagination must use page >= 1 and page_size from 1 to 100')
         with db.transaction() as c:
             batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
             if not batch:raise LookupError('Batch not found')
             if batch['pilot_review_status']=='GENERATING':raise ValueError('Invitation package is still being generated')
-            rows=c.execute(select(invitations,candidate_table.c.personalization_quality_status,
+            invitation_total=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==ident)) or 0
+            rows=c.execute(select(invitations.c.id,invitations.c.candidate_id,invitations.c.batch_id,
+                invitations.c.reference,invitations.c.recipient,invitations.c.website,invitations.c.company_name,
+                invitations.c.personalization,invitations.c.generated_at,invitations.c.template_version,
+                invitations.c.form_url,invitations.c.sender_email,invitations.c.send_status,invitations.c.manual_sent_at,
+                invitations.c.manual_sent_by,invitations.c.manual_send_note,invitations.c.provider_message_id,
+                invitations.c.exported_at,candidate_table.c.personalization_quality_status,
                 candidate_table.c.personalization_quality_errors,batches.c.first_downloaded_at,
                 batches.c.download_count,batches.c.discarded_at,batches.c.discarded_by,
                 service.invitation_state_expression().label('lifecycle_status')).select_from(invitations.join(candidate_table,
                 candidate_table.c.id==invitations.c.candidate_id).join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.batch_id==ident)
-                .order_by(invitations.c.company_name)).mappings().all()
+                .order_by(invitations.c.company_name,invitations.c.id).limit(page_size).offset((page-1)*page_size)).mappings().all()
             items=[]
             for row in rows:
                 item=dict(row);state=item.pop('lifecycle_status');item.update(service.invitation_status_payload(item,item,state=state));item['personalization']=json.loads(item.get('personalization') or '{}')
@@ -492,12 +535,56 @@ def create_app(database=None):
                 items.append(item)
             return {'batch_id':ident,'status':batch['pilot_review_status'],'package_sha256':hashlib.sha256(batch['package'] or b'').hexdigest(),
                 'excluded':json.loads(batch['excluded'] or '[]'),'invitations':items,
+                'page':page,'page_size':page_size,'invitation_total':int(invitation_total),
+                'has_more':page*page_size<invitation_total,
                 'download_available':batch['pilot_review_status']=='APPROVED' and not batch['discarded_at'],
                 'first_downloaded_at':batch['first_downloaded_at'],'last_downloaded_at':batch['last_downloaded_at'],
                 'last_downloaded_by':batch['last_downloaded_by'],
                 'download_count':batch['download_count'],'discarded_at':batch['discarded_at'],
                 'discarded_by':batch['discarded_by'],'discard_reason':batch['discard_reason'],
                 'send_status':service.batch_invitation_state_summary(c,ident)}
+    @app.get('/api/batches/{ident}/invitations')
+    def batch_invitations(ident:str,request:Request,page:int=1,page_size:int=50):
+        """Paginated batch rows omit subject and body; previews load those fields on demand."""
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        if page<1 or page_size<1 or page_size>100:raise ValueError('Invitation pagination must use page >= 1 and page_size from 1 to 100')
+        with db.transaction() as c:
+            batch=c.execute(select(batches.c.id,batches.c.pilot_review_status,batches.c.discarded_at,
+                batches.c.first_downloaded_at,batches.c.download_count).where(batches.c.id==ident)).mappings().first()
+            if not batch:raise LookupError('Batch not found')
+            total=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==ident)) or 0
+            rows=c.execute(select(invitations.c.id,invitations.c.candidate_id,invitations.c.company_name,
+                invitations.c.recipient,invitations.c.website,invitations.c.reference,invitations.c.personalization,
+                invitations.c.form_url,invitations.c.sender_email,invitations.c.send_status,invitations.c.manual_sent_at,
+                invitations.c.manual_sent_by,invitations.c.manual_send_note,invitations.c.provider_message_id,
+                invitations.c.exported_at,candidate_table.c.personalization_quality_status,
+                candidate_table.c.personalization_quality_errors,
+                service.invitation_state_expression().label('lifecycle_status')).select_from(invitations.join(
+                candidate_table,candidate_table.c.id==invitations.c.candidate_id).join(
+                batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.batch_id==ident)
+                .order_by(invitations.c.company_name,invitations.c.id).limit(page_size).offset((page-1)*page_size)).mappings().all()
+            items=[]
+            for row in rows:
+                item=dict(row);state=item.pop('lifecycle_status')
+                item['personalization']=json.loads(item.get('personalization') or '{}')
+                item['personalization_quality_errors']=json.loads(item.get('personalization_quality_errors') or '[]')
+                item['manual_send_available']=bool(item.get('sender_email') and
+                    item['sender_email'].strip().casefold() in _verified_invitation_senders())
+                item.update(service.invitation_status_payload(item,batch,state=state));items.append(item)
+            return {'batch_id':ident,'rows':items,'page':page,'page_size':page_size,
+                'total':int(total),'has_more':page*page_size<total,
+                'status':batch['pilot_review_status'],'discarded_at':batch['discarded_at']}
+    @app.get('/api/invitations/{ident}/content')
+    def invitation_content(ident:str,request:Request,part:str):
+        """Return exactly one email field to support independent lazy previews."""
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        if part not in {'subject','body'}:raise ValueError('Preview part must be subject or body')
+        column=invitations.c.subject if part=='subject' else invitations.c.body
+        with db.transaction() as c:
+            row=c.execute(select(invitations.c.id,invitations.c.company_name,column.label('content')).where(
+                invitations.c.id==ident)).mappings().first()
+            if not row:raise LookupError('Invitation not found')
+            return {'invitation_id':ident,'company_name':row['company_name'],'part':part,'content':row['content'] or ''}
     @app.post('/api/batches/{ident}/approve')
     async def approve_batch(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','APPROVER')
@@ -582,7 +669,8 @@ def create_app(database=None):
                 detail=dump({'actor':actor,'timestamp':stamp,'selected_invitation_ids':ids,'sent_count':confirmed_sent,'total_count':total,'note':note or None,'whole_batch_confirmation':whole_batch}),created_at=stamp))
         state='PARTIALLY_SENT' if confirmed_sent<total else 'INVITATION_MANUALLY_SENT'
         return {'status':state,'send_status':state,'status_label':('Partially Sent' if confirmed_sent<total else 'Sent (Manually Confirmed)'),
-            'selected_count':len(ids),'sent_count':confirmed_sent,'total_count':total,'verified_delivery':False}
+            'selected_count':len(ids),'sent_count':confirmed_sent,'total_count':total,'verified_delivery':False,
+            'actor':actor,'recorded_at':stamp}
     @app.post('/api/batches/{ident}/discard')
     async def discard_batch(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')

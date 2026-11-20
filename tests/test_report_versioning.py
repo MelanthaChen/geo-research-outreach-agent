@@ -147,7 +147,7 @@ def test_test_only_report_is_preserved_and_superseded_by_genuine_docx(tmp_path):
         current_job = dict(c.execute(select(jobs).where(jobs.c.id == JOB_ID)).mappings().one())
         assert current_job["result_id"] == RESULT_ID
         migration = c.scalar(select(func.max(schema_migrations.c.version)))
-        assert migration == 15
+        assert migration == 16
 
 
 def test_new_report_has_real_result_and_old_approval_cannot_pass_delivery_gate(tmp_path, monkeypatch):
@@ -276,7 +276,7 @@ def test_report_migration_is_versioned_and_partial_unique_index_is_present(tmp_p
     with db.transaction() as c:
         indexes = c.exec_driver_sql("PRAGMA index_list('reports')").all()
         assert any(row[1] == "uq_reports_active_job" and row[2] == 1 for row in indexes)
-        assert c.scalar(select(func.max(schema_migrations.c.version))) == 15
+        assert c.scalar(select(func.max(schema_migrations.c.version))) == 16
 
 
 def test_migration_upgrades_legacy_unique_job_schema_and_preserves_review_fk(tmp_path):

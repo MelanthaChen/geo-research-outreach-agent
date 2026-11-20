@@ -405,8 +405,8 @@ def test_company_participation_status_uses_consent_and_send_evidence_not_batch_l
             'accepted':'ACCEPTED','rejected':'REJECTED','no-contact':'PENDING'}
     assert by_id['participation-accepted']['contact_readiness']=='MISSING_OR_UNAUTHORIZED'
     assert by_id['participation-rejected']['contact_readiness']=='MISSING_OR_UNAUTHORIZED'
-    assert by_id['participation-draft']['eligible'] is False
-    assert by_id['participation-discarded']['eligible'] is False
+    assert by_id['participation-draft']['eligible'] is True
+    assert by_id['participation-discarded']['eligible'] is True
     assert not ({'lifecycle_status','status_label','send_status'} & set(by_id['participation-discarded']['invitation']))
     assert list_candidates(db,{'primary_status':'REJECTED'})['total']==1
     assert list_candidates(db,{'primary_status':'ACCEPTED'})['total']==1
@@ -788,7 +788,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==15
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==16
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -803,7 +803,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==15
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==16
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
         invitation_columns={row[1] for row in c.exec_driver_sql('pragma table_info(invitations)')}
         batch_columns={row[1] for row in c.exec_driver_sql('pragma table_info(batches)')}
@@ -3595,7 +3595,133 @@ def test_contact_readiness_is_independent_of_existing_exported_or_discarded_invi
     assert row['primary_status']=='PENDING'
     assert row['contact_readiness']=='READY'
     assert row['invitation_record_exists'] is True
-    assert row['eligible'] is False  # anti-duplicate generation gate remains separate
+    assert row['eligible'] is True  # an unsent archived draft does not block regeneration
+
+
+@pytest.mark.parametrize('legacy_state', [
+    'DRAFT_GENERATED','PENDING_REVIEW','EXPORTED','DISCARDED','SENT','READY_TO_SEND'])
+def test_historical_unsent_invitation_states_allow_a_new_versioned_draft(db,legacy_state):
+    ident='regen-'+legacy_state.lower().replace('_','-')
+    candidate(db,ident,email=f'{legacy_state.lower()}@regen.org',website=f'https://{ident}.org',
+        name=f'Regeneration {legacy_state}')
+    first=invite(db,[ident],f'regen-first-{legacy_state.lower()}-request')
+    first_inv=next(row for row in invitation_rows(db) if row['batch_id']==first['id'])
+    with db.transaction() as c:
+        c.execute(invitations.update().where(invitations.c.id==first_inv['id']).values(send_status=legacy_state))
+        if legacy_state=='PENDING_REVIEW':
+            c.execute(batches.update().where(batches.c.id==first['id']).values(pilot_review_status='PENDING_REVIEW'))
+        elif legacy_state=='EXPORTED':
+            # Legacy text values alone are not valid download or send evidence.
+            c.execute(batches.update().where(batches.c.id==first['id']).values(
+                send_status='EXPORTED',exported_at=now()))
+        elif legacy_state=='DISCARDED':
+            c.execute(batches.update().where(batches.c.id==first['id']).values(
+                discarded_at=now(),discarded_by='unit-test-admin'))
+    selection={'ids':[ident]}
+    preview=preview_generation(db,selection)
+    assert preview['valid_recipient_count']==1 and preview['excluded_count']==0
+    projected=next(row for row in list_candidates(db,{'q':ident})['rows'] if row['id']==ident)
+    assert projected['eligible'] is True
+    assert projected['invitation_readiness']=='READY'
+    second=generate(db,{**selection,'preview_sha256':preview['preview_sha256']},
+        f'regen-second-{legacy_state.lower()}-request')
+    assert second['id']!=first['id']
+    assert second['pilot_review_status']=='PENDING_REVIEW'
+    assert len([row for row in invitation_rows(db) if row['candidate_id']==ident])==2
+    replay=generate(db,{**selection,'preview_sha256':preview['preview_sha256']},
+        f'regen-second-{legacy_state.lower()}-request')
+    assert replay['id']==second['id']
+    assert len([row for row in invitation_rows(db) if row['candidate_id']==ident])==2
+
+
+def test_confirmed_manual_and_provider_sends_block_candidate_and_recipient_reuse(db):
+    candidate(db,'regen-manual-sent','manual@confirmed-send.org','https://manual-send.org','Manual Sent')
+    candidate(db,'regen-provider-sent','provider@confirmed-send.org','https://provider-send.org','Provider Sent')
+    candidate(db,'regen-same-recipient','manual@confirmed-send.org','https://other-company.org','Other Company')
+    manual=invite(db,['regen-manual-sent'],'regen-manual-send-first-request')
+    provider=invite(db,['regen-provider-sent'],'regen-provider-send-first-request')
+    with db.transaction() as c:
+        manual_inv=c.execute(select(invitations).where(invitations.c.batch_id==manual['id'])).mappings().one()
+        provider_inv=c.execute(select(invitations).where(invitations.c.batch_id==provider['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==manual_inv['id']).values(
+            send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=now(),manual_sent_by='admin@example.org'))
+        c.execute(invitations.update().where(invitations.c.id==provider_inv['id']).values(
+            send_status='PROVIDER_CONFIRMED_SENT',provider_message_id='provider-message-123'))
+    for ident,expected_reason in (
+        ('regen-manual-sent','confirmed invitation was already sent'),
+        ('regen-provider-sent','confirmed invitation was already sent'),
+        ('regen-same-recipient','confirmed sent invitation')):
+        preview=preview_generation(db,{'ids':[ident]})
+        assert preview['valid_recipient_count']==0
+        assert any(expected_reason in reason.lower() for reason in preview['excluded'][0]['reasons'])
+        from outreach_v2.service import detail
+        assert detail(db,ident)['eligible'] is False
+
+
+def test_send_confirmed_after_preview_invalidates_generation_without_duplicate(db):
+    candidate(db,'regen-send-race','race@confirmed-send.org','https://race.org','Send Race')
+    selection={'ids':['regen-send-race']}
+    preview=preview_generation(db,selection)
+    first=invite(db,['regen-send-race'],'regen-send-race-initial-request')
+    # A later review can still create a new draft while there is no send evidence.
+    selection_preview=preview_generation(db,selection)
+    sent=next(row for row in invitation_rows(db) if row['batch_id']==first['id'])
+    with db.transaction(serialized=True) as c:
+        c.execute(invitations.update().where(invitations.c.id==sent['id']).values(
+            send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=now(),manual_sent_by='admin@example.org'))
+    with pytest.raises(ValueError,match='eligibility changed after review'):
+        generate(db,{**selection,'preview_sha256':selection_preview['preview_sha256']},
+            'regen-send-race-after-confirmed-send')
+    assert len([row for row in invitation_rows(db) if row['candidate_id']=='regen-send-race'])==1
+    assert preview['valid_recipient_count']==1
+
+
+def test_v16_migration_removes_legacy_candidate_unique_constraint_and_preserves_invitation(db):
+    ident='regen-migration-preserve'
+    candidate(db,ident,email='preserve@regen.org',website='https://regen-preserve.org',name='Migration Preserve')
+    original=invite(db,[ident],'regen-migration-original-request')
+    original_inv=next(row for row in invitation_rows(db) if row['batch_id']==original['id'])
+    column_names=[column.name for column in invitations.c]
+    quoted=', '.join(f'"{name}"' for name in column_names)
+    with db.engine.connect() as c:
+        c.exec_driver_sql('PRAGMA foreign_keys=OFF');c.commit()
+        c.exec_driver_sql('PRAGMA legacy_alter_table=ON');c.commit()
+        with c.begin():
+            c.exec_driver_sql('''CREATE TABLE invitations_legacy_unique (
+                id VARCHAR NOT NULL PRIMARY KEY,
+                candidate_id VARCHAR NOT NULL UNIQUE REFERENCES candidates(id),
+                batch_id VARCHAR NOT NULL REFERENCES batches(id),
+                reference VARCHAR NOT NULL UNIQUE, recipient VARCHAR NOT NULL,
+                website TEXT NOT NULL, company_name TEXT NOT NULL, subject TEXT, body TEXT,
+                form_url TEXT, template_version TEXT, questionnaire_id TEXT, personalization TEXT,
+                generated_at TEXT, exported_at TEXT, send_status TEXT, consent_status TEXT,
+                authority TEXT, researcher_name TEXT, university_affiliation TEXT, reply_to TEXT,
+                sender_email TEXT, sender_name TEXT, manual_sent_at TEXT, manual_sent_by TEXT,
+                manual_send_note TEXT, manual_send_corrected_at TEXT, manual_send_corrected_by TEXT,
+                provider_message_id TEXT)''')
+            c.exec_driver_sql(f'INSERT INTO invitations_legacy_unique ({quoted}) SELECT {quoted} FROM invitations')
+            c.exec_driver_sql('DROP TABLE invitations')
+            c.exec_driver_sql('ALTER TABLE invitations_legacy_unique RENAME TO invitations')
+            c.exec_driver_sql('DELETE FROM schema_migrations WHERE version=16')
+        c.exec_driver_sql('PRAGMA legacy_alter_table=OFF');c.commit()
+        c.exec_driver_sql('PRAGMA foreign_keys=ON');c.commit()
+    db.initialize()
+    with db.engine.connect() as c:
+        assert c.exec_driver_sql('SELECT id FROM invitations').scalar_one()==original_inv['id']
+        assert c.exec_driver_sql('PRAGMA foreign_key_check').all()==[]
+        indexes=c.exec_driver_sql("PRAGMA index_list('invitations')").all()
+        assert any(row[1]=='ix_invitations_candidate_id' and row[2]==0 for row in indexes)
+        assert all(not (row[2] and any(col[2]=='candidate_id' for col in c.exec_driver_sql(
+            f'PRAGMA index_info("{row[1]}")'))) for row in indexes)
+    preview=preview_generation(db,{'ids':[ident]})
+    second=generate(db,{'ids':[ident],'preview_sha256':preview['preview_sha256']},'regen-migration-second-request')
+    assert second['id']!=original['id']
+    assert len([row for row in invitation_rows(db) if row['candidate_id']==ident])==2
+
+
+def invitation_rows(db):
+    with db.transaction() as c:
+        return [dict(row) for row in c.execute(select(invitations)).mappings()]
 
 
 def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
@@ -3968,6 +4094,65 @@ def test_postgres_company_participation_status_is_independent_of_invitation_batc
     assert detail(db,'pg-status-discarded-000')['primary_status']=='PENDING'
 
 
+def test_postgres_v16_drops_legacy_candidate_unique_constraint(isolated_postgres_db):
+    from uuid import uuid4
+    from sqlalchemy import inspect
+    from outreach_v2.db import schema_migrations
+    db=isolated_postgres_db;ident='pg-regen-migration-'+uuid4().hex[:10]
+    candidate(db,ident,f'{ident}@migration.org',f'https://{ident}.org','Postgres Migration Preserve',
+        fixture=False,personalization=True)
+    original=invite(db,[ident],f'pg-regen-migration-first-{uuid4().hex[:10]}-key')
+    with db.engine.begin() as c:
+        c.exec_driver_sql('ALTER TABLE outreach_v2.invitations ADD CONSTRAINT invitations_legacy_candidate_unique UNIQUE (candidate_id)')
+        c.execute(schema_migrations.delete().where(schema_migrations.c.version==16))
+    db.initialize()
+    constraints=inspect(db.engine).get_unique_constraints('invitations',schema='outreach_v2')
+    assert not any(item.get('column_names')==['candidate_id'] for item in constraints)
+    indexes=inspect(db.engine).get_indexes('invitations',schema='outreach_v2')
+    assert any(item.get('column_names')==['candidate_id'] and not item.get('unique') for item in indexes)
+    with db.transaction() as c:
+        assert c.scalar(select(func.count()).select_from(invitations).where(
+            invitations.c.candidate_id==ident,invitations.c.batch_id==original['id']))==1
+    preview=preview_generation(db,{'ids':[ident]})
+    second=generate(db,{'ids':[ident],'preview_sha256':preview['preview_sha256']},
+        f'pg-regen-migration-second-{uuid4().hex[:10]}-key')
+    assert second['id']!=original['id']
+    assert len([row for row in invitation_rows(db) if row['candidate_id']==ident])==2
+
+
+def test_postgres_unsent_draft_regeneration_and_confirmed_send_gate(isolated_postgres_db,monkeypatch):
+    from uuid import uuid4
+    from outreach_v2.service import detail
+    monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Postgres Test Researcher')
+    monkeypatch.setenv('OUTREACH_UNIVERSITY_AFFILIATION','Test University')
+    monkeypatch.setenv('OUTREACH_REPLY_TO','researcher@example.org')
+    db=isolated_postgres_db;token=uuid4().hex[:12];ident='pg-regen-'+token
+    email=f'regen-{token}@postgres-regen.org';site=f'https://{ident}.org'
+    candidate(db,ident,email,site,'Postgres Regeneration',fixture=False,personalization=True)
+    first=invite(db,[ident],f'pg-regen-first-{token}-request')
+    first_inv=next(row for row in invitation_rows(db) if row['batch_id']==first['id'])
+    with db.transaction() as c:
+        c.execute(invitations.update().where(invitations.c.id==first_inv['id']).values(send_status='SENT'))
+        c.execute(batches.update().where(batches.c.id==first['id']).values(
+            send_status='EXPORTED',first_downloaded_at=now(),download_count=1))
+    preview=preview_generation(db,{'ids':[ident]})
+    assert preview['valid_recipient_count']==1 and preview['excluded_count']==0
+    assert detail(db,ident)['eligible'] is True
+    second=generate(db,{'ids':[ident],'preview_sha256':preview['preview_sha256']},
+        f'pg-regen-second-{token}-request')
+    assert second['id']!=first['id']
+    assert len([row for row in invitation_rows(db) if row['candidate_id']==ident])==2
+    second_inv=next(row for row in invitation_rows(db) if row['batch_id']==second['id'])
+    with db.transaction() as c:
+        c.execute(invitations.update().where(invitations.c.id==second_inv['id']).values(
+            send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=now(),manual_sent_by='pg-admin@example.org'))
+    blocked=preview_generation(db,{'ids':[ident]})
+    assert blocked['valid_recipient_count']==0
+    assert any('confirmed invitation was already sent' in reason.lower()
+        for reason in blocked['excluded'][0]['reasons'])
+    assert detail(db,ident)['eligible'] is False
+
+
 def test_postgres_historical_1620_contact_route_and_legacy_kind_are_eligible(isolated_postgres_db,monkeypatch):
     monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Postgres Test Researcher')
     monkeypatch.setenv('OUTREACH_UNIVERSITY_AFFILIATION','Test University')
@@ -4009,7 +4194,7 @@ def test_postgres_historical_1620_contact_route_and_legacy_kind_are_eligible(iso
     assert projected['primary_status']=='PENDING'
     assert projected['contact_readiness']=='READY'
     assert projected['invitation_record_exists'] is True
-    assert projected['eligible'] is False
+    assert projected['eligible'] is True
 
 
 def test_postgres_compact_batch_summary_uses_bounded_queries(isolated_postgres_db,monkeypatch):

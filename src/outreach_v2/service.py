@@ -222,6 +222,26 @@ def authorized_email_count():
 def has_invitation():
     return exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
 
+CONFIRMED_SEND_STATES=('INVITATION_MANUALLY_SENT','INVITATION_PROVIDER_SENT')
+
+def has_confirmed_sent_invitation(candidate_id=candidates.c.id):
+    """Only exact manual/provider send evidence blocks another invitation draft."""
+    sent_invitation=invitations.alias('sent_invitation')
+    sent_batch=batches.alias('sent_batch')
+    return exists(select(sent_invitation.c.id).select_from(
+        sent_invitation.join(sent_batch,sent_invitation.c.batch_id==sent_batch.c.id)).where(
+            sent_invitation.c.candidate_id==candidate_id,
+            invitation_state_expression(sent_invitation,sent_batch).in_(CONFIRMED_SEND_STATES)))
+
+def has_confirmed_sent_recipient(recipient):
+    """A confirmed send to the same address prevents cross-company duplicate sends."""
+    sent_invitation=invitations.alias('sent_recipient_invitation')
+    sent_batch=batches.alias('sent_recipient_batch')
+    return exists(select(sent_invitation.c.id).select_from(
+        sent_invitation.join(sent_batch,sent_invitation.c.batch_id==sent_batch.c.id)).where(
+            func.lower(sent_invitation.c.recipient)==func.lower(recipient),
+            invitation_state_expression(sent_invitation,sent_batch).in_(CONFIRMED_SEND_STATES)))
+
 def verified_accepted_consent(invitation=invitations):
     """Consent accepted only by the persisted verified YES+YES ingestion path."""
     return exists(select(submissions.c.id).where(
@@ -247,7 +267,9 @@ def invitation_readiness_expression():
         candidates.c.website_status.is_distinct_from('VERIFIED'),
         candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.personalization_quality_status=='FAIL')
-    return and_(~has_invitation(),~blocked,completed_personalization(),authorized_email_count()>0)
+    available_email_count=select(func.count(func.distinct(func.lower(contacts.c.email)))).where(
+        invitation_contacts(),~has_confirmed_sent_recipient(contacts.c.email)).correlate(candidates).scalar_subquery()
+    return and_(~has_confirmed_sent_invitation(),~blocked,completed_personalization(),available_email_count>0)
 
 INVITATION_STATES={
     'INVITATION_DRAFT':'Draft Generated',
@@ -824,9 +846,9 @@ def eligible_recipient(c,row,recipient_choice=None,*,lookup=None):
     if row['suppressed']:reasons.append('Candidate suppressed or withdrawn')
     if row['website_status']!='VERIFIED':reasons.append('Official website not verified')
     if row['qualification'] not in {'ELIGIBLE','QUALIFIED'}:reasons.append('Candidate not qualified')
-    has_prior=(row['id'] in lookup['candidate_ids_with_invitations'] if lookup is not None else
-        bool(c.scalar(select(invitations.c.id).where(invitations.c.candidate_id==row['id']))))
-    if has_prior:reasons.append('Invitation already exists; download its saved batch')
+    has_prior=(row['id'] in lookup['confirmed_sent_candidate_ids'] if lookup is not None else
+        bool(c.scalar(select(has_confirmed_sent_invitation(row['id'])))))
+    if has_prior:reasons.append('A confirmed invitation was already sent to this company')
     try:validate(personalization,row['website'],record=row)
     except ValueError as e:reasons.append(str(e))
     if not synthetic_fixture and row.get('personalization_quality_status')!='PASS':
@@ -866,11 +888,13 @@ def select_pilot_cohort(c, limit=100):
         candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.name.is_not(None),candidates.c.website.is_not(None),
         exists(select(contacts.c.id).where(invitation_contacts())),
-        ~exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id)))
+        ~has_confirmed_sent_invitation())
         .order_by(candidates.c.industry,candidates.c.id)).mappings().all()
     by_industry={}
     from .template import host
-    prior_invitations=c.execute(select(invitations.c.website,invitations.c.recipient)).all()
+    prior_invitations=c.execute(select(invitations.c.website,invitations.c.recipient).select_from(
+        invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+            invitation_state_expression().in_(CONFIRMED_SEND_STATES))).all()
     seen_domains={host(row.website) for row in prior_invitations if host(row.website)}
     seen_recipients={(row.recipient or '').strip().casefold() for row in prior_invitations if row.recipient}
     for item in rows:
@@ -949,27 +973,31 @@ def _generation_lookup(c,rows):
     """Load all invitation eligibility dependencies in bounded set queries."""
     ids=[row['id'] for row in rows]
     contacts_by_candidate={ident:[] for ident in ids}
-    candidate_ids_with_invitations=set();emails=set();existing_invited_recipients=set()
+    confirmed_sent_candidate_ids=set();emails=set();confirmed_sent_recipients=set()
     for chunk in _chunks(ids):
         for item in c.execute(select(contacts).where(contacts.c.candidate_id.in_(chunk))).mappings():
             item=dict(item);contacts_by_candidate[item['candidate_id']].append(item)
             address=(item.get('email') or '').strip().casefold()
             if address:emails.add(address)
-        for item in c.execute(select(invitations.c.candidate_id,invitations.c.recipient)
-                .where(invitations.c.candidate_id.in_(chunk))).mappings():
-            candidate_ids_with_invitations.add(item['candidate_id'])
-            if item['recipient']:existing_invited_recipients.add(item['recipient'].strip().casefold())
+        for item in c.execute(select(invitations.c.candidate_id,invitations.c.recipient).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+                    invitations.c.candidate_id.in_(chunk),
+                    invitation_state_expression().in_(CONFIRMED_SEND_STATES))).mappings():
+            confirmed_sent_candidate_ids.add(item['candidate_id'])
+            if item['recipient']:confirmed_sent_recipients.add(item['recipient'].strip().casefold())
     for chunk in _chunks(sorted(emails)):
-        for value in c.execute(select(invitations.c.recipient)
-                .where(func.lower(invitations.c.recipient).in_(chunk)).distinct()).scalars():
-            if value:existing_invited_recipients.add(value.strip().casefold())
+        for value in c.execute(select(invitations.c.recipient).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+                    func.lower(invitations.c.recipient).in_(chunk),
+                    invitation_state_expression().in_(CONFIRMED_SEND_STATES)).distinct()).scalars():
+            if value:confirmed_sent_recipients.add(value.strip().casefold())
     suppressed_emails=set()
     for chunk in _chunks(sorted(emails)):
         suppressed_emails.update((value or '').strip().casefold() for value in c.execute(
             select(suppressions.c.email).where(func.lower(suppressions.c.email).in_(chunk))).scalars())
     return {'contacts_by_candidate':contacts_by_candidate,
-        'candidate_ids_with_invitations':candidate_ids_with_invitations,
-        'existing_invited_recipients':existing_invited_recipients,
+        'confirmed_sent_candidate_ids':confirmed_sent_candidate_ids,
+        'confirmed_sent_recipients':confirmed_sent_recipients,
         'suppressed_emails':suppressed_emails}
 
 def _preview_in_transaction(c,selection,context=None):
@@ -993,8 +1021,8 @@ def _preview_in_transaction(c,selection,context=None):
         choice=(selection.get('recipient_choices') or {}).get(row['id'])
         recipient,reasons=eligible_recipient(c,row,choice,lookup=lookup)
         if recipient in seen:reasons.append('Duplicate recipient within batch')
-        if recipient and recipient.casefold() in lookup['existing_invited_recipients']:
-            reasons.append('Recipient already has an invitation; resend is not automatic')
+        if recipient and recipient.casefold() in lookup['confirmed_sent_recipients']:
+            reasons.append('This recipient already has a confirmed sent invitation')
         if reasons:
             item={'candidate_id':row['id'],'company':row['name'],'reasons':reasons}
             options=authorized_contact_emails(c,row,contact_rows=lookup['contacts_by_candidate'].get(row['id'],[]),

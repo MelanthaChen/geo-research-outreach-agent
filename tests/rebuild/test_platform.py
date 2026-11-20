@@ -326,21 +326,109 @@ def test_primary_business_statuses_are_derived_and_mutually_exclusive(db):
         c.execute(contacts.delete().where(contacts.c.candidate_id=='status-no-contact'))
         c.execute(candidates.update().where(candidates.c.id=='status-pending').values(
             personalization_quality_status='UNVERIFIED',personalization_quality_errors='[]'))
-        # Invitation status has precedence even if a later quality audit fails.
+        # Draft existence does not change the company's participation state.
         c.execute(candidates.update().where(candidates.c.id=='status-invited').values(
             personalization_quality_status='FAIL',personalization_quality_errors='[\"INSUFFICIENT_EVIDENCE\"]'))
     listed=list_candidates(db,{},1,100)
     by_id={row['id']:row for row in listed['rows']}
     assert {ident:by_id[ident]['primary_status'] for ident in (
         'status-ready','status-no-contact','status-invited','status-pending','status-blocked')}=={
-        'status-ready':'READY_TO_INVITE','status-no-contact':'PERSONALIZED_NO_CONTACT',
-        'status-invited':'INVITATION_PENDING_REVIEW','status-pending':'PENDING_PERSONALIZATION','status-blocked':'BLOCKED'}
+        'status-ready':'PENDING','status-no-contact':'NO_CONTACT',
+        'status-invited':'PENDING','status-pending':'PENDING','status-blocked':'PENDING'}
     assert by_id['status-ready']['eligible'] is True
     assert listed['completed_personalization_count']==3
     assert sum(listed['status_counts'].values())==5
-    assert list_candidates(db,{'primary_status':'READY_TO_INVITE'})['total']==1
-    assert list_candidates(db,{'primary_status':'INVITATION_PENDING_REVIEW'})['total']==1
+    assert list_candidates(db,{'primary_status':'PENDING'})['total']==4
+    assert list_candidates(db,{'primary_status':'NO_CONTACT'})['total']==1
+    with pytest.raises(ValueError,match='Unknown primary status'):
+        list_candidates(db,{'primary_status':'INVITATION_PENDING_REVIEW'})
     assert list_candidates(db,{'completed_personalization':'1'})['total']==3
+
+
+def test_company_participation_status_uses_consent_and_send_evidence_not_batch_lifecycle(db):
+    from outreach_v2.service import detail, invitation_history_reconciliation, primary_status_expression
+    candidate(db,'participation-pending','pending@participation.org','https://pending.participation.org','Pending')
+    candidate(db,'participation-draft','draft@participation.org','https://draft.participation.org','Draft')
+    candidate(db,'participation-exported','exported@participation.org','https://exported.participation.org','Exported')
+    candidate(db,'participation-discarded','discarded@participation.org','https://discarded.participation.org','Discarded')
+    candidate(db,'participation-legacy-sent','legacy@participation.org','https://legacy.participation.org','Legacy SENT')
+    candidate(db,'participation-invited','invited@participation.org','https://invited.participation.org','Invited')
+    candidate(db,'participation-accepted','accepted@participation.org','https://accepted.participation.org','Accepted')
+    candidate(db,'participation-rejected','rejected@participation.org','https://rejected.participation.org','Rejected')
+    candidate(db,'participation-no-contact','nocontact@participation.org','https://nocontact.participation.org','No Contact')
+    draft=invite(db,['participation-draft'],'participation-draft-key')
+    exported=invite(db,['participation-exported'],'participation-exported-key')
+    discarded=invite(db,['participation-discarded'],'participation-discarded-key')
+    legacy_sent=invite(db,['participation-legacy-sent'],'participation-legacy-sent-key')
+    sent=invite(db,['participation-invited'],'participation-invited-key')
+    accepted=invite(db,['participation-accepted'],'participation-accepted-key')
+    rejected=invite(db,['participation-rejected'],'participation-rejected-key')
+    with db.transaction() as c:
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='participation-no-contact'))
+        for batch_id in (draft['id'],discarded['id']):
+            c.execute(batches.update().where(batches.c.id==batch_id).values(
+                discarded_at=now(),discarded_by='admin@example.org'))
+        c.execute(batches.update().where(batches.c.id==exported['id']).values(
+            pilot_review_status='APPROVED',first_downloaded_at=now(),last_downloaded_at=now(),download_count=1))
+        sent_inv=c.execute(select(invitations).where(invitations.c.batch_id==sent['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==sent_inv['id']).values(
+            send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=now(),manual_sent_by='admin@example.org'))
+        legacy_inv=c.execute(select(invitations).where(invitations.c.batch_id==legacy_sent['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==legacy_inv['id']).values(send_status='SENT'))
+        for created,decision,status in ((accepted,('YES','YES'),'AUTHORIZED'),(rejected,('NO','YES'),'DECLINED')):
+            inv=c.execute(select(invitations).where(invitations.c.batch_id==created['id'])).mappings().one()
+            c.execute(invitations.update().where(invitations.c.id==inv['id']).values(consent_status=status))
+            c.execute(submissions.insert().values(id='submission-'+inv['id'],invitation_id=inv['id'],
+                reference=inv['reference'],interest=decision[0],authorization=decision[1],
+                representative_name='Test Respondent',representative_role='Authorized representative',
+                representative_email='respondent@example.org',submitted_at=now(),received_at=now(),
+                identity_provider='GOOGLE_FORMS_VERIFIED',identity_verified_email='respondent@example.org',
+                identity_reference='verified-form-response',status=status,reason='test evidence'))
+        assert c.scalar(select(primary_status_expression()).where(candidates.c.id=='participation-accepted'))=='ACCEPTED'
+        assert c.scalar(select(primary_status_expression()).where(candidates.c.id=='participation-rejected'))=='REJECTED'
+        # Contact changes cannot erase stronger consent/participation states.
+        c.execute(contacts.delete().where(contacts.c.candidate_id.in_(
+            ['participation-accepted','participation-rejected'])))
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='participation-no-contact'))
+        assert c.scalar(select(primary_status_expression()).where(candidates.c.id=='participation-no-contact'))=='NO_CONTACT'
+        # A newly found first-party contact makes a previously No Contact business Pending.
+        c.execute(contacts.insert().values(id='contact-participation-no-contact',
+            candidate_id='participation-no-contact',kind='EMAIL',email='nocontact@participation.org',
+            source_url='https://nocontact.participation.org',
+            evidence='For general business inquiries contact nocontact@participation.org.',
+            verification='UNKNOWN',purpose='general business inquiries',suppressed=False))
+    rows=list_candidates(db,{},1,100)
+    by_id={row['id']:row for row in rows['rows']}
+    assert {key:by_id['participation-'+key]['primary_status'] for key in
+        ('pending','draft','exported','discarded','legacy-sent','invited','accepted','rejected','no-contact')}=={
+            'pending':'PENDING','draft':'PENDING','exported':'PENDING','discarded':'PENDING','legacy-sent':'PENDING','invited':'INVITED',
+            'accepted':'ACCEPTED','rejected':'REJECTED','no-contact':'PENDING'}
+    assert by_id['participation-accepted']['contact_readiness']=='MISSING_OR_UNAUTHORIZED'
+    assert by_id['participation-rejected']['contact_readiness']=='MISSING_OR_UNAUTHORIZED'
+    assert by_id['participation-draft']['eligible'] is False
+    assert by_id['participation-discarded']['eligible'] is False
+    assert not ({'lifecycle_status','status_label','send_status'} & set(by_id['participation-discarded']['invitation']))
+    assert list_candidates(db,{'primary_status':'REJECTED'})['total']==1
+    assert list_candidates(db,{'primary_status':'ACCEPTED'})['total']==1
+    assert detail(db,'participation-discarded')['primary_status']=='PENDING'
+    assert 'INVITATION_DISCARDED' not in detail(db,'participation-discarded')
+    lifecycle=invitation_history_reconciliation(db)
+    assert lifecycle['invitation_records']['INVITATION_DISCARDED']==2
+    assert lifecycle['invitation_records']['INVITATION_EXPORTED']==1
+
+
+def test_unverified_yes_yes_does_not_count_as_accepted(db):
+    candidate(db,'participation-unverified','unverified@participation.org',
+        'https://unverified.participation.org','Unverified')
+    created=invite(db,['participation-unverified'],'participation-unverified-key')
+    with db.transaction() as c:
+        inv=c.execute(select(invitations).where(invitations.c.batch_id==created['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==inv['id']).values(consent_status='AUTHORIZED'))
+        c.execute(submissions.insert().values(id='submission-unverified-yes',invitation_id=inv['id'],
+            reference=inv['reference'],interest='YES',authorization='YES',status='AUTHORIZED',
+            identity_provider='SELF_REPORTED',identity_verified_email='respondent@example.org',
+            identity_reference='untrusted-form-value'))
+    assert list_candidates(db,{'q':'Unverified'})['rows'][0]['primary_status']=='PENDING'
 
 @pytest.mark.parametrize('ident,name,website,summary,detail,relevance', [
     ('geoairesume-owner-test-v1','GeoAIResume controlled test website','https://geo-ai-resume.vercel.app',
@@ -378,8 +466,8 @@ def test_owner_fixture_batch_generation_uses_exact_synthetic_policy_without_muta
     listed=list_candidates(db,{'q':name})
     assert listed['eligible_matching']==0
     assert listed['rows'][0]['id']==ident and listed['rows'][0]['eligible'] is False
-    assert listed['rows'][0]['primary_status']=='BLOCKED'
-    assert listed['rows'][0]['status_reason'].startswith('This is an owner-controlled test fixture')
+    assert listed['rows'][0]['primary_status']=='PENDING'
+    assert 'No verified participation response' in listed['rows'][0]['status_reason']
 
     result=reviewed_generate(db,{'ids':[ident]},'owner-fixture-invitation-'+ident)
     assert result['pilot_review_status']=='PENDING_REVIEW'
@@ -1859,6 +1947,7 @@ def test_geoairesume_candidate_paths_with_existing_invitation_and_job(db,monkeyp
     found=list_candidates(db,{'q':'GeoAIResume'})
     assert found['total']==1 and found['rows'][0]['id']==geo_id
     assert found['rows'][0]['invitation']['consent_status']=='AUTHORIZED'
+    assert found['rows'][0]['primary_status']=='ACCEPTED'
     assert found['rows'][0]['research']['status']
     assert found['rows'][0]['delivery'] is None
     ordinary=list_candidates(db,{})
@@ -1987,7 +2076,7 @@ def test_multiple_authorized_contacts_are_ready_but_require_explicit_recipient_c
             verification='VERIFIED',purpose='general business',verified_at=now(),verification_reason='fresh',
             authorization_reason='Exact address in first-party evidence; general business purpose.',suppressed=False))
     row=list_candidates(db,{'q':'Example Company'})['rows'][0]
-    assert row['primary_status']=='READY_TO_INVITE' and row['contact_readiness']=='MANUAL_RECIPIENT_SELECTION'
+    assert row['primary_status']=='PENDING' and row['eligible'] is True and row['contact_readiness']=='MANUAL_RECIPIENT_SELECTION'
     selection={'ids':['multi-contact']};preview=preview_generation(db,selection)
     assert preview['valid_recipient_count']==0 and preview['excluded'][0]['recipient_options']==['first@businessmail.org','second@businessmail.org']
     chosen={**selection,'recipient_choices':{'multi-contact':'second@businessmail.org'}}
@@ -2006,7 +2095,7 @@ def test_pending_and_unknown_public_contacts_are_draft_eligible_but_remain_unver
         c.execute(contacts.update().where(contacts.c.candidate_id=='unverified-contact').values(
             verification=state,verified_at=None,evidence='For general business inquiries contact contact@businessmail.org.'))
     row=list_candidates(db,{'q':'Company'})['rows'][0]
-    assert row['primary_status']=='READY_TO_INVITE'
+    assert row['primary_status']=='PENDING' and row['eligible'] is True
     assert row['contact_readiness']=='READY'
     preview=preview_generation(db,{'ids':['unverified-contact']})
     assert preview['valid_recipient_count']==1
@@ -3348,10 +3437,10 @@ def test_dashboard_contact_readiness_uses_shared_gate_not_verified_status(db):
     with db.transaction() as c:
         c.execute(contacts.update().where(contacts.c.candidate_id==ident).values(
             verification='UNKNOWN',verified_at=None))
-    listed=list_candidates(db,{'primary_status':'READY_TO_INVITE'})
+    listed=list_candidates(db,{'primary_status':'PENDING'})
     row=next(item for item in listed['rows'] if item['id']==ident)
     counts=contact_readiness_counts(db)
-    assert row['primary_status']=='READY_TO_INVITE' and row['eligible'] is True
+    assert row['primary_status']=='PENDING' and row['eligible'] is True
     assert row['contact_readiness']=='READY'
     assert counts['contact_eligible']==1 and counts['contact_missing']==0
     assert counts['contact_pending_verification']==1 and counts['contact_verified']==0
@@ -3659,6 +3748,58 @@ def isolated_postgres_db():
     result.engine.dispose()
 
 
+def test_postgres_company_participation_status_is_independent_of_invitation_batch(isolated_postgres_db,monkeypatch):
+    from outreach_v2.service import detail
+    monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Postgres Test Researcher')
+    monkeypatch.setenv('OUTREACH_UNIVERSITY_AFFILIATION','Test University')
+    monkeypatch.setenv('OUTREACH_REPLY_TO','researcher@example.org')
+    db=isolated_postgres_db
+    candidate(db,'pg-status-sent','sent@pg-status.org','https://sent.pg-status.org','Sent')
+    candidate(db,'pg-status-legacy-sent','legacy@pg-status.org','https://legacy.pg-status.org','Legacy SENT')
+    candidate(db,'pg-status-accepted','accepted@pg-status.org','https://accepted.pg-status.org','Accepted')
+    candidate(db,'pg-status-rejected','rejected@pg-status.org','https://rejected.pg-status.org','Rejected')
+    candidate(db,'pg-status-no-contact','none@pg-status.org','https://none.pg-status.org','No Contact')
+    discarded_ids=[]
+    for index in range(156):
+        ident=f'pg-status-discarded-{index:03d}';discarded_ids.append(ident)
+        candidate(db,ident,f'discarded{index}@pg-status.org',f'https://discarded-{index}.pg-status.test',
+            f'PG Status Discarded {index:03d}')
+    discarded=invite(db,discarded_ids,'pg-status-discarded-key')
+    legacy_sent=invite(db,['pg-status-legacy-sent'],'pg-status-legacy-sent-key')
+    sent=invite(db,['pg-status-sent'],'pg-status-sent-key')
+    accepted=invite(db,['pg-status-accepted'],'pg-status-accepted-key')
+    rejected=invite(db,['pg-status-rejected'],'pg-status-rejected-key')
+    with db.transaction() as c:
+        c.execute(batches.update().where(batches.c.id==discarded['id']).values(
+            discarded_at=now(),discarded_by='postgres-test-admin'))
+        sent_inv=c.execute(select(invitations).where(invitations.c.batch_id==sent['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==sent_inv['id']).values(
+            send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=now(),manual_sent_by='postgres-test-admin'))
+        legacy_inv=c.execute(select(invitations).where(invitations.c.batch_id==legacy_sent['id'])).mappings().one()
+        c.execute(invitations.update().where(invitations.c.id==legacy_inv['id']).values(send_status='SENT'))
+        c.execute(contacts.delete().where(contacts.c.candidate_id=='pg-status-no-contact'))
+        for created,decision,status in ((accepted,('YES','YES'),'AUTHORIZED'),(rejected,('NO','YES'),'DECLINED')):
+            inv=c.execute(select(invitations).where(invitations.c.batch_id==created['id'])).mappings().one()
+            c.execute(invitations.update().where(invitations.c.id==inv['id']).values(consent_status=status))
+            c.execute(submissions.insert().values(id='pg-submission-'+inv['id'],invitation_id=inv['id'],
+                reference=inv['reference'],interest=decision[0],authorization=decision[1],
+                submitted_at=now(),received_at=now(),identity_provider='GOOGLE_FORMS_VERIFIED',
+                identity_verified_email='verified@pg-status.org',identity_reference='pg-response-'+inv['id'],
+                status=status,reason='PostgreSQL status regression fixture'))
+    found=list_candidates(db,{'q':'pg-status'},page=1,page_size=100)
+    statuses={row['id']:row['primary_status'] for row in found['rows']}
+    next_page=list_candidates(db,{'q':'pg-status'},page=2,page_size=100,cursor=found['next_cursor'])
+    statuses.update({row['id']:row['primary_status'] for row in next_page['rows']})
+    assert len([key for key in statuses if key.startswith('pg-status-discarded-')])==156
+    assert all(statuses[ident]=='PENDING' for ident in discarded_ids)
+    assert list_candidates(db,{'q':'pg-status','primary_status':'PENDING'},page_size=100)['total']==157
+    assert list_candidates(db,{'q':'pg-status','primary_status':'REJECTED'},page_size=100)['total']==1
+    assert list_candidates(db,{'q':'pg-status','primary_status':'INVITED'},page_size=100)['total']==1
+    assert list_candidates(db,{'q':'pg-status','primary_status':'ACCEPTED'},page_size=100)['total']==1
+    assert list_candidates(db,{'q':'pg-status','primary_status':'NO_CONTACT'},page_size=100)['total']==1
+    assert detail(db,'pg-status-discarded-000')['primary_status']=='PENDING'
+
+
 def test_postgres_compact_batch_summary_uses_bounded_queries(isolated_postgres_db,monkeypatch):
     from time import perf_counter
     from sqlalchemy import event
@@ -3743,7 +3884,8 @@ def test_legacy_send_labels_without_evidence_are_normalized_but_real_audit_evide
         c.execute(events.insert().values(id='provider-accepted-event',entity_id=provider_inv['id'],
             event='INVITATION_PROVIDER_SEND_ACCEPTED',detail='provider message accepted',created_at=now()))
     page=list_candidates(db,{'q':'Legacy Status'})
-    assert page['rows'][0]['primary_status']=='INVITATION_DRAFT'
+    assert page['rows'][0]['primary_status']=='PENDING'
+    assert list_candidates(db,{'q':'Provider Status'})['rows'][0]['primary_status']=='INVITED'
     report=invitation_history_reconciliation(db)
     assert report['invitation_records']['INVITATION_DRAFT'] == 1
     assert report['invitation_records']['INVITATION_PROVIDER_SENT'] == 1

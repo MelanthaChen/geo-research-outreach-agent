@@ -213,6 +213,33 @@ def authorized_email_count():
 def has_invitation():
     return exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
 
+def verified_accepted_consent(invitation=invitations):
+    """Consent accepted only by the persisted verified YES+YES ingestion path."""
+    return exists(select(submissions.c.id).where(
+        submissions.c.invitation_id==invitation.c.id,
+        submissions.c.status=='AUTHORIZED',
+        submissions.c.interest=='YES',submissions.c.authorization=='YES',
+        submissions.c.identity_provider=='GOOGLE_FORMS_VERIFIED',
+        func.length(func.trim(func.coalesce(submissions.c.identity_verified_email,'')))>0,
+        func.length(func.trim(func.coalesce(submissions.c.identity_reference,'')))>0,
+        invitation.c.consent_status=='AUTHORIZED'))
+
+def explicit_declined_consent(invitation=invitations):
+    """A persisted explicit NO is a refusal; a discarded invitation is not."""
+    return exists(select(submissions.c.id).where(
+        submissions.c.invitation_id==invitation.c.id,
+        submissions.c.status=='DECLINED',
+        or_(submissions.c.interest=='NO',submissions.c.authorization=='NO'),
+        invitation.c.consent_status=='DECLINED'))
+
+def invitation_readiness_expression():
+    """Existing invitation eligibility, retained independently of participation."""
+    blocked=or_(candidates.c.suppressed.is_(True),candidates.c.fixture.is_(True),
+        candidates.c.website_status.is_distinct_from('VERIFIED'),
+        candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+        candidates.c.personalization_quality_status=='FAIL')
+    return and_(~has_invitation(),~blocked,completed_personalization(),authorized_email_count()>0)
+
 INVITATION_STATES={
     'INVITATION_DRAFT':'Draft Generated',
     'INVITATION_PENDING_REVIEW':'Pending Review',
@@ -310,57 +337,39 @@ def batch_invitation_state_summary(connection,batch_id):
     return batch_state_from_counts(invitation_state_counts(connection,batch_id))
 
 def primary_status_expression():
-    """Mutually exclusive business status derived from persisted facts, never stored."""
-    completed=completed_personalization()
-    blocked=or_(candidates.c.suppressed.is_(True),candidates.c.fixture.is_(True),
-        candidates.c.website_status.is_distinct_from('VERIFIED'),
-        candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
-        candidates.c.personalization_quality_status=='FAIL')
-    contact_count=authorized_email_count()
-    invite_states=[]
-    for state in INVITATION_STATES:
-        invite_states.append((exists(select(invitations.c.id).select_from(invitations.join(
-            batches,invitations.c.batch_id==batches.c.id)).where(
-                invitations.c.candidate_id==candidates.c.id,
-                invitation_state_expression()==state)),state))
+    """Research participation state only; invitation drafts/batches are separate."""
+    accepted=exists(select(invitations.c.id).where(
+        invitations.c.candidate_id==candidates.c.id,verified_accepted_consent(invitations)))
+    declined=exists(select(invitations.c.id).where(
+        invitations.c.candidate_id==candidates.c.id,explicit_declined_consent(invitations)))
+    genuinely_sent=exists(select(invitations.c.id).select_from(invitations.join(
+        batches,batches.c.id==invitations.c.batch_id)).where(
+            invitations.c.candidate_id==candidates.c.id,
+            or_(invitation_state_expression()=='INVITATION_MANUALLY_SENT',
+                invitation_state_expression()=='INVITATION_PROVIDER_SENT')))
     return case(
-        *invite_states,
-        (blocked,'BLOCKED'),
-        (~completed,'PENDING_PERSONALIZATION'),
-        (contact_count==0,'PERSONALIZED_NO_CONTACT'),
-        else_='READY_TO_INVITE')
+        (accepted,'ACCEPTED'),
+        (declined,'REJECTED'),
+        (genuinely_sent,'INVITED'),
+        (authorized_email_count()==0,'NO_CONTACT'),
+        else_='PENDING')
 
 STATUS_LABELS={
-    'READY_TO_INVITE':'Ready to Invite',
-    'PERSONALIZED_NO_CONTACT':'Personalized · No Contact',
-    **INVITATION_STATES,
-    'PENDING_PERSONALIZATION':'Pending Personalization',
-    'BLOCKED':'Blocked',
+    'PENDING':'Pending',
+    'INVITED':'Invited',
+    'ACCEPTED':'Accepted',
+    'REJECTED':'Rejected',
+    'NO_CONTACT':'No Contact',
 }
 
 def status_reason(row, status):
-    if status in INVITATION_STATES:
-        return {
-            'INVITATION_DRAFT':'An invitation draft exists; no sending confirmation is recorded.',
-            'INVITATION_PENDING_REVIEW':'The invitation is awaiting human review; it has not been confirmed sent.',
-            'INVITATION_EXPORTED':'The approved invitation package was downloaded; this is not proof of sending.',
-            'INVITATION_MANUALLY_SENT':'An authorized operator explicitly confirmed this invitation was sent outside Outreach.',
-            'INVITATION_PROVIDER_SENT':'A provider acceptance record exists for this invitation.',
-            'INVITATION_DISCARDED':'The batch was intentionally discarded; the records remain available for audit.',
-        }[status]
-    if status=='BLOCKED':
-        if row.get('suppressed'): return 'This business is suppressed.'
-        if row.get('fixture'): return 'This is an owner-controlled test fixture, not a real business record.'
-        if row.get('website_status') in {'IDENTITY_MISMATCH','AMBIGUOUS_IDENTITY'}: return 'The website identity does not match this business; verify the official domain.'
-        if row.get('website_status')!='VERIFIED': return 'Verify the official website and business identity.'
-        if row.get('qualification') not in {'ELIGIBLE','QUALIFIED'}: return 'The business has not passed qualification.'
-        if row.get('personalization_quality_status')=='FAIL': return 'Personalization did not pass its evidence quality checks.'
-        return 'More than one authorized business email is available; resolve recipient ambiguity.'
-    if status=='PENDING_PERSONALIZATION':
-        if row.get('personalization_quality_status')=='FAIL': return 'Personalization did not pass its evidence quality checks.'
-        return 'Complete and quality-check evidence-backed personalization.'
-    if status=='PERSONALIZED_NO_CONTACT': return 'Personalization passed; no exact, purpose-appropriate public business email is supported by the official website.'
-    return 'Ready for invitation preparation.'
+    return {
+        'PENDING':'No verified participation response is recorded.',
+        'INVITED':'A genuine manual send confirmation or provider send record exists.',
+        'ACCEPTED':'Verified Google respondent identity and explicit YES+YES authorization are recorded.',
+        'REJECTED':'An explicit NO response to participation or authorization is recorded.',
+        'NO_CONTACT':'No eligible, unsuppressed, first-party business email is available.',
+    }[status]
 
 def owner_test_recipient_authorized(c, row, recipient, *, saved_contacts=None, suppressed_emails=None):
     """Recheck the exact fixture's saved owner binding at every invitation gate."""
@@ -439,10 +448,11 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
         for item in grouped:
             if item.status in status_counts:status_counts[item.status]=item.count
         total=sum(status_counts.values())
-        eligible=status_counts['READY_TO_INVITE']
+        ready_expr=invitation_readiness_expression()
+        eligible=c.scalar(select(func.count()).select_from(candidates).where(*clauses,ready_expr)) or 0
         completed_count=c.scalar(select(func.count()).select_from(candidates).where(completed_personalization()))
         projected=[column for column in candidates.c if column.name!='personalization']
-        query=select(*projected,status.label('primary_status')).where(*clauses).order_by(candidates.c.name,candidates.c.id)
+        query=select(*projected,status.label('primary_status'),ready_expr.label('invitation_ready')).where(*clauses).order_by(candidates.c.name,candidates.c.id)
         if cursor_name is not None:
             query=query.where(or_(candidates.c.name>cursor_name,
                 and_(candidates.c.name==cursor_name,candidates.c.id>cursor_id)))
@@ -491,11 +501,15 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
             row['status_reason']=status_reason(row,row['primary_status'])
             row.update(contact_readiness(c,row,contact_rows=contacts_by_candidate.get(row['id'],[]),
                 suppressed_emails=suppressed_emails))
-            row['eligible']=row['primary_status']=='READY_TO_INVITE'
+            row['eligible']=bool(row.pop('invitation_ready'))
+            row['invitation_readiness']='READY' if row['eligible'] else 'NOT_READY'
             row['contacts']=[{key:item[key] for key in ('email','url','verification')} for item in contacts_by_candidate.get(row['id'],[])]
-            row['invitation']=invitation_by_candidate.get(row['id'])
-            if row['invitation']:
-                invitation_id=row['invitation']['id']
+            row['invitation_record_exists']=row['id'] in invitation_by_candidate
+            if row['invitation_record_exists']:
+                inv=invitation_by_candidate[row['id']]
+                invitation_id=inv['id']
+                row['invitation']={'id':inv['id'],'reference':inv['reference'],
+                    'consent_status':inv['consent_status'],'recipient':inv['recipient']}
                 row['research']=research_by_invitation.get(invitation_id)
                 row['delivery']=delivery_by_invitation.get(invitation_id)
         next_cursor=None
@@ -514,16 +528,14 @@ def detail(db,ident):
         row['primary_status']=c.scalar(select(primary_status_expression()).where(candidates.c.id==ident))
         row['status_label']=STATUS_LABELS[row['primary_status']]
         row['status_reason']=status_reason(row,row['primary_status'])
+        row['eligible']=bool(c.scalar(select(invitation_readiness_expression()).where(candidates.c.id==ident)))
+        row['invitation_readiness']='READY' if row['eligible'] else 'NOT_READY'
         row.update(contact_readiness(c,row))
-        row['invitation']=c.execute(select(invitations.c.id,invitations.c.send_status,invitations.c.consent_status,
-            invitations.c.exported_at,invitations.c.manual_sent_at,invitations.c.manual_sent_by,invitations.c.manual_send_note,
-            batches.c.id.label('batch_id'),batches.c.pilot_review_status,
-            batches.c.first_downloaded_at,batches.c.download_count,batches.c.discarded_at,batches.c.discarded_by,
-            invitation_state_expression().label('lifecycle_status')).select_from(
-                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.candidate_id==ident)).mappings().first()
-        if row['invitation']:
-            row['invitation']=dict(row['invitation']);status=row['invitation'].pop('lifecycle_status')
-            row['invitation'].update(invitation_status_payload(row['invitation'],row['invitation'],state=status))
+        invitation=c.execute(select(invitations.c.id,invitations.c.reference,invitations.c.consent_status)
+            .where(invitations.c.candidate_id==ident)).mappings().first()
+        row['invitation_record_exists']=bool(invitation)
+        row['invitation_reference']=invitation['reference'] if invitation else None
+        row['consent_status']=invitation['consent_status'] if invitation else None
         row['contacts']=[dict(r) for r in c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings()]
         for saved_contact in row['contacts']:
             address=(saved_contact.get('email') or '').strip().casefold()
@@ -1119,7 +1131,7 @@ def dashboard(db):
             .where(invitation_generation_batches.c.status.in_(['FAILED','BLOCKED']))) or 0
         return {'companies':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='company')),
                 'hotels':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='hotel')),
-                'ready_to_invite':c.scalar(select(func.count()).select_from(candidates).where(primary_status_expression()=='READY_TO_INVITE')),
+                'ready_to_invite':c.scalar(select(func.count()).select_from(candidates).where(invitation_readiness_expression())),
                 'completed_personalization':c.scalar(select(func.count()).select_from(candidates).where(completed_personalization())),
                 'invitations_draft_generated':invitation_counts['INVITATION_DRAFT'],
                 'invitations_pending_review':invitation_counts['INVITATION_PENDING_REVIEW'],

@@ -61,3 +61,49 @@ def test_company_level_suppression_blocks_saved_evidence():
     record = _record()
     record["suppression_status"] = "SUPPRESSED"
     assert eligible_business_email_channels(record) == []
+
+
+@pytest.mark.parametrize("purpose", ["Experience the Difference", "", None])
+def test_schema_org_email_on_official_contact_page_is_general_without_prose(purpose):
+    email = "informationemail@1stsummit.bank"
+    record = _record(source="https://www.1stsummit.bank/contact-us/", purpose=purpose or "")
+    record["official_website"] = "https://www.1stsummit.bank/"
+    record["contact_channels"][0].update({
+        "channel_type": "GENERAL_BUSINESS_EMAIL",
+        "email": email,
+        "verification_status": "UNKNOWN",
+        "evidence": '{"@type": "Organization", "name": "1st Summit Bank", '
+                    '"description": "Experience the Difference", "url": '
+                    '"https://www.1stsummit.bank/", "email": "informationemail@1stsummit.bank"}',
+        "purpose": purpose,
+    })
+    assert [item["email"] for item in eligible_business_email_channels(record)] == [email]
+
+
+def test_schema_org_email_does_not_override_restriction_or_non_contact_route():
+    email = "informationemail@1stsummit.bank"
+    record = _record(source="https://www.1stsummit.bank/privacy/", purpose="Experience the Difference")
+    record["official_website"] = "https://www.1stsummit.bank/"
+    record["contact_channels"][0].update({
+        "channel_type": "GENERAL_BUSINESS_EMAIL", "email": email,
+        "evidence": '{"@type":"Organization","email":"informationemail@1stsummit.bank"}',
+    })
+    assert eligible_business_email_channels(record) == []
+
+    record["contact_channels"][0]["source_url"] = "https://www.1stsummit.bank/contact-us/"
+    record["contact_channels"][0]["email"] = "support@1stsummit.bank"
+    record["contact_channels"][0]["evidence"] = '{"@type":"Organization","email":"support@1stsummit.bank"}'
+    assert eligible_business_email_channels(record) == []
+
+    record["contact_channels"][0]["email"] = email
+    record["contact_channels"][0]["evidence"] = (
+        '{"@type":"Organization","description":"For customer support, email '
+        'informationemail@1stsummit.bank","email":"informationemail@1stsummit.bank"}')
+    assert eligible_business_email_channels(record) == []
+
+
+def test_url_saved_as_contact_value_is_not_an_email():
+    record = _record()
+    record["contact_channels"][0]["email"] = "https://www.1stsummit.bank/contact-us/"
+    record["contact_channels"][0]["evidence"] = '{"@type":"Organization","email":"https://www.1stsummit.bank/contact-us/"}'
+    assert eligible_business_email_channels(record) == []

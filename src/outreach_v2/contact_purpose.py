@@ -29,6 +29,14 @@ RESTRICTED_LOCALPARTS = (
 )
 GENERAL_LOCALPARTS = ('info','contact','hello','enquiries','enquiry','office')
 CONTACT_PATH_RE = re.compile(r'(?:^|/)(?:contact(?:-us)?|contactus|about|locations?)(?:/|$)', re.I)
+# Structured first-party Organization.email values are explicit public email
+# declarations. Some sites publish these only as JSON-LD, without surrounding
+# prose such as “general inquiries”; keep this bounded to the same object and
+# require a contact/about route at the call site.
+SCHEMA_ORG_TYPES = r'(?:organization|localbusiness|financialservice|bankorcreditunion|bankbranch|hotel|store)'
+SCHEMA_ORG_EMAIL_PREFIX = r'"@type"\s*:\s*"' + SCHEMA_ORG_TYPES + r'"[^}]{0,250}"email"\s*:\s*"'
+SCHEMA_ORG_EMAIL_REVERSE_PREFIX = r'"email"\s*:\s*"'
+SCHEMA_ORG_EMAIL_REVERSE_SUFFIX = r'"[^}]{0,250}"@type"\s*:\s*"' + SCHEMA_ORG_TYPES + r'"'
 PLACEHOLDER_HOSTS = ('example.com','example.org','example.net','test.com','test.org','mysite.com','email.com','invalid','localhost')
 
 
@@ -43,14 +51,26 @@ def _context_near_email(email: str, text: str, pattern: str, radius: int = 150) 
     ))
 
 
+def _schema_org_contact_email(email: str, evidence: str) -> bool:
+    """Require an exact address in an Organization.email field in saved JSON-LD."""
+    if not email or not isinstance(evidence, str):
+        return False
+    address = re.escape(email)
+    pattern = re.compile(
+        r'(?:' + SCHEMA_ORG_EMAIL_PREFIX + address + r'"|'
+        + SCHEMA_ORG_EMAIL_REVERSE_PREFIX + address + SCHEMA_ORG_EMAIL_REVERSE_SUFFIX + r')', re.I)
+    return bool(pattern.search(evidence))
+
+
 def classify_public_contact_purpose(email: str, evidence: str = '', purpose: str = '', source_url: str = '') -> str:
     """Return normalized purpose only when preserved same-site context supports it.
 
     The email itself must be checked against first-party evidence by the caller.
     A generic address prefix never qualifies by itself. A contact/about route plus
-    a recognized general mailbox and contact-oriented surrounding text can qualify.
-    Explicit role/context restrictions take precedence unless the same local text
-    clearly identifies that exact address for general inquiries.
+    either exact Schema.org Organization.email data or recognized nearby general
+    contact wording can qualify. Explicit role/context restrictions take
+    precedence unless the same local text clearly identifies that exact address
+    for general inquiries.
     """
     email = (email or '').strip().casefold()
     if not email or '@' not in email:
@@ -83,6 +103,12 @@ def classify_public_contact_purpose(email: str, evidence: str = '', purpose: str
             return SPECIFIC_LABEL
 
     if has_explicit_general or normalized_general:
+        return GENERAL_LABEL
+
+    # Schema.org's Organization.email is a positive publication signal on an
+    # official contact route even when the adjacent Description is marketing
+    # copy (or absent). It is deliberately not inferred from the address prefix.
+    if CONTACT_PATH_RE.search(path) and _schema_org_contact_email(email, evidence):
         return GENERAL_LABEL
 
     # Contact-page context may make common published mailboxes suitable, but the

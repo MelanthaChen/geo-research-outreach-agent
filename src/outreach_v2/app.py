@@ -363,6 +363,10 @@ def create_app(database=None):
         if not isinstance(body,dict) or set(body)!={'candidate_id','email','source_url'}:
             raise ValueError('Provide exactly candidate_id, email, and source_url')
         return service.add_contact_from_first_party_page(db,str(body['candidate_id']),str(body['email']),str(body['source_url']))
+    @app.get('/api/admin/invitations/reconciliation')
+    def invitation_reconciliation(request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        return service.invitation_history_reconciliation(db)
     @app.get('/api/admin/contact-readiness')
     def admin_contact_readiness(request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -386,10 +390,14 @@ def create_app(database=None):
         from .invitation_generation import enqueue
         body=await request.json()
         result=enqueue(db,body,request.headers.get('idempotency-key'))
+        with db.transaction() as c:
+            lifecycle=service.batch_invitation_state_summary(c,result['batch_id'])
         return result|{'review_status':'GENERATING' if result['generation_status'] not in {'COMPLETED','COMPLETED_WITH_EXCLUSIONS'} else 'PENDING_REVIEW',
+            'send_status':lifecycle,'lifecycle_status':lifecycle,'status_label':service.INVITATION_STATES.get(lifecycle,'Draft Generated'),
             'download_available':False,'sent':False}
     @app.get('/api/batches')
-    def batch_list(page:int=1):
+    def batch_list(request:Request,page:int=1,include_discarded:bool=False):
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
         with db.transaction() as c:
             query=select(*[x for x in batches.c if x.name!='package'],
                 invitation_generation_batches.c.status.label('generation_status'),
@@ -398,7 +406,17 @@ def create_app(database=None):
                 invitation_generation_batches.c.error.label('generation_error')).select_from(
                     batches.outerjoin(invitation_generation_batches,
                         invitation_generation_batches.c.batch_id==batches.c.id))
-            return {'rows':[dict(r) for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]}
+            if not include_discarded:query=query.where(batches.c.discarded_at.is_(None))
+            rows=[]
+            for r in c.execute(query.order_by(batches.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings():
+                item=dict(r)
+                item['send_status']=service.batch_invitation_state_summary(c,item['id'])
+                item['invitation_counts']={state:int(count) for state,count in c.execute(select(
+                    service.invitation_state_expression().label('state'),func.count().label('count')).select_from(
+                    invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+                    invitations.c.batch_id==item['id']).group_by(service.invitation_state_expression())).all()}
+                rows.append(item)
+            return {'rows':rows}
     @app.get('/api/batches/{ident}/generation')
     def batch_generation_status(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR','APPROVER')
@@ -439,14 +457,24 @@ def create_app(database=None):
             'batch_review_url':f"/api/batches/{result['id']}/review",'reused_existing_batch':True,
             'download_available':result.get('pilot_review_status')=='APPROVED','sent':False}
     @app.get('/api/batches/{ident}/download')
-    def download(ident:str):
-        with db.transaction() as c:row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
-        if not row:raise LookupError('Batch not found')
-        if row['pilot_review_status']!='APPROVED':
-            raise PermissionError('Invitation package is not available until the exact batch receives human approval')
-        if row['pilot_review_status']=='APPROVED' and hashlib.sha256(row['package'] or b'').hexdigest()!=row['pilot_review_sha256']:
-            raise PermissionError('Approved invitation package hash no longer matches; approval is invalidated')
-        return Response(row['package'],media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{ident}.zip"'})
+    def download(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
+        stamp=now();actor=request.state.session['email']
+        with db.transaction(serialized=True) as c:
+            row=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not row:raise LookupError('Batch not found')
+            if row['discarded_at']:raise PermissionError('Discarded invitation batches cannot be exported')
+            if row['pilot_review_status']!='APPROVED':
+                raise PermissionError('Invitation package is not available until the exact batch receives human approval')
+            if hashlib.sha256(row['package'] or b'').hexdigest()!=row['pilot_review_sha256']:
+                raise PermissionError('Approved invitation package hash no longer matches; approval is invalidated')
+            c.execute(batches.update().where(batches.c.id==ident).values(
+                first_downloaded_at=row['first_downloaded_at'] or stamp,last_downloaded_at=stamp,
+                last_downloaded_by=actor,download_count=(row['download_count'] or 0)+1))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_PACKAGE_DOWNLOADED',
+                detail=dump({'actor':actor,'package_sha256':row['pilot_review_sha256'],'downloaded_at':stamp}),created_at=stamp))
+            payload=row['package']
+        return Response(payload,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{ident}.zip"'})
     @app.get('/api/batches/{ident}/review')
     def review_batch(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','APPROVER','OPERATOR')
@@ -455,16 +483,24 @@ def create_app(database=None):
             if not batch:raise LookupError('Batch not found')
             if batch['pilot_review_status']=='GENERATING':raise ValueError('Invitation package is still being generated')
             rows=c.execute(select(invitations,candidate_table.c.personalization_quality_status,
-                candidate_table.c.personalization_quality_errors).select_from(invitations.join(candidate_table,
-                candidate_table.c.id==invitations.c.candidate_id)).where(invitations.c.batch_id==ident)
+                candidate_table.c.personalization_quality_errors,batches.c.first_downloaded_at,
+                batches.c.download_count,batches.c.discarded_at,batches.c.discarded_by,
+                service.invitation_state_expression().label('lifecycle_status')).select_from(invitations.join(candidate_table,
+                candidate_table.c.id==invitations.c.candidate_id).join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.batch_id==ident)
                 .order_by(invitations.c.company_name)).mappings().all()
             items=[]
             for row in rows:
-                item=dict(row);item['personalization']=json.loads(item.get('personalization') or '{}')
+                item=dict(row);state=item.pop('lifecycle_status');item.update(service.invitation_status_payload(item,item,state=state));item['personalization']=json.loads(item.get('personalization') or '{}')
                 item['personalization_quality_errors']=json.loads(item.get('personalization_quality_errors') or '[]')
                 items.append(item)
             return {'batch_id':ident,'status':batch['pilot_review_status'],'package_sha256':hashlib.sha256(batch['package'] or b'').hexdigest(),
-                'excluded':json.loads(batch['excluded'] or '[]'),'invitations':items,'download_available':batch['pilot_review_status']=='APPROVED'}
+                'excluded':json.loads(batch['excluded'] or '[]'),'invitations':items,
+                'download_available':batch['pilot_review_status']=='APPROVED' and not batch['discarded_at'],
+                'first_downloaded_at':batch['first_downloaded_at'],'last_downloaded_at':batch['last_downloaded_at'],
+                'last_downloaded_by':batch['last_downloaded_by'],
+                'download_count':batch['download_count'],'discarded_at':batch['discarded_at'],
+                'discarded_by':batch['discarded_by'],'discard_reason':batch['discard_reason'],
+                'send_status':service.batch_invitation_state_summary(c,ident)}
     @app.post('/api/batches/{ident}/approve')
     async def approve_batch(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','APPROVER')
@@ -489,33 +525,135 @@ def create_app(database=None):
                     raise ValueError('Every invitation must pass the current personalization quality gate')
             stamp=now();actor=request.state.session['email']
             c.execute(batches.update().where(batches.c.id==ident).values(pilot_review_status='APPROVED',pilot_review_sha256=digest,
-                pilot_reviewed_by=actor,pilot_reviewed_at=stamp,send_status='READY_TO_SEND'))
-            c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='READY_TO_SEND'))
+                pilot_reviewed_by=actor,pilot_reviewed_at=stamp))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_BATCH_APPROVED',
                 detail=json.dumps({'sha256':digest,'count':len(rows),'reviewer':actor},sort_keys=True),created_at=stamp))
-        return {'batch_id':ident,'status':'APPROVED','package_sha256':digest,'send_status':'READY_TO_SEND','sent':False}
-    @app.post('/api/batches/{ident}/send-record')
-    async def record_send(ident:str,request:Request):
+        return {'batch_id':ident,'status':'APPROVED','package_sha256':digest,'send_status':'INVITATION_DRAFT',
+            'lifecycle_status':'INVITATION_DRAFT','status_label':'Draft Generated','sent':False}
+    @app.post('/api/batches/{ident}/mark-sent')
+    async def mark_invitations_sent(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN','OPERATOR')
-        body=await request.json();evidence=str(body.get('evidence') or '').strip()
-        if not evidence:raise ValueError('Describe the actual Outlook batch send evidence')
-        # Operator attestation is not a provider receipt or delivery confirmation.
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)-{'invitation_ids','whole_batch','confirm_sent','note','request_id'}:
+            raise ValueError('Invalid manual sent confirmation payload')
+        ids=body.get('invitation_ids');whole_batch=body.get('whole_batch') is True;note=str(body.get('note') or '').strip()
+        if body.get('confirm_sent') is not True or (whole_batch and ids is not None) or (not whole_batch and (not isinstance(ids,list) or not ids or len(ids)!=len(set(ids)))):
+            raise ValueError('Explicitly confirm either the whole batch or a unique selected invitation subset')
         with db.transaction(serialized=True) as c:
             batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
             if not batch:raise LookupError('Batch not found')
-            if batch['pilot_review_status']!='APPROVED':
-                raise PermissionError('Invitation batch must be reviewed before recording a send')
-            sender_addresses=c.execute(select(invitations.c.sender_email).where(invitations.c.batch_id==ident)).scalars().all()
+            if batch['discarded_at']:raise ValueError('Discarded batch cannot be marked sent')
+            if batch['pilot_review_status']!='APPROVED':raise PermissionError('Invitation batch must be approved before recording an external send')
+            if whole_batch:
+                eligible_states=('INVITATION_DRAFT','INVITATION_PENDING_REVIEW','INVITATION_EXPORTED')
+                rows=c.execute(select(invitations.c.id,invitations.c.send_status,
+                    service.invitation_state_expression().label('lifecycle_status')).select_from(
+                    invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+                    invitations.c.batch_id==ident,service.invitation_state_expression().in_(eligible_states))
+                    .order_by(invitations.c.id)).all()
+                ids=[row.id for row in rows]
+            else:
+                rows=c.execute(select(invitations.c.id,invitations.c.send_status,
+                    service.invitation_state_expression().label('lifecycle_status')).select_from(
+                    invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(
+                    invitations.c.batch_id==ident,invitations.c.id.in_(ids))).all()
+            if len(rows)!=len(ids):raise ValueError('Every selected invitation must belong to this batch')
+            if not rows:raise ValueError('No unconfirmed invitations are available to mark as sent')
+            if any(row.lifecycle_status not in {'INVITATION_DRAFT','INVITATION_PENDING_REVIEW','INVITATION_EXPORTED'} for row in rows):
+                raise ValueError('A selected invitation is already sent or discarded; only active unsent invitations may be marked')
+            selected_senders=c.execute(select(invitations.c.sender_email).where(
+                invitations.c.batch_id==ident,invitations.c.id.in_(ids))).scalars().all()
             verified=_verified_invitation_senders()
-            if not sender_addresses or any(not address or str(address).casefold() not in verified for address in sender_addresses):
-                raise PermissionError('Actual sending is blocked: every sender must be listed in OUTREACH_VERIFIED_INVITATION_SENDERS after mailbox or delegated SendAs verification')
-            c.execute(batches.update().where(batches.c.id==ident).values(send_status='OPERATOR_REPORTED',send_evidence=evidence,send_recorded_at=now()))
-            c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='OPERATOR_REPORTED'))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='OPERATOR_REPORTED_SEND',detail=evidence,created_at=now()))
-        return {'status':'OPERATOR_REPORTED','verified_delivery':False}
+            if not selected_senders or any(not address or str(address).casefold() not in verified for address in selected_senders):
+                raise PermissionError('Manual sent confirmation is limited to invitations addressed from an authorized sender account')
+            stamp=now();actor=request.state.session['email']
+            for row in rows:
+                c.execute(invitations.update().where(invitations.c.id==row.id).values(
+                    send_status='MANUALLY_CONFIRMED_SENT',manual_sent_at=stamp,manual_sent_by=actor,manual_send_note=note or None))
+                c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=row.id,event='INVITATION_MANUALLY_MARKED_SENT',
+                    detail=dump({'actor':actor,'timestamp':stamp,'batch_id':ident,'note':note or None,
+                        'request_id':body.get('request_id')}),created_at=stamp))
+            total=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==ident)) or 0
+            manually_sent=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==ident,
+                invitations.c.send_status=='MANUALLY_CONFIRMED_SENT')) or 0
+            provider_sent=c.scalar(select(func.count()).select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.batch_id==ident,
+                service.invitation_state_expression()=='INVITATION_PROVIDER_SENT')) or 0
+            confirmed_sent=manually_sent+provider_sent
+            c.execute(batches.update().where(batches.c.id==ident).values(send_status='OPERATOR_REPORTED' if manually_sent==total else 'PARTIALLY_SENT',
+                send_evidence=note or 'Selected invitation(s) manually confirmed sent',send_recorded_at=stamp))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_BATCH_PARTIALLY_SENT' if confirmed_sent<total else 'INVITATION_BATCH_MANUALLY_CONFIRMED_SENT',
+                detail=dump({'actor':actor,'timestamp':stamp,'selected_invitation_ids':ids,'sent_count':confirmed_sent,'total_count':total,'note':note or None,'whole_batch_confirmation':whole_batch}),created_at=stamp))
+        state='PARTIALLY_SENT' if confirmed_sent<total else 'INVITATION_MANUALLY_SENT'
+        return {'status':state,'send_status':state,'status_label':('Partially Sent' if confirmed_sent<total else 'Sent (Manually Confirmed)'),
+            'selected_count':len(ids),'sent_count':confirmed_sent,'total_count':total,'verified_delivery':False}
+    @app.post('/api/batches/{ident}/discard')
+    async def discard_batch(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN','OPERATOR')
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)-{'confirm_discard','reason'} or body.get('confirm_discard') is not True:
+            raise ValueError('Explicit confirmation is required to discard this batch')
+        stamp=now();actor=request.state.session['email'];reason=str(body.get('reason') or '').strip()
+        with db.transaction(serialized=True) as c:
+            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
+            if not batch:raise LookupError('Batch not found')
+            if batch['discarded_at']:return {'batch_id':ident,'status':'DISCARDED','idempotent':True}
+            generation_status=c.scalar(select(invitation_generation_batches.c.status).where(
+                invitation_generation_batches.c.batch_id==ident))
+            if generation_status in {'QUEUED','PROCESSING','RETRY_PENDING','FINALIZING'}:
+                raise ValueError('An in-progress invitation batch cannot be discarded')
+            c.execute(batches.update().where(batches.c.id==ident).values(discarded_at=stamp,discarded_by=actor,discard_reason=reason or None))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_BATCH_DISCARDED',
+                detail=dump({'actor':actor,'timestamp':stamp,'reason':reason or None,'invitation_count':c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==ident))}),created_at=stamp))
+        return {'batch_id':ident,'status':'DISCARDED','discarded_at':stamp,'discarded_by':actor}
+    @app.post('/api/invitations/{ident}/correct-manual-send')
+    async def correct_manual_send(ident:str,request:Request):
+        auth.require_role(request.state.session,'ADMIN')
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)-{'confirm_correction','reason'} or body.get('confirm_correction') is not True:
+            raise ValueError('Explicit correction confirmation is required')
+        reason=str(body.get('reason') or '').strip()
+        if not reason:raise ValueError('A correction reason is required')
+        actor=request.state.session['email'];stamp=now()
+        with db.transaction(serialized=True) as c:
+            row=c.execute(select(invitations).where(invitations.c.id==ident)).mappings().first()
+            if not row:raise LookupError('Invitation not found')
+            batch=c.execute(select(batches).where(batches.c.id==row['batch_id'])).mappings().one()
+            current_state=c.scalar(select(service.invitation_state_expression()).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.id==ident))
+            if current_state!='INVITATION_MANUALLY_SENT':raise ValueError('No current manual confirmation exists')
+            c.execute(invitations.update().where(invitations.c.id==ident).values(send_status='DRAFT_GENERATED',
+                manual_sent_at=None,manual_sent_by=None,manual_send_note=None,manual_send_corrected_at=stamp,
+                manual_send_corrected_by=actor))
+            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='INVITATION_MANUAL_SEND_CONFIRMATION_CORRECTED',
+                detail=dump({'actor':actor,'timestamp':stamp,'reason':reason,
+                    'previous_manual_sent_at':row['manual_sent_at'] or batch['send_recorded_at'],
+                    'previous_manual_sent_by':row['manual_sent_by'],'legacy_batch_evidence':batch['send_evidence']}),created_at=stamp))
+            batch_id=row['batch_id']
+            legacy_attestation=c.scalar(select(func.count()).select_from(events).where(
+                events.c.entity_id==batch_id,events.c.event=='OPERATOR_REPORTED_SEND')) or 0
+            sent_count=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==batch_id,
+                invitations.c.send_status=='MANUALLY_CONFIRMED_SENT')) or 0
+            total_count=c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id==batch_id)) or 0
+            if not legacy_attestation:
+                c.execute(batches.update().where(batches.c.id==batch_id).values(
+                    send_status=('OPERATOR_REPORTED' if sent_count==total_count else 'PARTIALLY_SENT' if sent_count else 'UNVERIFIED'),
+                    send_recorded_at=stamp if sent_count else None,
+                    send_evidence='Some invitations were manually confirmed sent' if sent_count else None))
+            lifecycle=c.scalar(select(service.invitation_state_expression()).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.id==ident))
+        return {'invitation_id':ident,'status':'CORRECTED','lifecycle_status':lifecycle,
+            'status_label':service.INVITATION_STATES.get(lifecycle,'Draft Generated'),'audit_preserved':True}
     @app.get('/api/invitations')
-    def invitation_list(page:int=1):
-        with db.transaction() as c:return {'rows':[dict(r) for r in c.execute(select(invitations).order_by(invitations.c.generated_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]}
+    def invitation_list(page:int=1,include_discarded:bool=False):
+        with db.transaction() as c:
+            query=select(invitations,batches.c.first_downloaded_at,batches.c.download_count,batches.c.discarded_at,
+                batches.c.discarded_by,batches.c.pilot_review_status,service.invitation_state_expression().label('lifecycle_status')).select_from(
+                    invitations.join(batches,invitations.c.batch_id==batches.c.id))
+            if not include_discarded:query=query.where(batches.c.discarded_at.is_(None))
+            rows=[]
+            for r in c.execute(query.order_by(invitations.c.generated_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings():
+                item=dict(r);state=item.pop('lifecycle_status');item.update(service.invitation_status_payload(item,item,state=state));rows.append(item)
+            return {'rows':rows}
     @app.post('/api/invitations/{ident}/owner-test-identity-binding')
     async def owner_test_identity_binding(ident:str,request:Request):
         auth.require_role(request.state.session,'ADMIN')
@@ -883,10 +1021,10 @@ def create_app(database=None):
                 .where(invitations.c.batch_id==batch['id']).order_by(invitations.c.company_name)).mappings().all()
             invitations_review=[]
             for row in rows:
-                item=dict(row);item['evidence']=json.loads(item.pop('invitation_personalization') or '{}')
+                item=dict(row);state=item.pop('lifecycle_status');item.update(service.invitation_status_payload(item,item,state=state));item['evidence']=json.loads(item.pop('invitation_personalization') or '{}')
                 item['quality_errors']=json.loads(item.pop('personalization_quality_errors') or '[]')
                 invitations_review.append(item)
-            return {'batch_id':batch['id'],'status':batch['pilot_review_status'],'send_status':batch['send_status'],
+            return {'batch_id':batch['id'],'status':batch['pilot_review_status'],'send_status':service.batch_invitation_state_summary(c,batch['id']),
                 'package_sha256':hashlib.sha256(batch['package'] or b'').hexdigest(),
                 'excluded':json.loads(batch['excluded'] or '[]'),'expected_recipients':100,
                 'actual_recipients':len(invitations_review),'invitations':invitations_review}
@@ -913,27 +1051,11 @@ def create_app(database=None):
             if len(rows)!=100 or json.loads(batch['excluded'] or '[]') or any(r.personalization_quality_status!='PASS' for r in rows) or not quality_ok:
                 raise ValueError('Pilot batch must contain exactly 100 quality-passed recipients with no exclusions')
             c.execute(batches.update().where(batches.c.id==batch['id']).values(pilot_review_status='APPROVED',
-                pilot_review_sha256=digest,pilot_reviewed_by=request.state.session['email'],pilot_reviewed_at=stamp,
-                send_status='READY_TO_SEND'))
-            c.execute(invitations.update().where(invitations.c.batch_id==batch['id']).values(send_status='READY_TO_SEND'))
+                pilot_review_sha256=digest,pilot_reviewed_by=request.state.session['email'],pilot_reviewed_at=stamp))
             c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch['id'],event='PILOT_BATCH_APPROVED',
                 detail=json.dumps({'sha256':digest,'count':100,'reviewer':request.state.session['email']},sort_keys=True),created_at=stamp))
-        return {'batch_id':batch['id'],'status':'APPROVED','send_status':'READY_TO_SEND','sent':False,'package_sha256':digest}
-
-    @app.post('/api/admin/batches/{ident}/mark-not-sent')
-    async def mark_batch_not_sent(ident:str,request:Request):
-        auth.require_role(request.state.session,'ADMIN','OPERATOR')
-        body=await request.json()
-        if body.get('attest_not_sent') is not True: raise ValueError('Explicit operator not-sent attestation is required')
-        with db.transaction(serialized=True) as c:
-            batch=c.execute(select(batches).where(batches.c.id==ident)).mappings().first()
-            if not batch: raise LookupError('Batch not found')
-            if batch['send_status'] in {'SENT','PARTIALLY_SENT'}: raise ValueError('Sent batch cannot be marked NOT_SENT')
-            c.execute(batches.update().where(batches.c.id==ident).values(send_status='NOT_SENT',send_evidence='Operator attested not sent',send_recorded_at=now()))
-            c.execute(invitations.update().where(invitations.c.batch_id==ident).values(send_status='NOT_SENT'))
-            c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=ident,event='BATCH_MARKED_NOT_SENT',
-                detail=json.dumps({'actor':request.state.session['email']},sort_keys=True),created_at=now()))
-        return {'batch_id':ident,'send_status':'NOT_SENT'}
+        return {'batch_id':batch['id'],'status':'APPROVED','send_status':'INVITATION_DRAFT',
+            'lifecycle_status':'INVITATION_DRAFT','status_label':'Draft Generated','sent':False,'package_sha256':digest}
 
     @app.post('/api/admin/invitations/{ident}/corrections')
     async def correct_invitation(ident:str,request:Request):

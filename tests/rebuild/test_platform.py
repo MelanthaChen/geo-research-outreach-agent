@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates,personalization_attempts
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates,personalization_attempts,events
 from outreach_v2.service import generate,list_candidates,preview_generation
 from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
@@ -334,12 +334,12 @@ def test_primary_business_statuses_are_derived_and_mutually_exclusive(db):
     assert {ident:by_id[ident]['primary_status'] for ident in (
         'status-ready','status-no-contact','status-invited','status-pending','status-blocked')}=={
         'status-ready':'READY_TO_INVITE','status-no-contact':'PERSONALIZED_NO_CONTACT',
-        'status-invited':'ALREADY_INVITED','status-pending':'PENDING_PERSONALIZATION','status-blocked':'BLOCKED'}
+        'status-invited':'INVITATION_PENDING_REVIEW','status-pending':'PENDING_PERSONALIZATION','status-blocked':'BLOCKED'}
     assert by_id['status-ready']['eligible'] is True
     assert listed['completed_personalization_count']==3
     assert sum(listed['status_counts'].values())==5
     assert list_candidates(db,{'primary_status':'READY_TO_INVITE'})['total']==1
-    assert list_candidates(db,{'primary_status':'ALREADY_INVITED'})['total']==1
+    assert list_candidates(db,{'primary_status':'INVITATION_PENDING_REVIEW'})['total']==1
     assert list_candidates(db,{'completed_personalization':'1'})['total']==3
 
 @pytest.mark.parametrize('ident,name,website,summary,detail,relevance', [
@@ -390,7 +390,8 @@ def test_owner_fixture_batch_generation_uses_exact_synthetic_policy_without_muta
         invitation=c.execute(select(invitations).where(invitations.c.candidate_id==ident)).mappings().one()
         assert invitation['recipient']==recipient
         assert invitation['template_version']=='invitation-template-v2'
-        assert invitation['send_status']=='UNVERIFIED' and invitation['consent_status']=='NOT_RECEIVED'
+        assert invitation['send_status']=='DRAFT_GENERATED' and invitation['consent_status']=='NOT_RECEIVED'
+        assert invitation['exported_at'] is None
         assert json.loads(invitation['authority'])['method']=='OWNER_BINDING'
         assert json.loads(invitation['personalization'])['recipient_copy']['data_classification']==SYNTHETIC_CLASSIFICATION
         assert c.scalar(select(func.count()).select_from(batches))==1
@@ -699,7 +700,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==14
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==15
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -714,8 +715,12 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==14
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==15
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
+        invitation_columns={row[1] for row in c.exec_driver_sql('pragma table_info(invitations)')}
+        batch_columns={row[1] for row in c.exec_driver_sql('pragma table_info(batches)')}
+        assert {'manual_sent_at','manual_sent_by','manual_send_note','manual_send_corrected_at','manual_send_corrected_by','provider_message_id'}<=invitation_columns
+        assert {'discarded_at','discarded_by','discard_reason','first_downloaded_at','last_downloaded_at','last_downloaded_by','download_count'}<=batch_columns
     assert tuple(inv[:5])==('inv-legacy','GEO-LEGACY','owner@businessmail.org','Legacy Company','Original persisted body')
     assert inv.sender_email is None and inv.sender_name is None
     assert tuple(template[:6])==('report-v1',1,'Report','Existing report template','reports@businessmail.org',1)
@@ -1240,7 +1245,6 @@ def test_email_template_sender_choices_include_active_admins_but_not_inactive_an
     monkeypatch.setenv('OUTREACH_INVITATION_SENDER_NAME','Yuxuan Chen')
     monkeypatch.setenv('OUTREACH_REPLY_TO','reply@northeastern.edu')
     monkeypatch.setenv('OUTREACH_RESEARCHER_NAME','Yuxuan Chen')
-    monkeypatch.delenv('OUTREACH_VERIFIED_INVITATION_SENDERS',raising=False)
     with db.transaction() as c:
         for ident,email,status in [('admin-shan','g.shan@northeastern.edu','ACTIVE'),
                 ('admin-hbs','gshan@hbs.edu','ACTIVE'),('admin-inactive','inactive@example.edu','INACTIVE')]:
@@ -1283,14 +1287,14 @@ def test_email_template_sender_choices_include_active_admins_but_not_inactive_an
     verified=client.get('/api/admin/email-templates').json()['authorized_senders']
     assert next(item for item in verified if item['email']=='gshan@hbs.edu')['delivery_authorized'] is True
 
-def test_manual_send_record_requires_explicitly_verified_invitation_mailbox(db,monkeypatch):
+def test_manual_sent_confirmation_is_scoped_and_never_sends_email(db,monkeypatch):
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','researcher@northeastern.edu')
     from argon2 import PasswordHasher
     from fastapi.testclient import TestClient
     from outreach_v2.app import create_app
     monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH',PasswordHasher().hash('local-only-test-password'))
     monkeypatch.setenv('OUTREACH_COOKIE_SECURE','false')
     monkeypatch.setenv('OUTREACH_INVITATION_SENDER','researcher@northeastern.edu')
-    monkeypatch.delenv('OUTREACH_VERIFIED_INVITATION_SENDERS',raising=False)
     candidate(db,ident='send-authorization-test',email='contact@send-auth.org',
         website='https://send-auth.example',name='Send Authorization Test',fixture=False)
     batch=invite(db,['send-authorization-test'],key='send-auth-template-test-key')
@@ -1301,8 +1305,19 @@ def test_manual_send_record_requires_explicitly_verified_invitation_mailbox(db,m
     approved=client.post(f"/api/batches/{batch['id']}/approve",headers=headers,json={
         'package_sha256':review.json()['package_sha256'],'confirm_reviewed':True})
     assert approved.status_code==200
-    blocked=client.post(f"/api/batches/{batch['id']}/send-record",headers=headers,json={'evidence':'operator reported send'})
-    assert blocked.status_code==403 and 'OUTREACH_VERIFIED_INVITATION_SENDERS' in blocked.json()['error']
+    with db.transaction() as c:
+        invitation_id=c.scalar(select(invitations.c.id).where(invitations.c.batch_id==batch['id']))
+    confirmed=client.post(f"/api/batches/{batch['id']}/mark-sent",headers=headers,json={
+        'invitation_ids':[invitation_id],'confirm_sent':True,'note':'confirmed outside Outreach'})
+    assert confirmed.status_code==200
+    assert confirmed.json()['status']=='INVITATION_MANUALLY_SENT'
+    with db.transaction() as c:
+        saved=c.execute(select(invitations).where(invitations.c.id==invitation_id)).mappings().one()
+        event=c.execute(select(events).where(events.c.entity_id==invitation_id,
+            events.c.event=='INVITATION_MANUALLY_MARKED_SENT')).mappings().one()
+    assert saved['manual_sent_by']=='chen.yuxuan9@northeastern.edu'
+    assert json.loads(event['detail'])['note']=='confirmed outside Outreach'
+    assert client.get(f"/api/batches/{batch['id']}/download").status_code==200
 
 def test_disabled_outreach_does_not_start_or_advance_incomplete_engine_job(db,monkeypatch):
     leased=_authorized_leased_job(db)
@@ -2003,7 +2018,7 @@ def test_pending_and_unknown_public_contacts_are_draft_eligible_but_remain_unver
         invitation=c.execute(select(invitations).where(invitations.c.candidate_id=='unverified-contact')).mappings().one()
         batch=c.execute(select(batches).where(batches.c.id==generated['id'])).mappings().one()
     assert saved.verification==state and saved.verified_at is None
-    assert invitation['send_status']=='UNVERIFIED'
+    assert invitation['send_status']=='DRAFT_GENERATED'
     assert json.loads(invitation['authority'])['contact_verification']==state
     assert json.loads(invitation['authority'])['contact_verification_current'] is False
     assert batch['pilot_review_status']=='PENDING_REVIEW' and batch['send_status']=='UNVERIFIED'
@@ -3445,3 +3460,198 @@ def test_cohort_selection_accepts_multiple_verified_contacts_without_choosing_in
     snapshot=cohort_member_snapshot(first_row)
     assert snapshot['business_email'] is None and snapshot['recipient_selection_required'] is True
     assert snapshot['business_email_options']==['info@company0.com','office@company0.com']
+
+
+def _invitation_api_client(db, monkeypatch):
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+    from outreach_v2.app import create_app
+    monkeypatch.setenv('OUTREACH_ADMIN_PASSWORD_HASH', PasswordHasher().hash('local-only-test-password'))
+    monkeypatch.setenv('OUTREACH_COOKIE_SECURE', 'false')
+    client = TestClient(create_app(db))
+    login = client.post('/api/auth/login', json={
+        'email': 'chen.yuxuan9@northeastern.edu', 'password': 'local-only-test-password'})
+    return client, {'X-CSRF-Token': login.json()['csrf']}
+
+
+def test_creation_approval_and_download_never_mark_invitation_sent(db, monkeypatch):
+    candidate(db, ident='lifecycle-draft', email='draft@lifecycle.org', website='https://lifecycle.example',
+        name='Lifecycle Draft', fixture=False)
+    batch = invite(db, ['lifecycle-draft'], key='lifecycle-create-approve-download')
+    with db.transaction() as c:
+        invitation = c.execute(select(invitations).where(invitations.c.batch_id == batch['id'])).mappings().one()
+        assert invitation['send_status'] == 'DRAFT_GENERATED'
+        assert invitation['exported_at'] is None
+    client, headers = _invitation_api_client(db, monkeypatch)
+    review = client.get(f"/api/batches/{batch['id']}/review").json()
+    approved = client.post(f"/api/batches/{batch['id']}/approve", headers=headers, json={
+        'package_sha256': review['package_sha256'], 'confirm_reviewed': True})
+    assert approved.status_code == 200 and approved.json()['sent'] is False
+    with db.transaction() as c:
+        invitation = c.execute(select(invitations).where(invitations.c.id == invitation['id'])).mappings().one()
+        assert invitation['send_status'] == 'DRAFT_GENERATED'
+        assert invitation['manual_sent_at'] is None
+    downloaded = client.get(f"/api/batches/{batch['id']}/download")
+    assert downloaded.status_code == 200 and downloaded.headers['content-type'] == 'application/zip'
+    with db.transaction() as c:
+        saved = c.execute(select(invitations).where(invitations.c.id == invitation['id'])).mappings().one()
+        saved_batch = c.execute(select(batches).where(batches.c.id == batch['id'])).mappings().one()
+        assert saved['send_status'] == 'DRAFT_GENERATED' and saved['manual_sent_at'] is None
+        assert saved_batch['download_count'] == 1 and saved_batch['first_downloaded_at']
+        assert saved_batch['last_downloaded_by']=='chen.yuxuan9@northeastern.edu'
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id == batch['id'],
+            events.c.event == 'INVITATION_PACKAGE_DOWNLOADED')) == 1
+
+
+def test_partial_manual_send_marks_only_selected_invitation(db, monkeypatch):
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    candidate(db, ident='partial-one', email='one@partial.org', website='https://partial.example', name='Partial One', fixture=False)
+    candidate(db, ident='partial-two', email='two@partial.org', website='https://partial.example', name='Partial Two', fixture=False)
+    batch = invite(db, ['partial-one', 'partial-two'], key='partial-manual-send-batch-key')
+    with db.transaction() as c:
+        rows = c.execute(select(invitations.c.id, invitations.c.candidate_id).where(
+            invitations.c.batch_id == batch['id'])).all()
+        selected = next(row.id for row in rows if row.candidate_id == 'partial-one')
+        untouched = next(row.id for row in rows if row.candidate_id == 'partial-two')
+    client, headers = _invitation_api_client(db, monkeypatch)
+    review = client.get(f"/api/batches/{batch['id']}/review").json()
+    assert client.post(f"/api/batches/{batch['id']}/approve", headers=headers, json={
+        'package_sha256': review['package_sha256'], 'confirm_reviewed': True}).status_code == 200
+    response = client.post(f"/api/batches/{batch['id']}/mark-sent", headers=headers, json={
+        'invitation_ids': [selected], 'confirm_sent': True, 'note': 'Only one was sent'})
+    assert response.status_code == 200 and response.json()['status'] == 'PARTIALLY_SENT'
+    with db.transaction() as c:
+        sent = c.execute(select(invitations).where(invitations.c.id == selected)).mappings().one()
+        draft = c.execute(select(invitations).where(invitations.c.id == untouched)).mappings().one()
+        assert sent['send_status'] == 'MANUALLY_CONFIRMED_SENT' and sent['manual_sent_by']
+        assert draft['send_status'] == 'DRAFT_GENERATED' and draft['manual_sent_at'] is None
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id == selected,
+            events.c.event == 'INVITATION_MANUALLY_MARKED_SENT')) == 1
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id == untouched,
+            events.c.event == 'INVITATION_MANUALLY_MARKED_SENT')) == 0
+
+
+def test_discard_is_soft_audited_and_hidden_from_active_batch_list(db, monkeypatch):
+    candidate(db, ident='discard-only', email='info@discard.org', website='https://discard.example',
+        name='Discard Only', fixture=False)
+    batch = invite(db, ['discard-only'], key='discard-only-batch-key')
+    client, headers = _invitation_api_client(db, monkeypatch)
+    response = client.post(f"/api/batches/{batch['id']}/discard", headers=headers, json={
+        'confirm_discard': True, 'reason': 'Operator intentionally abandoned this draft'})
+    assert response.status_code == 200 and response.json()['status'] == 'DISCARDED'
+    assert batch['id'] not in [row['id'] for row in client.get('/api/batches').json()['rows']]
+    archived = client.get('/api/batches?include_discarded=true').json()['rows']
+    assert any(row['id'] == batch['id'] and row['discarded_at'] for row in archived)
+    invitations_json = client.get('/api/invitations?include_discarded=true').json()['rows']
+    invitation = next(row for row in invitations_json if row['batch_id'] == batch['id'])
+    assert invitation['status_label'] == 'Discarded'
+    with db.transaction() as c:
+        assert c.scalar(select(func.count()).select_from(invitations).where(invitations.c.batch_id == batch['id'])) == 1
+        event = c.execute(select(events).where(events.c.entity_id == batch['id'],
+            events.c.event == 'INVITATION_BATCH_DISCARDED')).mappings().one()
+        assert json.loads(event['detail'])['actor'] == 'chen.yuxuan9@northeastern.edu'
+
+
+def test_manual_send_correction_appends_event_and_preserves_original_confirmation(db, monkeypatch):
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    candidate(db, ident='correct-send', email='info@correct-send.org', website='https://correct-send.example',
+        name='Correct Send', fixture=False)
+    batch = invite(db, ['correct-send'], key='correct-send-batch-key')
+    with db.transaction() as c:
+        invitation_id = c.scalar(select(invitations.c.id).where(invitations.c.batch_id == batch['id']))
+    client, headers = _invitation_api_client(db, monkeypatch)
+    review = client.get(f"/api/batches/{batch['id']}/review").json()
+    assert client.post(f"/api/batches/{batch['id']}/approve", headers=headers, json={
+        'package_sha256': review['package_sha256'], 'confirm_reviewed': True}).status_code == 200
+    assert client.post(f"/api/batches/{batch['id']}/mark-sent", headers=headers, json={
+        'invitation_ids': [invitation_id], 'confirm_sent': True}).status_code == 200
+    corrected = client.post(f"/api/invitations/{invitation_id}/correct-manual-send", headers=headers, json={
+        'confirm_correction': True, 'reason': 'Sent confirmation was entered by mistake'})
+    assert corrected.status_code == 200
+    with db.transaction() as c:
+        row = c.execute(select(invitations).where(invitations.c.id == invitation_id)).mappings().one()
+        assert row['send_status'] == 'DRAFT_GENERATED' and row['manual_sent_at'] is None
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id == invitation_id,
+            events.c.event == 'INVITATION_MANUALLY_MARKED_SENT')) == 1
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id == invitation_id,
+            events.c.event == 'INVITATION_MANUAL_SEND_CONFIRMATION_CORRECTED')) == 1
+        from outreach_v2.service import invitation_history_reconciliation
+        assert invitation_history_reconciliation(db)['invitation_records']['INVITATION_DRAFT'] >= 1
+
+
+def test_legacy_send_labels_without_evidence_are_normalized_but_real_audit_evidence_survives(db):
+    from outreach_v2.service import invitation_history_reconciliation, list_candidates
+    candidate(db, ident='legacy-send-label', email='legacy@status.org', website='https://status.example',
+        name='Legacy Status', fixture=False)
+    candidate(db, ident='provider-send-label', email='provider@status.org', website='https://status.example',
+        name='Provider Status', fixture=False)
+    first = invite(db, ['legacy-send-label'], key='legacy-send-status-key')
+    second = invite(db, ['provider-send-label'], key='provider-send-status-key')
+    with db.transaction() as c:
+        legacy_inv=c.execute(select(invitations).where(invitations.c.batch_id==first['id'])).mappings().one()
+        provider_inv=c.execute(select(invitations).where(invitations.c.batch_id==second['id'])).mappings().one()
+        # The old app wrote EXPORTED at generation and READY_TO_SEND at review.
+        c.execute(invitations.update().where(invitations.c.id==legacy_inv['id']).values(
+            send_status='READY_TO_SEND',exported_at=now()))
+        c.execute(batches.update().where(batches.c.id==first['id']).values(
+            send_status='READY_TO_SEND',exported_at=now(),pilot_review_status='APPROVED'))
+        c.execute(events.insert().values(id='legacy-generation-export-event',entity_id=first['id'],event='EXPORTED',
+            detail='generation only; not proof of download',created_at=now()))
+        c.execute(invitations.update().where(invitations.c.id==provider_inv['id']).values(send_status='PROVIDER_CONFIRMED_SENT'))
+        c.execute(events.insert().values(id='provider-accepted-event',entity_id=provider_inv['id'],
+            event='INVITATION_PROVIDER_SEND_ACCEPTED',detail='provider message accepted',created_at=now()))
+    page=list_candidates(db,{'q':'Legacy Status'})
+    assert page['rows'][0]['primary_status']=='INVITATION_DRAFT'
+    report=invitation_history_reconciliation(db)
+    assert report['invitation_records']['INVITATION_DRAFT'] == 1
+    assert report['invitation_records']['INVITATION_PROVIDER_SENT'] == 1
+    assert report['invitation_records']['INVITATION_MANUALLY_SENT'] == 0
+
+
+def test_legacy_manual_send_can_be_corrected_without_removing_original_audit(db, monkeypatch):
+    from outreach_v2.service import invitation_history_reconciliation
+    candidate(db, ident='legacy-manual-send', email='legacy-manual@status.org', website='https://legacy-status.example',
+        name='Legacy Manual Send', fixture=False)
+    batch = invite(db, ['legacy-manual-send'], key='legacy-manual-send-key')
+    with db.transaction() as c:
+        invitation_id=c.scalar(select(invitations.c.id).where(invitations.c.batch_id==batch['id']))
+        c.execute(batches.update().where(batches.c.id==batch['id']).values(send_status='OPERATOR_REPORTED',
+            send_evidence='legacy operator attestation',send_recorded_at=now(),pilot_review_status='APPROVED'))
+        c.execute(invitations.update().where(invitations.c.id==invitation_id).values(send_status='OPERATOR_REPORTED'))
+        c.execute(events.insert().values(id='legacy-manual-send-event',entity_id=batch['id'],event='OPERATOR_REPORTED_SEND',
+            detail='historic manual confirmation',created_at=now()))
+    before=invitation_history_reconciliation(db)
+    assert before['invitation_records']['INVITATION_MANUALLY_SENT']==1
+    client,headers=_invitation_api_client(db,monkeypatch)
+    response=client.post(f"/api/invitations/{invitation_id}/correct-manual-send",headers=headers,json={
+        'confirm_correction':True,'reason':'Historic confirmation was mistaken'})
+    assert response.status_code==200 and response.json()['lifecycle_status']=='INVITATION_DRAFT'
+    after=invitation_history_reconciliation(db)
+    assert after['invitation_records']['INVITATION_MANUALLY_SENT']==0
+    with db.transaction() as c:
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.id=='legacy-manual-send-event'))==1
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id==invitation_id,
+            events.c.event=='INVITATION_MANUAL_SEND_CONFIRMATION_CORRECTED'))==1
+
+
+def test_whole_batch_manual_send_confirms_all_unsent_invitations_without_row_selection(db, monkeypatch):
+    monkeypatch.setenv('OUTREACH_VERIFIED_INVITATION_SENDERS','chen.yuxuan9@northeastern.edu')
+    candidate(db, ident='whole-send-one', email='one@whole-send.org', website='https://whole-send.example', name='Whole One', fixture=False)
+    candidate(db, ident='whole-send-two', email='two@whole-send.org', website='https://whole-send.example', name='Whole Two', fixture=False)
+    batch = invite(db, ['whole-send-one','whole-send-two'], key='whole-batch-manual-confirm-key')
+    client,headers=_invitation_api_client(db,monkeypatch)
+    review=client.get(f"/api/batches/{batch['id']}/review").json()
+    approved=client.post(f"/api/batches/{batch['id']}/approve",headers=headers,json={
+        'package_sha256':review['package_sha256'],'confirm_reviewed':True})
+    assert approved.status_code==200
+    response=client.post(f"/api/batches/{batch['id']}/mark-sent",headers=headers,json={
+        'whole_batch':True,'confirm_sent':True,'note':'Whole batch sent outside Outreach'})
+    assert response.status_code==200
+    assert response.json()['selected_count']==2
+    assert response.json()['status']=='INVITATION_MANUALLY_SENT'
+    with db.transaction() as c:
+        rows=c.execute(select(invitations).where(invitations.c.batch_id==batch['id'])).mappings().all()
+        assert len(rows)==2 and all(row['send_status']=='MANUALLY_CONFIRMED_SENT' for row in rows)
+        assert c.scalar(select(func.count()).select_from(events).where(events.c.entity_id==batch['id'],
+            events.c.event=='INVITATION_BATCH_MANUALLY_CONFIRMED_SENT'))==1
+        assert c.scalar(select(func.count()).select_from(deliveries))==0

@@ -4,7 +4,7 @@ import re
 from datetime import datetime,timedelta,timezone
 from urllib.parse import urlparse
 from sqlalchemy import select,func,and_,or_,exists,case
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now
+from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now,invitation_generation_batches,invitation_generation_items
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, synthetic_fixture_copy
@@ -212,6 +212,84 @@ def authorized_email_count():
 def has_invitation():
     return exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
 
+INVITATION_STATES={
+    'INVITATION_DRAFT':'Draft Generated',
+    'INVITATION_PENDING_REVIEW':'Pending Review',
+    'INVITATION_EXPORTED':'Exported',
+    'INVITATION_MANUALLY_SENT':'Sent (Manually Confirmed)',
+    'INVITATION_PROVIDER_SENT':'Sent (Provider Confirmed)',
+    'INVITATION_DISCARDED':'Discarded',
+}
+
+def invitation_state_expression(invitation=invitations,batch=batches):
+    """Normalize persisted invitation facts without trusting record existence or legacy SENT text.
+
+    A manual status is valid only with a new actor/timestamp record or an old
+    explicit operator attestation event. Provider status requires an accepted
+    provider event/message ID. Legacy READY_TO_SEND/SENT/EXPORTED values alone
+    are not evidence that an invitation was sent or downloaded.
+    """
+    legacy_manual_event=exists(select(events.c.id).where(events.c.entity_id==batch.c.id,
+        events.c.event=='OPERATOR_REPORTED_SEND'))
+    manual_correction_event=exists(select(events.c.id).where(events.c.entity_id==invitation.c.id,
+        events.c.event=='INVITATION_MANUAL_SEND_CONFIRMATION_CORRECTED'))
+    provider_event=exists(select(events.c.id).where(events.c.entity_id==invitation.c.id,
+        events.c.event.in_(['INVITATION_PROVIDER_SEND_ACCEPTED','INVITATION_PROVIDER_DELIVERED'])))
+    manual=or_(and_(invitation.c.send_status=='MANUALLY_CONFIRMED_SENT',
+            invitation.c.manual_sent_at.is_not(None),invitation.c.manual_sent_by.is_not(None)),
+        and_(batch.c.send_status=='OPERATOR_REPORTED',batch.c.send_recorded_at.is_not(None),
+            batch.c.send_evidence.is_not(None),legacy_manual_event,~manual_correction_event))
+    provider=or_(and_(invitation.c.send_status=='PROVIDER_CONFIRMED_SENT',
+            invitation.c.provider_message_id.is_not(None)),provider_event)
+    is_invitation=invitation.c.id.is_not(None)
+    return case(
+        (and_(is_invitation,manual),'INVITATION_MANUALLY_SENT'),
+        (and_(is_invitation,provider),'INVITATION_PROVIDER_SENT'),
+        (and_(is_invitation,batch.c.discarded_at.is_not(None)),'INVITATION_DISCARDED'),
+        (and_(is_invitation,batch.c.pilot_review_status.in_(['PENDING_REVIEW','BLOCKED_INCOMPLETE'])),'INVITATION_PENDING_REVIEW'),
+        (and_(is_invitation,batch.c.first_downloaded_at.is_not(None)),'INVITATION_EXPORTED'),
+        (is_invitation,'INVITATION_DRAFT'),
+        else_=None)
+
+def invitation_status_payload(invitation,batch,*,state=None):
+    """Return a user-facing state while retaining uncertainty about legacy columns."""
+    state=state or _invitation_state_from_records(invitation,batch)
+    legacy_raw=(invitation.get('send_status') or '').upper()
+    legacy_unsubstantiated=legacy_raw in {'SENT','OPERATOR_REPORTED','READY_TO_SEND','EXPORTED'} and state not in {
+        'INVITATION_MANUALLY_SENT','INVITATION_PROVIDER_SENT'}
+    return {'lifecycle_status':state,'status_label':INVITATION_STATES.get(state,'Draft Generated'),
+        'send_status':state,'legacy_send_status_unsubstantiated':legacy_unsubstantiated,
+        'downloaded_at':batch.get('first_downloaded_at'),'download_count':int(batch.get('download_count') or 0),
+        'discarded_at':batch.get('discarded_at'),'discarded_by':batch.get('discarded_by')}
+
+def _invitation_state_from_records(invitation,batch,*,provider_confirmed=False,manual_legacy=False):
+    if not invitation:return None
+    if (invitation.get('send_status')=='MANUALLY_CONFIRMED_SENT' and invitation.get('manual_sent_at')
+            and invitation.get('manual_sent_by')) or manual_legacy:
+        return 'INVITATION_MANUALLY_SENT'
+    if (invitation.get('send_status')=='PROVIDER_CONFIRMED_SENT' and invitation.get('provider_message_id')) or provider_confirmed:
+        return 'INVITATION_PROVIDER_SENT'
+    if batch and batch.get('discarded_at'):return 'INVITATION_DISCARDED'
+    if batch and batch.get('pilot_review_status') in {'PENDING_REVIEW','BLOCKED_INCOMPLETE'}:return 'INVITATION_PENDING_REVIEW'
+    if batch and batch.get('first_downloaded_at'):return 'INVITATION_EXPORTED'
+    return 'INVITATION_DRAFT'
+
+def batch_invitation_state_summary(connection,batch_id):
+    grouped=connection.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
+        .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
+        .where(invitations.c.batch_id==batch_id).group_by(invitation_state_expression())).all()
+    counts={row.state:int(row.count) for row in grouped}
+    total=sum(counts.values())
+    if not total:return 'INVITATION_DRAFT'
+    sent=counts.get('INVITATION_MANUALLY_SENT',0)+counts.get('INVITATION_PROVIDER_SENT',0)
+    if sent and sent<total:return 'PARTIALLY_SENT'
+    if counts.get('INVITATION_MANUALLY_SENT',0)==total:return 'INVITATION_MANUALLY_SENT'
+    if counts.get('INVITATION_PROVIDER_SENT',0)==total:return 'INVITATION_PROVIDER_SENT'
+    if counts.get('INVITATION_DISCARDED',0)==total:return 'INVITATION_DISCARDED'
+    if counts.get('INVITATION_EXPORTED',0):return 'INVITATION_EXPORTED'
+    if counts.get('INVITATION_PENDING_REVIEW',0):return 'INVITATION_PENDING_REVIEW'
+    return 'INVITATION_DRAFT'
+
 def primary_status_expression():
     """Mutually exclusive business status derived from persisted facts, never stored."""
     completed=completed_personalization()
@@ -220,8 +298,14 @@ def primary_status_expression():
         candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.personalization_quality_status=='FAIL')
     contact_count=authorized_email_count()
+    invite_states=[]
+    for state in INVITATION_STATES:
+        invite_states.append((exists(select(invitations.c.id).select_from(invitations.join(
+            batches,invitations.c.batch_id==batches.c.id)).where(
+                invitations.c.candidate_id==candidates.c.id,
+                invitation_state_expression()==state)),state))
     return case(
-        (has_invitation(),'ALREADY_INVITED'),
+        *invite_states,
         (blocked,'BLOCKED'),
         (~completed,'PENDING_PERSONALIZATION'),
         (contact_count==0,'PERSONALIZED_NO_CONTACT'),
@@ -230,13 +314,21 @@ def primary_status_expression():
 STATUS_LABELS={
     'READY_TO_INVITE':'Ready to Invite',
     'PERSONALIZED_NO_CONTACT':'Personalized · No Contact',
-    'ALREADY_INVITED':'Already Invited',
+    **INVITATION_STATES,
     'PENDING_PERSONALIZATION':'Pending Personalization',
     'BLOCKED':'Blocked',
 }
 
 def status_reason(row, status):
-    if status=='ALREADY_INVITED': return 'An invitation already exists for this business.'
+    if status in INVITATION_STATES:
+        return {
+            'INVITATION_DRAFT':'An invitation draft exists; no sending confirmation is recorded.',
+            'INVITATION_PENDING_REVIEW':'The invitation is awaiting human review; it has not been confirmed sent.',
+            'INVITATION_EXPORTED':'The approved invitation package was downloaded; this is not proof of sending.',
+            'INVITATION_MANUALLY_SENT':'An authorized operator explicitly confirmed this invitation was sent outside Outreach.',
+            'INVITATION_PROVIDER_SENT':'A provider acceptance record exists for this invitation.',
+            'INVITATION_DISCARDED':'The batch was intentionally discarded; the records remain available for audit.',
+        }[status]
     if status=='BLOCKED':
         if row.get('suppressed'): return 'This business is suppressed.'
         if row.get('fixture'): return 'This is an owner-controlled test fixture, not a real business record.'
@@ -351,10 +443,16 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
                     .where(contacts.c.candidate_id.in_(ids)).order_by(contacts.c.candidate_id,contacts.c.email)).mappings():
                 item=dict(related);contact_rows.append(item)
                 contacts_by_candidate[item['candidate_id']].append(item)
-            for related in c.execute(select(invitations.c.id,invitations.c.candidate_id,invitations.c.send_status,
-                    invitations.c.consent_status,invitations.c.exported_at)
+            for related in c.execute(select(invitations.c.id,invitations.c.candidate_id,
+                    invitations.c.consent_status,invitations.c.recipient,invitations.c.reference,
+                    batches.c.id.label('batch_id'),batches.c.pilot_review_status,
+                    batches.c.first_downloaded_at,batches.c.download_count,batches.c.discarded_at,
+                    batches.c.discarded_by,invitation_state_expression().label('lifecycle_status'))
+                    .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
                     .where(invitations.c.candidate_id.in_(ids))).mappings():
-                item=dict(related);invitation_by_candidate.setdefault(item['candidate_id'],item);invitation_ids.append(item['id'])
+                item=dict(related);status=item.pop('lifecycle_status')
+                item.update(invitation_status_payload(item, item, state=status))
+                invitation_by_candidate.setdefault(item['candidate_id'],item);invitation_ids.append(item['id'])
         email_values=sorted({(item['email'] or '').strip().casefold() for item in contact_rows if item['email']})
         suppressed_emails=set()
         for chunk in _chunks(email_values):
@@ -399,8 +497,14 @@ def detail(db,ident):
         row['status_reason']=status_reason(row,row['primary_status'])
         row.update(contact_readiness(c,row))
         row['invitation']=c.execute(select(invitations.c.id,invitations.c.send_status,invitations.c.consent_status,
-            invitations.c.exported_at).where(invitations.c.candidate_id==ident)).mappings().first()
-        row['invitation']=dict(row['invitation']) if row['invitation'] else None
+            invitations.c.exported_at,invitations.c.manual_sent_at,invitations.c.manual_sent_by,invitations.c.manual_send_note,
+            batches.c.id.label('batch_id'),batches.c.pilot_review_status,
+            batches.c.first_downloaded_at,batches.c.download_count,batches.c.discarded_at,batches.c.discarded_by,
+            invitation_state_expression().label('lifecycle_status')).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.candidate_id==ident)).mappings().first()
+        if row['invitation']:
+            row['invitation']=dict(row['invitation']);status=row['invitation'].pop('lifecycle_status')
+            row['invitation'].update(invitation_status_payload(row['invitation'],row['invitation'],state=status))
         row['contacts']=[dict(r) for r in c.execute(select(contacts).where(contacts.c.candidate_id==ident)).mappings()]
         for saved_contact in row['contacts']:
             address=(saved_contact.get('email') or '').strip().casefold()
@@ -947,7 +1051,7 @@ def generate(db,selection,key):
             reply_to=(invitation_template['reply_to'] if invitation_template else __import__('os').getenv('OUTREACH_REPLY_TO')),
             sender_name=(invitation_template.get('sender_name') if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER_NAME') or __import__('os').getenv('OUTREACH_RESEARCHER_NAME'))),
             sender_email=(invitation_template['sender'] if invitation_template else (__import__('os').getenv('OUTREACH_INVITATION_SENDER') or __import__('os').getenv('OUTREACH_REPLY_TO'))),
-            personalization=dump(p),generated_at=stamp,exported_at=stamp,send_status='UNVERIFIED',
+            personalization=dump(p),generated_at=stamp,exported_at=None,send_status='DRAFT_GENERATED',
             consent_status='NOT_RECEIVED',authority=dump(authority)))
     if not generated:raise ValueError('No eligible invitations: '+dump(excluded))
     package=build_package(generated,excluded,BULK_SUBJECT)
@@ -969,12 +1073,12 @@ def generate(db,selection,key):
         c.execute(batches.insert().values(id=batch_id,request_key=key,selection_hash=selection_hash,created_at=stamp,
             bulk_subject=BULK_SUBJECT,pilot_review_status='PENDING_REVIEW'))
         c.execute(invitations.insert(),generated)
-        c.execute(batches.update().where(batches.c.id==batch_id).values(package=package,excluded=dump(excluded),exported_at=stamp))
+        c.execute(batches.update().where(batches.c.id==batch_id).values(package=package,excluded=dump(excluded)))
         c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='INVITATION_RECIPIENT_REVIEW_CONFIRMED',
             detail=dump({'selected_total':review['selected_total'],'valid_recipient_count':len(generated),
                 'generated_count':len(generated),'skipped_count':len(excluded),'failed_count':0,
                 'preview_sha256':review['preview_sha256']}),created_at=stamp))
-        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='EXPORTED',detail=dump({'count':len(generated),'excluded':len(excluded)}),created_at=stamp))
+        c.execute(events.insert().values(id=uuid.uuid4().hex,entity_id=batch_id,event='INVITATION_BATCH_GENERATED',detail=dump({'count':len(generated),'excluded':len(excluded)}),created_at=stamp))
         return dict(c.execute(select(batches).where(batches.c.id==batch_id)).mappings().one())
 
 def batch_by_request_key(db,key):
@@ -987,11 +1091,25 @@ def batch_by_request_key(db,key):
 def dashboard(db):
     with db.transaction() as c:
         run=c.execute(select(worker_runs).order_by(worker_runs.c.started_at.desc()).limit(1)).mappings().first()
+        invitation_counts={key:0 for key in INVITATION_STATES}
+        for row in c.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
+                .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
+                .group_by(invitation_state_expression())).all():
+            if row.state in invitation_counts:invitation_counts[row.state]=row.count
+        failed_batches=c.scalar(select(func.count()).select_from(invitation_generation_batches)
+            .where(invitation_generation_batches.c.status.in_(['FAILED','BLOCKED']))) or 0
         return {'companies':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='company')),
                 'hotels':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='hotel')),
                 'ready_to_invite':c.scalar(select(func.count()).select_from(candidates).where(primary_status_expression()=='READY_TO_INVITE')),
                 'completed_personalization':c.scalar(select(func.count()).select_from(candidates).where(completed_personalization())),
-                'invitations_exported':c.scalar(select(func.count()).select_from(invitations).where(invitations.c.exported_at.is_not(None))),
+                'invitations_draft_generated':invitation_counts['INVITATION_DRAFT'],
+                'invitations_pending_review':invitation_counts['INVITATION_PENDING_REVIEW'],
+                'invitations_exported_unconfirmed':invitation_counts['INVITATION_EXPORTED'],
+                'invitations_sent_manually_confirmed':invitation_counts['INVITATION_MANUALLY_SENT'],
+                'invitations_sent_provider_confirmed':invitation_counts['INVITATION_PROVIDER_SENT'],
+                'invitations_discarded':invitation_counts['INVITATION_DISCARDED'],
+                'invitation_generation_failures':failed_batches,
+                'invitation_packages_downloaded':c.scalar(select(func.coalesce(func.sum(batches.c.download_count),0))),
                 'form_responses':c.scalar(select(func.count()).select_from(submissions)),
                 'authorized_jobs':c.scalar(select(func.count()).select_from(jobs)),
                 'research_completed':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.completed_at.is_not(None))),
@@ -999,6 +1117,47 @@ def dashboard(db):
                 'failures':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.error.is_not(None))),
                 'latest_worker_run':({'id':run['id'],'status':run['status'],'started_at':run['started_at'],
                     'detail':parse(run['detail'])} if run else None)}
+
+def invitation_history_reconciliation(db):
+    """Read-only mutually exclusive invitation and batch lifecycle counts.
+
+    Legacy exported_at/EXPORTED and SENT/READY_TO_SEND column values are not
+    treated as proof. Only new download records, explicit operator attestation,
+    or provider acceptance evidence qualify.
+    """
+    with db.transaction() as c:
+        invitations_by_state={key:0 for key in INVITATION_STATES}
+        grouped=c.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
+            .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
+            .group_by(invitation_state_expression())).all()
+        for row in grouped:
+            if row.state in invitations_by_state:invitations_by_state[row.state]=row.count
+        batch_rows=c.execute(select(batches.c.id,batches.c.send_status,batches.c.send_evidence,
+            batches.c.send_recorded_at,batches.c.pilot_review_status,batches.c.discarded_at,
+            batches.c.first_downloaded_at,invitation_generation_batches.c.status.label('generation_status'))
+            .select_from(batches.outerjoin(invitation_generation_batches,
+                invitation_generation_batches.c.batch_id==batches.c.id))).mappings().all()
+        batch_status={'INVITATION_DRAFT':0,'INVITATION_PENDING_REVIEW':0,'INVITATION_EXPORTED':0,
+            'INVITATION_MANUALLY_SENT':0,'INVITATION_PROVIDER_SENT':0,'INVITATION_DISCARDED':0,'FAILED':0,'PARTIALLY_SENT':0}
+        for batch in batch_rows:
+            if batch['generation_status'] in {'FAILED','BLOCKED'}:
+                batch_status['FAILED']+=1;continue
+            children=c.execute(select(invitation_state_expression().label('state')).select_from(
+                invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.batch_id==batch['id'])).scalars().all()
+            if not children:
+                batch_status['INVITATION_DRAFT']+=1;continue
+            unique=set(children)
+            if len(unique)>1 and unique.intersection({'INVITATION_MANUALLY_SENT','INVITATION_PROVIDER_SENT'}):
+                batch_status['PARTIALLY_SENT']+=1
+            elif len(unique)==1:
+                batch_status[next(iter(unique))]+=1
+            else:
+                batch_status['INVITATION_DRAFT']+=1
+        failed_items=c.scalar(select(func.count()).select_from(invitation_generation_items)
+            .where(invitation_generation_items.c.status=='FAILED')) or 0
+        return {'invitation_records':invitations_by_state,'batches':batch_status,
+            'failed_generation_items':int(failed_items),
+            'interpretation':'Legacy stored SENT/EXPORTED labels without a matching manual/provider event or package-download record are normalized to draft/review state; original fields and audit rows are preserved.'}
 
 def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
     """Save a new immutable correction version; original exported invitation stays unchanged."""
@@ -1008,8 +1167,10 @@ def create_invitation_correction(db, invitation_id, actor, *, attest_not_sent):
         inv=c.execute(select(invitations).where(invitations.c.id==invitation_id)).mappings().first()
         if not inv: raise LookupError('Invitation not found')
         batch=c.execute(select(batches).where(batches.c.id==inv['batch_id'])).mappings().one()
-        if inv['send_status']!='NOT_SENT' or batch['send_status']!='NOT_SENT':
-            raise ValueError('The batch must be explicitly recorded NOT_SENT before preparing a correction')
+        lifecycle=c.scalar(select(invitation_state_expression()).select_from(
+            invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.id==invitation_id))
+        if lifecycle in {'INVITATION_MANUALLY_SENT','INVITATION_PROVIDER_SENT','INVITATION_DISCARDED'}:
+            raise ValueError('Sent or discarded invitations cannot be corrected as an active draft')
         if inv['consent_status']!='NOT_RECEIVED' or c.scalar(select(submissions.c.id).where(submissions.c.invitation_id==invitation_id)) or c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==invitation_id)):
             raise ValueError('Invitation has consent or research activity and cannot be corrected as unsent')
         candidate=c.execute(select(candidates).where(candidates.c.id==inv['candidate_id'])).mappings().one()
@@ -1046,8 +1207,10 @@ def approve_invitation_correction(db, correction_id, actor, expected_sha256):
             raise ValueError('Correction is not pending review or its exact content hash does not match')
         inv=c.execute(select(invitations).where(invitations.c.id==correction['invitation_id'])).mappings().one()
         batch=c.execute(select(batches).where(batches.c.id==inv['batch_id'])).mappings().one()
-        if inv['send_status']!='NOT_SENT' or batch['send_status']!='NOT_SENT' or inv['consent_status']!='NOT_RECEIVED':
-            raise ValueError('Source invitation is no longer confirmed unsent')
+        lifecycle=c.scalar(select(invitation_state_expression()).select_from(
+            invitations.join(batches,invitations.c.batch_id==batches.c.id)).where(invitations.c.id==inv['id']))
+        if lifecycle in {'INVITATION_MANUALLY_SENT','INVITATION_PROVIDER_SENT','INVITATION_DISCARDED'} or inv['consent_status']!='NOT_RECEIVED':
+            raise ValueError('Source invitation is no longer an active, unconsented draft')
         if c.scalar(select(submissions.c.id).where(submissions.c.invitation_id==inv['id'])) or c.scalar(select(jobs.c.id).where(jobs.c.invitation_id==inv['id'])):
             raise ValueError('Source invitation has consent or research activity')
         source_hash=hashlib.sha256((str(inv['subject'])+'\0'+str(inv['body'])).encode()).hexdigest()

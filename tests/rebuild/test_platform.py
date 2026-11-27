@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import pytest
 from sqlalchemy import select,func
-from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates,personalization_attempts,events
+from outreach_v2.db import Database,candidates,contacts,invitations,batches,jobs,submissions,deliveries,reports,report_reviews,sessions,worker_runs,now,sources,source_rows,source_memberships,pilot_members,email_templates,personalization_attempts,events,suppressions,contact_eligibility_cache
 from outreach_v2.service import generate,list_candidates,preview_generation
 from outreach_v2.consent import process
 from outreach_v2.template import render,render_template,BULK_SUBJECT,DEFAULT_INVITATION_BODY,DEFAULT_INVITATION_SUBJECT
@@ -179,6 +179,25 @@ def test_dedicated_invitation_worker_empty_queue_is_successful_and_side_effect_f
     assert count(db,invitations)==before_invitations==0
     from outreach_v2.db import invitation_generation_batches
     assert count(db,invitation_generation_batches)==0
+
+
+def test_cached_read_projection_never_authorizes_invitation_preview(db):
+    from outreach_v2.service import backfill_contact_eligibility_cache,preview_generation
+    ident='cached-suppression-live-gate'
+    candidate(db,ident,email='office@cached-live-gate.org',website='https://cached-live-gate.org',
+        name='Cached Live Gate')
+    assert backfill_contact_eligibility_cache(db)==1
+    with db.transaction() as c:
+        # The projection is still positive until its dirty row is drained.
+        c.execute(suppressions.insert().values(email='OFFICE@cached-live-gate.org',
+            reason='current suppression',recorded_at=now()))
+        assert c.scalar(select(func.count()).select_from(contact_eligibility_cache).where(
+            contact_eligibility_cache.c.candidate_id==ident))==1
+    preview=preview_generation(db,{'ids':[ident]})
+    assert preview['valid_recipient_count']==0
+    assert any('No single valid first-party business email' in reason
+        for row in preview['excluded'] for reason in row['reasons'])
+    assert count(db,invitations)==0
 
 
 def test_admin_batch_list_exposes_durable_generation_failure(db,monkeypatch):
@@ -788,7 +807,7 @@ def test_existing_sqlite_schema_gets_additive_identity_migration(tmp_path):
     with migrated.engine.connect() as c:
         names={row[1] for row in c.exec_driver_sql('pragma table_info(submissions)')}
         assert {'identity_provider','identity_verified_email','identity_reference'}<=names
-        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==15
+        assert c.exec_driver_sql('select count(*) from schema_migrations').scalar_one()==18
 
 def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_path):
     path=tmp_path/'v6-populated.db'
@@ -803,7 +822,7 @@ def test_v7_and_v8_upgrade_preserves_populated_invitation_and_template_rows(tmp_
     with db.engine.connect() as c:
         inv=c.exec_driver_sql("SELECT id,reference,recipient,company_name,body,sender_email,sender_name FROM invitations WHERE id='inv-legacy'").one()
         template=c.exec_driver_sql("SELECT id,version,subject,body,sender,active,template_kind,sender_name FROM email_templates WHERE id='report-v1'").one()
-        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==15
+        assert c.exec_driver_sql('SELECT count(*) FROM schema_migrations').scalar_one()==18
         assert c.exec_driver_sql('SELECT count(*) FROM invitations').scalar_one()==1
         invitation_columns={row[1] for row in c.exec_driver_sql('pragma table_info(invitations)')}
         batch_columns={row[1] for row in c.exec_driver_sql('pragma table_info(batches)')}

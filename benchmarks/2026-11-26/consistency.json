@@ -1,0 +1,46 @@
+{
+  "candidate_list_structurally_equal_to_baseline": true,
+  "candidate_list_canonical_sha256_baseline": "862d5dc2442ed364fbfa5f844d766ea53a804dfcff21c91ffe0c94c7fdf12658",
+  "candidate_list_canonical_sha256_after": "862d5dc2442ed364fbfa5f844d766ea53a804dfcff21c91ffe0c94c7fdf12658",
+  "candidate_list_payload_bytes_before": 74401,
+  "candidate_list_payload_bytes_after": 74401,
+  "candidate_totals": {
+    "total": 86000,
+    "eligible_matching": 8500,
+    "status_counts": {
+      "PENDING": 8600,
+      "INVITED": 0,
+      "ACCEPTED": 0,
+      "REJECTED": 0,
+      "NO_CONTACT": 77400
+    },
+    "completed_personalization_count": 8600
+  },
+  "contact_readiness_after": {
+    "scope": "COMPLETED_SEMANTIC_PASS_REAL_QUALIFIED_COMPANIES_AND_HOTELS",
+    "scope_count": 8600,
+    "eligible_for_invitation_drafting": 8600,
+    "no_eligible_contact": 0
+  },
+  "dashboard_after": {
+    "companies": 68800,
+    "hotels": 17200,
+    "ready_to_invite": 8500,
+    "completed_personalization": 8600,
+    "invitations_draft_generated": 0,
+    "invitations_pending_review": 1000,
+    "invitations_exported_unconfirmed": 0,
+    "invitations_sent_manually_confirmed": 0,
+    "invitations_sent_provider_confirmed": 0,
+    "invitations_discarded": 0,
+    "invitation_generation_failures": 0,
+    "invitation_packages_downloaded": 0,
+    "form_responses": 250,
+    "authorized_jobs": 250,
+    "research_completed": 250,
+    "reports_accepted": 0,
+    "failures": 0,
+    "latest_worker_run": null
+  },
+  "fixture": "geo_perf_outreach_20261126"
+}

@@ -1,0 +1,8 @@
+{
+  "fixture": "geo_perf_outreach_20261126",
+  "command": "python3 scripts/backfill_contact_eligibility.py --url <local-geo_perf-url> --apply",
+  "authorized_candidate_count": 8600,
+  "elapsed_ms": 9547.722,
+  "external_calls": 0,
+  "research_data_modified": false
+}

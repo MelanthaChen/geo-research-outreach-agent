@@ -1,0 +1,23 @@
+{
+  "workload": "local ASGI HTTP stack + PostgreSQL; warm; sequential; synthetic",
+  "samples": 3,
+  "endpoints": {
+    "/api/dashboard": {
+      "p50_ms": 8824.675,
+      "p95_ms": 9190.483,
+      "sql_count": [
+        10
+      ],
+      "payload_bytes": 496,
+      "response_sha256": [
+        "76919345584177c83c32944da11bb82579fa12725813ef633e471a701e4896de"
+      ],
+      "samples_ms": [
+        9190.483,
+        8558.153,
+        8824.675
+      ]
+    }
+  },
+  "external_calls": 0
+}

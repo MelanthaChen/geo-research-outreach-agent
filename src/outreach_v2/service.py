@@ -5,7 +5,9 @@ import re
 from datetime import datetime,timedelta,timezone
 from urllib.parse import urlparse
 from sqlalchemy import select,func,and_,or_,exists,case
-from .db import candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,worker_runs,questionnaires,invitation_corrections,email_templates,now,invitation_generation_batches,invitation_generation_items
+from .db import (candidates,contacts,invitations,batches,jobs,submissions,reports,deliveries,suppressions,events,
+    worker_runs,questionnaires,invitation_corrections,email_templates,now,invitation_generation_batches,
+    invitation_generation_items,contact_eligibility_cache,contact_eligibility_dirty,contact_eligibility_state)
 from .template import validate,render,VERSION,BULK_SUBJECT,EMAIL,same_site
 from .migrate import dump,parse,sha,unpack
 from .owner_test_fixtures import OWNER_TEST_FIXTURES, SYNTHETIC_CLASSIFICATION, synthetic_fixture_copy
@@ -207,10 +209,11 @@ def contact_readiness_counts(db):
         candidates.c.website_status=='VERIFIED',candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.suppressed.is_(False),candidates.c.personalization_quality_status=='PASS',
         candidates.c.personalization_analysis_version=='semantic-openai-v1',candidates.c.personalization_version>0)
-    eligible_contact=exists(select(contacts.c.id).where(invitation_contacts()))
+    # Count the completed, qualified population once, and count the subset
+    # with an evidence-authorized channel using the same canonical predicate.
     with db.transaction() as c:
         total=c.scalar(select(func.count()).select_from(candidates).where(scope)) or 0
-        eligible=c.scalar(select(func.count()).select_from(candidates).where(scope,eligible_contact)) or 0
+        eligible=len(authorized_candidate_ids_for_scope(c,scope))
     return {'scope':'COMPLETED_SEMANTIC_PASS_REAL_QUALIFIED_COMPANIES_AND_HOTELS',
         'scope_count':int(total),
         'eligible_for_invitation_drafting':int(eligible),
@@ -218,6 +221,80 @@ def contact_readiness_counts(db):
 
 def authorized_email_count():
     return select(func.count(func.distinct(func.lower(contacts.c.email)))).where(invitation_contacts()).correlate(candidates).scalar_subquery()
+
+def has_authorized_email():
+    # Eligibility validates a non-null email in both predicate branches. For a
+    # yes/no decision EXISTS is equivalent to COUNT(DISTINCT email) > 0 and can
+    # stop after the first qualifying contact. Keep the shared evidence rules.
+    return exists(select(contacts.c.id).where(
+        contacts.c.candidate_id==candidates.c.id, invitation_contacts()).correlate(candidates))
+
+def authorized_candidate_ids_for_scope(connection, candidate_scope=None):
+    """Use the incrementally maintained eligibility projection when initialized.
+
+    Safety gates and report generation continue to call invitation_contacts()
+    directly. This projection only removes repeated text matching from read
+    summaries; each queued candidate is refreshed with the authoritative SQL.
+    """
+    if connection.dialect.name=='postgresql':
+        # Writers acquire the same transaction lock in database triggers. This
+        # makes the dirty queue and projection one atomic view to readers.
+        connection.exec_driver_sql('SELECT pg_advisory_xact_lock(824761936)')
+    initialized=connection.execute(select(contact_eligibility_state.c.initialized).where(
+        contact_eligibility_state.c.id==1)).scalar_one_or_none()
+    if initialized:
+        # Drain only the durable dirty queue. With no pending writes this is a
+        # bounded state/count read; a large import can be prewarmed with the
+        # explicit backfill command before returning traffic to the UI.
+        while True:
+            dirty=connection.execute(select(contact_eligibility_dirty.c.candidate_id).order_by(
+                contact_eligibility_dirty.c.candidate_id).limit(500)).scalars().all()
+            if not dirty:break
+            connection.execute(contact_eligibility_cache.delete().where(
+                contact_eligibility_cache.c.candidate_id.in_(dirty)))
+            eligible=connection.execute(select(contacts.c.candidate_id).select_from(
+                contacts.join(candidates,candidates.c.id==contacts.c.candidate_id)).where(
+                    invitation_contacts(),candidates.c.id.in_(dirty)).distinct()).scalars().all()
+            if eligible:
+                connection.execute(contact_eligibility_cache.insert(),[
+                    {'candidate_id':ident,'updated_at':now()} for ident in eligible])
+            connection.execute(contact_eligibility_dirty.delete().where(
+                contact_eligibility_dirty.c.candidate_id.in_(dirty)))
+        query=select(contact_eligibility_cache.c.candidate_id).select_from(
+            contact_eligibility_cache.join(candidates,
+                candidates.c.id==contact_eligibility_cache.c.candidate_id))
+        if candidate_scope is not None:query=query.where(candidate_scope)
+        return set(connection.execute(query).scalars())
+    # A newly migrated DB remains correct before its explicit backfill; it just
+    # uses the old path until the projection is initialized.
+    query=select(contacts.c.candidate_id).select_from(
+        contacts.join(candidates,candidates.c.id==contacts.c.candidate_id)).where(invitation_contacts()).distinct()
+    if candidate_scope is not None:query=query.where(candidate_scope)
+    return set(connection.execute(query).scalars())
+
+def backfill_contact_eligibility_cache(db):
+    """One-time, atomic seed/repair of the read projection; never a GET path."""
+    with db.transaction(serialized=True) as c:
+        if c.dialect.name=='postgresql':c.exec_driver_sql('SELECT pg_advisory_xact_lock(824761936)')
+        ids=c.execute(select(contacts.c.candidate_id).select_from(
+            contacts.join(candidates,candidates.c.id==contacts.c.candidate_id)).where(
+                invitation_contacts()).distinct()).scalars().all()
+        c.execute(contact_eligibility_cache.delete())
+        for start in range(0,len(ids),1000):
+            c.execute(contact_eligibility_cache.insert(),[
+                {'candidate_id':ident,'updated_at':now()} for ident in ids[start:start+1000]])
+        c.execute(contact_eligibility_dirty.delete())
+        c.execute(contact_eligibility_state.update().where(contact_eligibility_state.c.id==1).values(
+            initialized=True,updated_at=now()))
+        return len(ids)
+
+def authorized_contact_email_rows(candidate_ids):
+    """Load email evidence for a bounded candidate page in one query."""
+    return select(contacts.c.candidate_id, contacts.c.id, contacts.c.kind, contacts.c.email,
+        contacts.c.url, contacts.c.verification, contacts.c.suppressed, contacts.c.source_url,
+        contacts.c.purpose, contacts.c.evidence, contacts.c.source_checksum, contacts.c.verified_at,
+        contacts.c.verification_reason, contacts.c.authorization_reason).where(
+            contacts.c.candidate_id.in_(candidate_ids), contacts.c.email.is_not(None))
 
 def has_invitation():
     return exists(select(invitations.c.id).where(invitations.c.candidate_id==candidates.c.id))
@@ -247,7 +324,7 @@ def invitation_readiness_expression():
         candidates.c.website_status.is_distinct_from('VERIFIED'),
         candidates.c.qualification.is_(None),~candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
         candidates.c.personalization_quality_status=='FAIL')
-    return and_(~has_invitation(),~blocked,completed_personalization(),authorized_email_count()>0)
+    return and_(~has_invitation(),~blocked,completed_personalization(),has_authorized_email())
 
 INVITATION_STATES={
     'INVITATION_DRAFT':'Draft Generated',
@@ -325,6 +402,13 @@ def invitation_state_rows_query(batch_id=None):
         query=query.where(invitations.c.batch_id==batch_id)
     return query
 
+def invitation_state_counts_query(batch_id=None):
+    """Group lifecycle rows by their selected alias; PostgreSQL bind parameters
+    in repeated CASE expressions are not considered the same GROUP BY key."""
+    states=invitation_state_rows_query(batch_id).subquery()
+    return select(states.c.state,func.count().label('count')).where(
+        states.c.state.is_not(None)).group_by(states.c.state)
+
 def invitation_state_counts(connection,batch_id=None):
     return Counter(state for state in connection.execute(
         invitation_state_rows_query(batch_id)).scalars().all() if state is not None)
@@ -345,7 +429,7 @@ def batch_state_from_counts(counts):
 def batch_invitation_state_summary(connection,batch_id):
     return batch_state_from_counts(invitation_state_counts(connection,batch_id))
 
-def primary_status_expression():
+def primary_status_expression(*,include_contact=True):
     """Research participation state only; invitation drafts/batches are separate."""
     accepted=exists(select(invitations.c.id).where(
         invitations.c.candidate_id==candidates.c.id,verified_accepted_consent(invitations)))
@@ -356,12 +440,9 @@ def primary_status_expression():
             invitations.c.candidate_id==candidates.c.id,
             or_(invitation_state_expression()=='INVITATION_MANUALLY_SENT',
                 invitation_state_expression()=='INVITATION_PROVIDER_SENT')))
-    return case(
-        (accepted,'ACCEPTED'),
-        (declined,'REJECTED'),
-        (genuinely_sent,'INVITED'),
-        (authorized_email_count()==0,'NO_CONTACT'),
-        else_='PENDING')
+    branches=[(accepted,'ACCEPTED'),(declined,'REJECTED'),(genuinely_sent,'INVITED')]
+    if include_contact:branches.append((~has_authorized_email(),'NO_CONTACT'))
+    return case(*branches,else_='PENDING')
 
 STATUS_LABELS={
     'PENDING':'Pending',
@@ -450,18 +531,11 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
         except (ValueError,TypeError,UnicodeDecodeError,json.JSONDecodeError,binascii.Error) as exc:
             raise ValueError('Invalid candidate pagination cursor') from exc
     with db.transaction() as c:
-        status=primary_status_expression()
-        grouped=c.execute(select(status.label('status'),func.count().label('count'))
-            .select_from(candidates).where(*clauses).group_by(status)).all()
-        status_counts={key:0 for key in STATUS_LABELS}
-        for item in grouped:
-            if item.status in status_counts:status_counts[item.status]=item.count
-        total=sum(status_counts.values())
-        ready_expr=invitation_readiness_expression()
-        eligible=c.scalar(select(func.count()).select_from(candidates).where(*clauses,ready_expr)) or 0
-        completed_count=c.scalar(select(func.count()).select_from(candidates).where(completed_personalization()))
         projected=[column for column in candidates.c if column.name!='personalization']
-        query=select(*projected,status.label('primary_status'),ready_expr.label('invitation_ready')).where(*clauses).order_by(candidates.c.name,candidates.c.id)
+        status=primary_status_expression();ready_expr=invitation_readiness_expression()
+        completed_total=(select(func.count()).select_from(candidates).where(completed_personalization()).scalar_subquery())
+        query=select(*projected,status.label('primary_status'),ready_expr.label('eligible'),
+            completed_total.label('completed_total')).where(*clauses).order_by(candidates.c.name,candidates.c.id)
         if cursor_name is not None:
             query=query.where(or_(candidates.c.name>cursor_name,
                 and_(candidates.c.name==cursor_name,candidates.c.id>cursor_id)))
@@ -470,15 +544,44 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
         fetched=[dict(r) for r in c.execute(query.limit(page_size+1)).mappings()]
         has_more=len(fetched)>page_size
         rows=fetched[:page_size]
+        completed_count=(rows[0]['completed_total'] if rows else 0)
+        for row in rows:row.pop('completed_total',None)
         ids=[row['id'] for row in rows]
+        # Evaluate saved-contact evidence once per contact in a set pass, then
+        # count participation states without repeating correlated email regex
+        # and suppression checks for every candidate.
+        base_clauses=predicates({key:value for key,value in filters.items() if key!='primary_status'})
+        status_without_contact=primary_status_expression(include_contact=False)
+        status_contact_query=select(candidates.c.id,candidates.c.suppressed,candidates.c.fixture,
+            candidates.c.website_status,candidates.c.qualification,
+            candidates.c.personalization_quality_status,candidates.c.personalization_analysis_version,
+            candidates.c.personalization_version,status_without_contact.label('status'),
+            has_invitation().label('has_invitation')).select_from(candidates)
+        classified=c.execute(status_contact_query.where(*base_clauses)).mappings().all()
+        authorized_ids=authorized_candidate_ids_for_scope(c,and_(True,*base_clauses));candidate_facts={}
+        for item in classified:
+            ident=item['id']
+            candidate_facts.setdefault(ident,(item['status'],item['has_invitation'],item['suppressed'],
+                item['fixture'],item['website_status'],item['qualification'],item['personalization_quality_status'],
+                item['personalization_analysis_version'],item['personalization_version']))
+        status_counts={key:0 for key in STATUS_LABELS}
+        eligible=0
+        for ident,facts in candidate_facts.items():
+            status_value,has_invite,is_suppressed,is_fixture,website_status,qualification,quality,version,version_num=facts
+            if status_value=='PENDING' and ident not in authorized_ids:status_value='NO_CONTACT'
+            if not filters.get('primary_status') or status_value==filters['primary_status']:
+                status_counts[status_value]+=1
+                if (ident in authorized_ids and not has_invite and not is_suppressed and not is_fixture
+                    and website_status=='VERIFIED' and qualification in {'ELIGIBLE','QUALIFIED'}
+                    and quality!='FAIL' and quality=='PASS' and version=='semantic-openai-v1'
+                    and int(version_num or 0)>0):eligible+=1
+        total=sum(status_counts.values())
+        completed_count=completed_count if page==1 else 0
         contacts_by_candidate={ident:[] for ident in ids}
         contact_rows=[]
         invitation_by_candidate={};invitation_ids=[]
         if ids:
-            for related in c.execute(select(contacts.c.candidate_id,contacts.c.id,contacts.c.kind,contacts.c.email,contacts.c.url,contacts.c.verification,
-                    contacts.c.suppressed,contacts.c.source_url,contacts.c.purpose,contacts.c.evidence,contacts.c.source_checksum,
-                    contacts.c.verified_at,contacts.c.verification_reason,contacts.c.authorization_reason)
-                    .where(contacts.c.candidate_id.in_(ids)).order_by(contacts.c.candidate_id,contacts.c.email)).mappings():
+            for related in c.execute(authorized_contact_email_rows(ids).order_by(contacts.c.candidate_id,contacts.c.email)).mappings():
                 item=dict(related);contact_rows.append(item)
                 contacts_by_candidate[item['candidate_id']].append(item)
             for related in c.execute(select(invitations.c.id,invitations.c.candidate_id,
@@ -510,7 +613,7 @@ def list_candidates(db,filters=None,page=1,page_size=50,cursor=None):
             row['status_reason']=status_reason(row,row['primary_status'])
             row.update(contact_readiness(c,row,contact_rows=contacts_by_candidate.get(row['id'],[]),
                 suppressed_emails=suppressed_emails))
-            row['eligible']=bool(row.pop('invitation_ready'))
+            row['eligible']=bool(row['eligible'])
             row['invitation_readiness']='READY' if row['eligible'] else 'NOT_READY'
             row['contacts']=[{key:item[key] for key in ('email','url','verification')} for item in contacts_by_candidate.get(row['id'],[])]
             row['invitation_record_exists']=row['id'] in invitation_by_candidate
@@ -1129,16 +1232,28 @@ def dashboard(db):
     with db.transaction() as c:
         run=c.execute(select(worker_runs).order_by(worker_runs.c.started_at.desc()).limit(1)).mappings().first()
         invitation_counts={key:0 for key in INVITATION_STATES}
-        for row in c.execute(select(invitation_state_expression().label('state'),func.count().label('count'))
-                .select_from(invitations.join(batches,invitations.c.batch_id==batches.c.id))
-                .group_by(invitation_state_expression())).all():
+        for row in c.execute(invitation_state_counts_query()).all():
             if row.state in invitation_counts:invitation_counts[row.state]=row.count
         failed_batches=c.scalar(select(func.count()).select_from(invitation_generation_batches)
             .where(invitation_generation_batches.c.status.in_(['FAILED','BLOCKED']))) or 0
-        return {'companies':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='company')),
-                'hotels':c.scalar(select(func.count()).select_from(candidates).where(candidates.c.kind=='hotel')),
-                'ready_to_invite':c.scalar(select(func.count()).select_from(candidates).where(invitation_readiness_expression())),
-                'completed_personalization':c.scalar(select(func.count()).select_from(candidates).where(completed_personalization())),
+        ready_scope=and_(~has_invitation(),~candidates.c.suppressed.is_(True),
+            ~candidates.c.fixture.is_(True),candidates.c.website_status=='VERIFIED',
+            candidates.c.qualification.in_(['ELIGIBLE','QUALIFIED']),
+            candidates.c.personalization_quality_status!='FAIL',completed_personalization())
+        ready_ids=authorized_candidate_ids_for_scope(c,ready_scope)
+        candidate_counts=c.execute(select(
+            func.count().filter(candidates.c.kind=='company').label('companies'),
+            func.count().filter(candidates.c.kind=='hotel').label('hotels'),
+            func.count().filter(completed_personalization()).label('completed'),
+        ).select_from(candidates)).one()
+        job_counts=c.execute(select(func.count().label('total'),
+            func.count().filter(jobs.c.completed_at.is_not(None)).label('completed'),
+            func.count().filter(jobs.c.error.is_not(None)).label('failed'),
+        ).select_from(jobs)).one()
+        return {'companies':candidate_counts.companies,
+                'hotels':candidate_counts.hotels,
+                'ready_to_invite':len(ready_ids),
+                'completed_personalization':candidate_counts.completed,
                 'invitations_draft_generated':invitation_counts['INVITATION_DRAFT'],
                 'invitations_pending_review':invitation_counts['INVITATION_PENDING_REVIEW'],
                 'invitations_exported_unconfirmed':invitation_counts['INVITATION_EXPORTED'],
@@ -1148,10 +1263,10 @@ def dashboard(db):
                 'invitation_generation_failures':failed_batches,
                 'invitation_packages_downloaded':c.scalar(select(func.coalesce(func.sum(batches.c.download_count),0))),
                 'form_responses':c.scalar(select(func.count()).select_from(submissions)),
-                'authorized_jobs':c.scalar(select(func.count()).select_from(jobs)),
-                'research_completed':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.completed_at.is_not(None))),
+                'authorized_jobs':job_counts.total,
+                'research_completed':job_counts.completed,
                 'reports_accepted':c.scalar(select(func.count()).select_from(deliveries).where(deliveries.c.status=='ACCEPTED')),
-                'failures':c.scalar(select(func.count()).select_from(jobs).where(jobs.c.error.is_not(None))),
+                'failures':job_counts.failed,
                 'latest_worker_run':({'id':run['id'],'status':run['status'],'started_at':run['started_at'],
                     'detail':parse(run['detail'])} if run else None)}
 

@@ -3,7 +3,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from sqlalchemy import (MetaData, Table, Column, String, Text, Integer, Boolean, LargeBinary,
-                        ForeignKey, UniqueConstraint, Index, create_engine, event, text, inspect, select)
+                        ForeignKey, UniqueConstraint, Index, create_engine, event, text, inspect, select, func)
 
 SCHEMA = 'outreach_v2'
 metadata = MetaData(schema=SCHEMA)
@@ -130,6 +130,13 @@ worker_runs = table('worker_runs', col('id', String, primary_key=True), col('sta
     col('status'), col('detail'))
 schema_migrations = table('schema_migrations', Column('version', Integer, primary_key=True),
     col('name', String, nullable=False), col('applied_at', nullable=False))
+contact_eligibility_cache = table('contact_eligibility_cache',
+    Column('candidate_id', String, primary_key=True), col('updated_at', nullable=False))
+contact_eligibility_dirty = table('contact_eligibility_dirty',
+    Column('candidate_id', String, primary_key=True), col('queued_at', nullable=False))
+contact_eligibility_state = table('contact_eligibility_state',
+    Column('id', Integer, primary_key=True), Column('initialized', Boolean, nullable=False, default=False),
+    col('updated_at', nullable=False))
 admin_users = table('admin_users', col('id', String, primary_key=True), col('email', String, unique=True, nullable=False),
     col('password_hash', String, nullable=False), col('role', String, nullable=False), col('status', String, nullable=False),
     col('created_by', String), col('created_at', nullable=False))
@@ -173,6 +180,8 @@ invitation_generation_items = table('invitation_generation_items', col('id', Str
     UniqueConstraint('batch_id', 'ordinal', name='uq_invitation_generation_ordinal'),
     UniqueConstraint('batch_id', 'candidate_id', name='uq_invitation_generation_candidate'))
 Index('candidate_filter', candidates.c.kind, candidates.c.website_status, candidates.c.qualification)
+Index('ix_contacts_email_lower',func.lower(contacts.c.email))
+Index('ix_suppressions_email_lower',func.lower(suppressions.c.email))
 
 MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'submissions': {'identity_provider': 'TEXT', 'identity_verified_email': 'TEXT', 'identity_reference': 'TEXT'}
@@ -222,7 +231,9 @@ MIGRATIONS = [(1, 'verified-respondent-consent-evidence', {
     'invitations': {'manual_sent_at': 'TEXT', 'manual_sent_by': 'TEXT', 'manual_send_note': 'TEXT',
         'manual_send_corrected_at':'TEXT','manual_send_corrected_by':'TEXT',
         'provider_message_id': 'TEXT'}
-})]
+}), (16, 'incremental-contact-eligibility-projection', {}),
+    (17,'case-insensitive-contact-email-invalidation-index',{}),
+    (18,'case-insensitive-suppression-lookup-index',{})]
 
 class Database:
     def __init__(self, url=None):
@@ -344,6 +355,190 @@ class Database:
                 c.execute(schema_migrations.insert().values(version=version, name=name, applied_at=now()))
         if self.postgres:
             self._apply_online_candidate_index_migration()
+            self._apply_online_contact_email_index_migration()
+            self._apply_online_suppression_email_index_migration()
+        else:
+            with self.engine.begin() as c:
+                c.execute(text('CREATE INDEX IF NOT EXISTS ix_contacts_email_lower ON contacts (lower(email))'))
+                c.execute(text('CREATE INDEX IF NOT EXISTS ix_suppressions_email_lower ON suppressions (lower(email))'))
+        self._install_contact_eligibility_triggers()
+        with self.engine.begin() as c:
+            self.upsert(c,contact_eligibility_state,[dict(id=1,initialized=False,updated_at=now())],
+                keys=('id',),update=False)
+
+    def _install_contact_eligibility_triggers(self):
+        """Install durable invalidation hooks for the derived contact projection."""
+        if self.postgres:
+            with self.engine.begin() as c:
+                installed=c.scalar(text('''SELECT count(DISTINCT t.tgrelid) FROM pg_trigger t
+                    JOIN pg_class r ON r.oid=t.tgrelid JOIN pg_namespace n ON n.oid=r.relnamespace
+                    WHERE n.nspname=:schema AND t.tgname='outreach_contact_eligibility_dirty'
+                      AND NOT t.tgisinternal'''),{'schema':SCHEMA})
+                c.execute(text(f'''CREATE OR REPLACE FUNCTION {SCHEMA}.mark_contact_eligibility_dirty()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                      PERFORM pg_advisory_xact_lock(824761936);
+                      IF TG_TABLE_NAME='contacts' THEN
+                        IF TG_OP <> 'INSERT' THEN
+                          INSERT INTO {SCHEMA}.contact_eligibility_dirty(candidate_id,queued_at)
+                          VALUES (OLD.candidate_id,now()::text) ON CONFLICT (candidate_id) DO UPDATE SET queued_at=EXCLUDED.queued_at;
+                        END IF;
+                        IF TG_OP <> 'DELETE' THEN
+                          INSERT INTO {SCHEMA}.contact_eligibility_dirty(candidate_id,queued_at)
+                          VALUES (NEW.candidate_id,now()::text) ON CONFLICT (candidate_id) DO UPDATE SET queued_at=EXCLUDED.queued_at;
+                        END IF;
+                      ELSIF TG_TABLE_NAME='candidates' THEN
+                        IF TG_OP='DELETE' THEN
+                          DELETE FROM {SCHEMA}.contact_eligibility_cache WHERE candidate_id=OLD.id;
+                          DELETE FROM {SCHEMA}.contact_eligibility_dirty WHERE candidate_id=OLD.id;
+                        ELSE
+                          INSERT INTO {SCHEMA}.contact_eligibility_dirty(candidate_id,queued_at)
+                          VALUES (NEW.id,now()::text) ON CONFLICT (candidate_id) DO UPDATE SET queued_at=EXCLUDED.queued_at;
+                        END IF;
+                      ELSE
+                        IF TG_OP <> 'INSERT' THEN
+                          INSERT INTO {SCHEMA}.contact_eligibility_dirty(candidate_id,queued_at)
+                          SELECT DISTINCT candidate_id,now()::text FROM {SCHEMA}.contacts WHERE lower(email)=lower(OLD.email)
+                          ON CONFLICT (candidate_id) DO UPDATE SET queued_at=EXCLUDED.queued_at;
+                        END IF;
+                        IF TG_OP <> 'DELETE' THEN
+                          INSERT INTO {SCHEMA}.contact_eligibility_dirty(candidate_id,queued_at)
+                          SELECT DISTINCT candidate_id,now()::text FROM {SCHEMA}.contacts WHERE lower(email)=lower(NEW.email)
+                          ON CONFLICT (candidate_id) DO UPDATE SET queued_at=EXCLUDED.queued_at;
+                        END IF;
+                      END IF;
+                      IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+                    END $$'''))
+                if installed==3:return
+                c.execute(text(f'UPDATE {SCHEMA}.contact_eligibility_state SET initialized=FALSE,updated_at=now()::text WHERE id=1'))
+                for table_name in ('contacts','candidates','suppressions'):
+                    c.execute(text(f'DROP TRIGGER IF EXISTS outreach_contact_eligibility_dirty ON {SCHEMA}.{table_name}'))
+                c.execute(text(f'''CREATE TRIGGER outreach_contact_eligibility_dirty
+                    AFTER INSERT OR UPDATE OR DELETE ON {SCHEMA}.contacts FOR EACH ROW
+                    EXECUTE FUNCTION {SCHEMA}.mark_contact_eligibility_dirty()'''))
+                c.execute(text(f'''CREATE TRIGGER outreach_contact_eligibility_dirty
+                    AFTER INSERT OR UPDATE OF website,domain,fixture OR DELETE ON {SCHEMA}.candidates FOR EACH ROW
+                    EXECUTE FUNCTION {SCHEMA}.mark_contact_eligibility_dirty()'''))
+                c.execute(text(f'''CREATE TRIGGER outreach_contact_eligibility_dirty
+                    AFTER INSERT OR UPDATE OR DELETE ON {SCHEMA}.suppressions FOR EACH ROW
+                    EXECUTE FUNCTION {SCHEMA}.mark_contact_eligibility_dirty()'''))
+            return
+        # SQLite uses simple row triggers; writes and their invalidation records
+        # commit atomically in the same transaction.
+        with self.engine.begin() as c:
+            installed=c.scalar(text("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name LIKE 'outreach_%eligibility_dirty_%'"))
+            if installed==9:return
+            c.exec_driver_sql("UPDATE contact_eligibility_state SET initialized=0,updated_at=datetime('now') WHERE id=1")
+            for trigger_name in (
+                'outreach_contact_eligibility_dirty_insert','outreach_contact_eligibility_dirty_update',
+                'outreach_contact_eligibility_dirty_delete','outreach_candidate_eligibility_dirty_insert',
+                'outreach_candidate_eligibility_dirty_update','outreach_candidate_eligibility_dirty_delete',
+                'outreach_suppression_eligibility_dirty_insert','outreach_suppression_eligibility_dirty_update',
+                'outreach_suppression_eligibility_dirty_delete'):
+                c.exec_driver_sql(f'DROP TRIGGER IF EXISTS {trigger_name}')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_contact_eligibility_dirty_insert
+                AFTER INSERT ON contacts BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(NEW.candidate_id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_contact_eligibility_dirty_update
+                AFTER UPDATE ON contacts BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(OLD.candidate_id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(NEW.candidate_id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_contact_eligibility_dirty_delete
+                AFTER DELETE ON contacts BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(OLD.candidate_id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_candidate_eligibility_dirty_insert
+                AFTER INSERT ON candidates BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(NEW.id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_candidate_eligibility_dirty_update
+                AFTER UPDATE OF website,domain,fixture ON candidates BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at) VALUES(NEW.id,datetime('now'))
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_candidate_eligibility_dirty_delete
+                AFTER DELETE ON candidates BEGIN
+                  DELETE FROM contact_eligibility_cache WHERE candidate_id=OLD.id;
+                  DELETE FROM contact_eligibility_dirty WHERE candidate_id=OLD.id;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_suppression_eligibility_dirty_insert
+                AFTER INSERT ON suppressions BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at)
+                  SELECT DISTINCT candidate_id,datetime('now') FROM contacts WHERE lower(email)=lower(NEW.email)
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_suppression_eligibility_dirty_update
+                AFTER UPDATE ON suppressions BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at)
+                  SELECT DISTINCT candidate_id,datetime('now') FROM contacts WHERE lower(email)=lower(OLD.email)
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at)
+                  SELECT DISTINCT candidate_id,datetime('now') FROM contacts WHERE lower(email)=lower(NEW.email)
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+            c.exec_driver_sql('''CREATE TRIGGER IF NOT EXISTS outreach_suppression_eligibility_dirty_delete
+                AFTER DELETE ON suppressions BEGIN
+                  INSERT INTO contact_eligibility_dirty(candidate_id,queued_at)
+                  SELECT DISTINCT candidate_id,datetime('now') FROM contacts WHERE lower(email)=lower(OLD.email)
+                  ON CONFLICT(candidate_id) DO UPDATE SET queued_at=excluded.queued_at;
+                END''')
+
+    def _apply_online_contact_email_index_migration(self):
+        """Index case-folded email lookups used by suppression invalidation."""
+        lock_id=824761937
+        with self.engine.connect() as connection:
+            connection=connection.execution_options(isolation_level='AUTOCOMMIT')
+            connection.execute(text('SELECT pg_advisory_lock(:lock_id)'),{'lock_id':lock_id})
+            try:
+                state=connection.execute(text('''SELECT i.indisvalid,i.indisready FROM pg_class x
+                    JOIN pg_namespace n ON n.oid=x.relnamespace JOIN pg_index i ON i.indexrelid=x.oid
+                    WHERE n.nspname=:schema AND x.relname='ix_contacts_email_lower' '''),
+                    {'schema':SCHEMA}).first()
+                migration=connection.execute(select(schema_migrations.c.version).where(
+                    schema_migrations.c.version==17)).first()
+                if state and state.indisvalid and state.indisready:
+                    if not migration:connection.execute(schema_migrations.insert().values(version=17,
+                        name='case-insensitive-contact-email-invalidation-index',applied_at=now()))
+                    return
+                if state:connection.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS {SCHEMA}.ix_contacts_email_lower'))
+                connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_contacts_email_lower '
+                                        f'ON {SCHEMA}.contacts (lower(email))'))
+                if not migration:connection.execute(schema_migrations.insert().values(version=17,
+                    name='case-insensitive-contact-email-invalidation-index',applied_at=now()))
+            finally:
+                connection.execute(text('SELECT pg_advisory_unlock(:lock_id)'),{'lock_id':lock_id})
+
+    def _apply_online_suppression_email_index_migration(self):
+        """Index case-insensitive suppression probes in eligibility predicates."""
+        lock_id=824761938
+        with self.engine.connect() as connection:
+            connection=connection.execution_options(isolation_level='AUTOCOMMIT')
+            connection.execute(text('SELECT pg_advisory_lock(:lock_id)'),{'lock_id':lock_id})
+            try:
+                state=connection.execute(text('''SELECT i.indisvalid,i.indisready FROM pg_class x
+                    JOIN pg_namespace n ON n.oid=x.relnamespace JOIN pg_index i ON i.indexrelid=x.oid
+                    WHERE n.nspname=:schema AND x.relname='ix_suppressions_email_lower' '''),
+                    {'schema':SCHEMA}).first()
+                migration=connection.execute(select(schema_migrations.c.version).where(
+                    schema_migrations.c.version==18)).first()
+                if state and state.indisvalid and state.indisready:
+                    if not migration:connection.execute(schema_migrations.insert().values(version=18,
+                        name='case-insensitive-suppression-lookup-index',applied_at=now()))
+                    return
+                if state:connection.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS {SCHEMA}.ix_suppressions_email_lower'))
+                connection.execute(text(f'CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_suppressions_email_lower '
+                                        f'ON {SCHEMA}.suppressions (lower(email))'))
+                if not migration:connection.execute(schema_migrations.insert().values(version=18,
+                    name='case-insensitive-suppression-lookup-index',applied_at=now()))
+            finally:
+                connection.execute(text('SELECT pg_advisory_unlock(:lock_id)'),{'lock_id':lock_id})
 
     def _apply_online_candidate_index_migration(self):
         """Create the candidate ordering index without blocking campaign writes."""

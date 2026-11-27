@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import FileResponse,JSONResponse,Response
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select,func,exists
+from sqlalchemy import select,func,exists,tuple_
 from starlette.concurrency import run_in_threadpool
 from .db import (Database,batches,invitations,jobs,reports,deliveries,worker_runs,events,now,
     admin_users,admin_invites,email_templates,questionnaires,pilot_cohorts,pilot_members,report_reviews,invitation_corrections,
@@ -290,7 +290,7 @@ def create_app(database=None):
         path=request.url.path
         try:
             if path.startswith('/api/') and path not in {'/api/auth/login','/api/auth/session','/api/internal/worker-tick','/api/internal/invitation-generation-tick','/api/internal/personalization-batch-tick','/api/internal/historical-screening-recovery-tick','/api/admin/invites/accept'}:
-                current=auth.session(db,request.cookies.get(COOKIE))
+                current=await run_in_threadpool(auth.session,db,request.cookies.get(COOKIE))
                 if not current:return JSONResponse({'error':'Your administrator session has expired. Please sign in.'},401)
                 request.state.session=current
                 if request.method not in {'GET','HEAD'} and not auth.csrf_valid(current,request.headers.get('x-csrf-token')):
@@ -755,10 +755,20 @@ def create_app(database=None):
                 deliveries.c.provider_message_id).join(invitations).outerjoin(reports,
                     (reports.c.job_id==jobs.c.id)&reports.c.is_active.is_(True)).outerjoin(deliveries,deliveries.c.report_id==reports.c.id)
             rows=[dict(r) for r in c.execute(query.order_by(jobs.c.created_at.desc()).limit(50).offset((max(page,1)-1)*50)).mappings()]
+            # Load the latest review for each exact document on this page in
+            # one query. Never apply approval of an older hash to a new report.
+            review_keys={(row['report_id'],row['report_sha256']) for row in rows if row['report_id']}
+            latest_reviews={}
+            if review_keys:
+                ranked=select(report_reviews.c.report_id,report_reviews.c.document_sha256,
+                    report_reviews.c.decision,report_reviews.c.reviewer_email,
+                    func.row_number().over(partition_by=(report_reviews.c.report_id,report_reviews.c.document_sha256),
+                        order_by=report_reviews.c.reviewed_at.desc()).label('position'))\
+                    .where(tuple_(report_reviews.c.report_id,report_reviews.c.document_sha256).in_(review_keys)).subquery()
+                latest_reviews={(r['report_id'],r['document_sha256']):r for r in c.execute(
+                    select(ranked).where(ranked.c.position==1)).mappings()}
             for row in rows:
-                latest=c.execute(select(report_reviews.c.decision,report_reviews.c.reviewer_email,report_reviews.c.reviewed_at)
-                    .where(report_reviews.c.report_id==row['report_id'],report_reviews.c.document_sha256==row['report_sha256'])
-                    .order_by(report_reviews.c.reviewed_at.desc()).limit(1)).mappings().first() if row['report_id'] else None
+                latest=latest_reviews.get((row['report_id'],row['report_sha256']))
                 row['review_status']=latest['decision'] if latest else ('PENDING_REVIEW' if row['report_id'] else None)
                 row['reviewer_email']=latest['reviewer_email'] if latest else None
             return {'rows':rows}

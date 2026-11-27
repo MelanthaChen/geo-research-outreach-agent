@@ -1,0 +1,63 @@
+{
+  "workload": "local ASGI HTTP stack + PostgreSQL; warm; sequential; synthetic",
+  "samples": 3,
+  "endpoints": {
+    "/api/dashboard": {
+      "p50_ms": 9427.314,
+      "p95_ms": 9490.499,
+      "sql_count": [
+        11
+      ],
+      "payload_bytes": 496,
+      "response_sha256": [
+        "76919345584177c83c32944da11bb82579fa12725813ef633e471a701e4896de"
+      ],
+      "samples_ms": [
+        9490.499,
+        9407.893,
+        9427.314
+      ],
+      "status_code": 200
+    },
+    "/api/candidates?page_size=50": {
+      "p50_ms": 9925.998,
+      "p95_ms": 9976.848,
+      "sql_count": [
+        10
+      ],
+      "payload_bytes": 74401,
+      "response_sha256": [
+        "18706e70630591adca22ad5936926347856b279664480dbf8fe730f6ab012c17"
+      ],
+      "samples_ms": [
+        9782.705,
+        9925.998,
+        9976.848
+      ],
+      "status_code": 200
+    },
+    "/api/admin/contact-readiness": {
+      "p50_ms": 9402.816,
+      "p95_ms": 9408.823,
+      "sql_count": [
+        4
+      ],
+      "payload_bytes": 154,
+      "response_sha256": [
+        "b413d57c7016b378e9513b4e75b71fd76f5a96eddb9474e5a0ec572a5afce1c9"
+      ],
+      "samples_ms": [
+        9364.875,
+        9408.823,
+        9402.816
+      ],
+      "status_code": 200
+    }
+  },
+  "external_calls": 0,
+  "plans": {
+    "/api/dashboard": [],
+    "/api/candidates?page_size=50": [],
+    "/api/admin/contact-readiness": []
+  }
+}
